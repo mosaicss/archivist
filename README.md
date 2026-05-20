@@ -6,10 +6,10 @@ Mosaic's command line surface for filings research. Lets any AI agent (Claude Co
 
 Choose the channel that matches your environment:
 
-### curl | sh (recommended, no dependencies)
+### curl | bash (recommended, no dependencies)
 
 ```sh
-curl -fsSL https://install.mosaic-finance.com | sh
+curl -fsSL https://install.mosaic-finance.com | bash
 ```
 
 Installs to `~/.local/bin/archivist`. Automatically places the Claude Code skill
