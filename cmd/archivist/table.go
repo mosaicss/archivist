@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
@@ -32,9 +31,6 @@ const watchBaseURL = "https://mosaic-finance.com/chat/table/"
 
 // sessionIDPrefix is the required prefix for valid session IDs.
 const sessionIDPrefix = "sess_"
-
-// issuerKeyPattern matches values that are already issuer keys (bypass resolution).
-var issuerKeyPattern = regexp.MustCompile(`^[a-z0-9_]+$`)
 
 // newTableCmd builds and returns the root `archivist table` Cobra command and
 // all subcommands. This is called from cmd/archivist/main.go's NewRootCmd.
@@ -671,8 +667,9 @@ func resolveCompanies(cobraCmd *cobra.Command, c resolver.Client, spec *tablespe
 		if name == "" {
 			continue
 		}
-		// Already an issuer key — bypass.
-		if issuerKeyPattern.MatchString(name) {
+		// Already a literal issuer_key (cik:NNN, uuid:UUID, sym_us/ca) — bypass
+		// AutoResolve so the typed id passes through unchanged.
+		if resolver.IsLiteralIssuerKey(name) {
 			continue
 		}
 

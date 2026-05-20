@@ -373,3 +373,83 @@ func TestBuildSuggestion(t *testing.T) {
 		t.Errorf("expected empty suggestion with empty verbHint, got %q", got)
 	}
 }
+
+// TestIsLiteralIssuerKey covers AC3 + AC4: literal issuer_key forms bypass the
+// resolver, free-text inputs do not. Regression test for Story 37.5 — the
+// table-verb's old bypass regex `^[a-z0-9_]+$` silently mis-routed `cik:NNN`
+// and `uuid:UUID` inputs through AutoResolve, surfacing wrong companies.
+func TestIsLiteralIssuerKey(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want bool
+	}{
+		// AC3 — three literal forms must short-circuit
+		{"cik literal — Apple", "cik:320193", true},
+		{"cik literal — Citigroup", "cik:831001", true},
+		{"cik literal — short cik", "cik:1", true},
+		{"uuid literal — full v4", "uuid:3162c889-bb75-49cf-b605-3295ae6e092d", true},
+		{"uuid literal — minimum length", "uuid:abcdef01", true},
+		{"symbol_country — us", "aapl_us", true},
+		{"symbol_country — ca", "shop_ca", true},
+		{"symbol_country — numeric in symbol", "brk1_us", true},
+		{"symbol_country — dot in symbol", "brk.a_us", true},
+
+		// AC4 — free-text MUST fall through
+		{"free-text — single word", "Apple", false},
+		{"free-text — multi-word", "Apple Inc", false},
+		{"free-text — accidental colon", "Foo: Bar", false},
+
+		// Adversarial — near-miss forms that should NOT be treated as literals
+		{"cik without prefix", "320193", false},
+		{"cik with letters", "cik:abc", false},
+		{"cik trailing space", "cik:320193 ", false},
+		{"uuid wrong prefix", "guid:abcdef01", false},
+		{"uuid too short", "uuid:abc", false},
+		{"uuid uppercase hex", "uuid:ABCDEF01", false},
+		{"symbol_country wrong country", "aapl_uk", false},
+		{"symbol_country uppercase", "AAPL_US", false},
+		{"symbol no country suffix", "aapl", false},
+		{"empty string", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := IsLiteralIssuerKey(tc.in)
+			if got != tc.want {
+				t.Errorf("IsLiteralIssuerKey(%q) = %v, want %v", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestAutoResolveBypass_LiteralIssuerKeys is an integration-level guard: when
+// the table-verb caller short-circuits a literal via IsLiteralIssuerKey BEFORE
+// calling AutoResolve, no HTTP call is made and the value passes through
+// unchanged. The test enforces the contract by using a server that fails the
+// test if hit — a literal must never reach the wire.
+func TestAutoResolveBypass_LiteralIssuerKeys(t *testing.T) {
+	literals := []string{
+		"cik:320193",
+		"uuid:3162c889-bb75-49cf-b605-3295ae6e092d",
+		"aapl_us",
+	}
+	for _, lit := range literals {
+		t.Run(lit, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				t.Errorf("AutoResolve fired for literal %q (path=%s) — bypass must short-circuit before HTTP", lit, r.URL.String())
+				w.WriteHeader(http.StatusInternalServerError)
+			}))
+			defer srv.Close()
+			mc := &mockClient{server: srv}
+
+			// Caller pattern (mirrors cmd/archivist/table.go:resolveCompanies):
+			if IsLiteralIssuerKey(lit) {
+				// Bypass — literal passes through unchanged.
+				return
+			}
+			// If we get here the bypass failed; AutoResolve hitting the server fails the test.
+			_, _ = AutoResolve(context.Background(), mc, lit, "")
+		})
+	}
+}
+

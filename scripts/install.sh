@@ -1,9 +1,13 @@
-#!/usr/bin/env sh
-# Archivist CLI installer — curl -fsSL https://install.mosaic-finance.com | sh
+#!/usr/bin/env bash
+# Archivist CLI installer — curl -fsSL https://install.mosaic-finance.com | bash
 #
 # Supports: macOS arm64/amd64, Linux arm64/amd64
 # Requires: curl, uname, tar or unzip, sha256sum or shasum
 # No Go, Node.js, or package manager required.
+#
+# Uses bash explicitly (not /bin/sh) because `set -o pipefail` is not POSIX.
+# On Linux /bin/sh is often dash, which would fail at the first pipefail.
+# Document the install command as `... | bash` not `... | sh` to match.
 
 set -euo pipefail
 
@@ -52,7 +56,7 @@ resolve_install_dir() {
   elif mkdir -p "${HOME}/.local/bin" 2>/dev/null; then
     INSTALL_DIR="${HOME}/.local/bin"
   elif command -v sudo >/dev/null 2>&1; then
-    echo "~/.local/bin not available; will install to /usr/local/bin (requires sudo)"
+    echo "${HOME}/.local/bin not available; will install to /usr/local/bin (requires sudo)"
     INSTALL_DIR="/usr/local/bin"
     USE_SUDO=1
   else
