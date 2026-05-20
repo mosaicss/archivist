@@ -51,3 +51,28 @@ jobs:
 
       - name: go build
         run: go build ./cmd/archivist
+
+      - name: Install shellcheck
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y shellcheck
+
+      - name: shellcheck install.sh
+        run: shellcheck scripts/install.sh
+
+      - name: shellcheck ci-drift-check.sh
+        run: shellcheck scripts/ci-drift-check.sh
+
+      - name: Install drift-check deps
+        run: sudo apt-get install -y grep
+
+      - name: CI drift check (advisory)
+        run: |
+          # Pass the archivist-cli marketing page from the mosaic repo if it exists.
+          # In the CLI repo CI, we don't have access to the mosaic monorepo, so
+          # this step is a no-op that always passes (advisory only).
+          if [ -f "apps/web/components/marketing/archivist-page.tsx" ]; then
+            sh scripts/ci-drift-check.sh apps/web/components/marketing/archivist-page.tsx
+          else
+            echo "Marketing page not in this repo — drift check skipped (advisory, see Story 36.10)"
+          fi

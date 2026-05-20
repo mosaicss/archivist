@@ -60,13 +60,7 @@ func NewRootCmd(version, commit, date string) *cobra.Command {
 	// (Story 36.4: cmd/archivist/table.go lives in package main).
 	root.AddCommand(newCompaniesCmd())
 	root.AddCommand(NewUsageCmd(version))
-	root.AddCommand(newStubCmd(stubMeta{
-		name:       "update",
-		use:        "update",
-		short:      "Replace the binary in place with the latest release",
-		story:      "36.11",
-		typedCodes: "0,1,2,5,9",
-	}))
+	root.AddCommand(NewUpdateCmd(version))
 	root.AddCommand(NewVersionCmd(version, commit, date))
 	root.AddCommand(newExplainCmd())
 

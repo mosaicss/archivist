@@ -1,0 +1,14 @@
+{
+  "name": "archivist",
+  "description": "Mosaic Archivist CLI — filings research for AI agents",
+  "version": "1.0.0",
+  "skills": [
+    { "name": "archivist", "path": "skill/SKILL.md", "command": "/archivist" }
+  ],
+  "futureSkills": [
+    "archivist-table",
+    "archivist-investigate-issuer",
+    "archivist-doctor",
+    "archivist-watch"
+  ]
+}

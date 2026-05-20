@@ -1,12 +1,10 @@
 # goreleaser config for the Mosaic Archivist CLI.
 #
 # Builds 5 platform targets (darwin arm64/amd64, linux arm64/amd64, windows
-# amd64), produces .tar.gz + .zip archives, emits a single SHA256SUMS file.
-#
-# TODO(36.11): wire SLSA build provenance via actions/attest-build-provenance
-# in .github/workflows/release.yml, and enable macOS notarization via signs:
-# blocks when the curl|sh + npm + brew channels need them. v0.1.0 ships
-# unsigned with SHA256SUMS only per audit revision 2026-05-19.
+# amd64), produces .tar.gz + .zip archives, emits a single SHA256SUMS file,
+# a universal macOS binary, a skill-bundle.tar.gz release asset, SLSA
+# provenance attestation (via release.yml), and optional macOS notarization
+# (conditional on APPLE_API_KEY_ID being set — see operator checklist).
 
 version: 2
 
@@ -39,6 +37,12 @@ builds:
       - -X main.date={{ time "2006-01-02" }}
     mod_timestamp: "{{ .CommitTimestamp }}"
 
+universal_binaries:
+  - id: archivist-universal
+    ids:
+      - archivist
+    replace: true
+
 archives:
   - id: archivist
     ids:
@@ -53,6 +57,15 @@ archives:
     files:
       - LICENSE
       - README.md
+
+  - id: skill-bundle
+    meta: true
+    name_template: "archivist_v{{ .Version }}_skill-bundle"
+    formats:
+      - tar.gz
+    files:
+      - src: skill/**/*
+        dst: .
 
 checksum:
   name_template: "archivist_v{{ .Version }}_SHA256SUMS"
@@ -73,6 +86,46 @@ changelog:
       order: 1
     - title: Other changes
       order: 999
+
+# macOS notarization — conditional on APPLE_API_KEY_ID being set.
+# Operator must provision all APPLE_* secrets in the mosaicss/archivist
+# repo settings before this takes effect. See RELEASE_OPS_36_11.md.
+notarize:
+  macos:
+    - enabled: '{{ isEnvSet "APPLE_API_KEY_ID" }}'
+      sign:
+        certificate: "{{.Env.APPLE_DEVELOPER_ID_CERT_P12_BASE64}}"
+        password: "{{.Env.APPLE_DEVELOPER_ID_CERT_PASSWORD}}"
+      notarize:
+        issuer_id: "{{.Env.APPLE_API_KEY_ISSUER}}"
+        key_id: "{{.Env.APPLE_API_KEY_ID}}"
+        key: "{{.Env.APPLE_API_KEY_P8}}"
+
+brews:
+  - name: archivist
+    ids:
+      - archivist
+    repository:
+      owner: mosaic-finance
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    homepage: "https://mosaic-finance.com/products/archivist-cli"
+    description: "Archivist CLI for Mosaic filings research"
+    license: "Apache-2.0"
+    post_install: |
+      skill_dir = File.expand_path("~/.claude/skills/archivist")
+      if File.directory?(File.expand_path("~/.claude/skills"))
+        system "mkdir", "-p", skill_dir
+        system "curl", "-fsSL", "-o", "/tmp/archivist-skill.tar.gz",
+          "https://github.com/mosaicss/archivist/releases/download/v#{version}/archivist_v#{version}_skill-bundle.tar.gz"
+        system "tar", "-xzf", "/tmp/archivist-skill.tar.gz", "-C", skill_dir, "--strip-components=0"
+        system "rm", "-f", "/tmp/archivist-skill.tar.gz"
+      end
+      system "mkdir", "-p", File.expand_path("~/.archivist")
+      system "sh", "-c", "echo brew > ~/.archivist/install-channel"
+    test: |
+      output = shell_output("#{bin}/archivist version")
+      assert_match version.to_s, output
 
 release:
   github:
