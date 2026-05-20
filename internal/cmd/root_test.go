@@ -83,7 +83,7 @@ func TestStubVerbReturnsNotImplemented(t *testing.T) {
 		// chat is no longer a stub — it's a real command (Story 36.3)
 		// table is no longer a stub — it's a real command (Story 36.4), registered in package main
 		// companies is no longer a stub — it's a real command (Story 36.5)
-		{"usage", "36.12"},
+		// usage is no longer a stub — it's a real command (Story 36.12)
 		{"update", "36.11"},
 	}
 	for _, tc := range cases {

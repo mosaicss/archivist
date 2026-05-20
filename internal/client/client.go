@@ -114,9 +114,24 @@ func (c *Client) Do(ctx context.Context, method, path string, body io.Reader) (*
 			}
 		}
 
-		// Emit quota info
-		if remaining := resp.Header.Get("X-Queries-Remaining"); remaining != "" && !c.quiet {
-			_, _ = fmt.Fprintf(c.stderr, "[quota] %s queries remaining\n", remaining)
+		// Emit quota info per AC7 spec.
+		if remaining := resp.Header.Get("X-Queries-Remaining"); remaining != "" {
+			n, parseErr := strconv.Atoi(remaining)
+			if parseErr == nil {
+				switch {
+				case n == 0:
+					_, _ = fmt.Fprintln(c.stderr, "[archivist] Error: monthly query limit reached. Run 'archivist usage' for details.")
+					_ = resp.Body.Close()
+					return nil, &ExitCodeError{Code: 7, Message: "monthly query limit reached"}
+				case n < 5 && !c.quiet:
+					_, _ = fmt.Fprintf(c.stderr,
+						"[archivist] Warning: %d queries remaining this month. Run 'archivist usage' for details.\n", n)
+				default:
+					if !c.quiet {
+						_, _ = fmt.Fprintf(c.stderr, "[quota] %s queries remaining\n", remaining)
+					}
+				}
+			}
 		}
 
 		status := resp.StatusCode

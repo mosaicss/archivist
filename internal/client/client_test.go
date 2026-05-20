@@ -230,6 +230,48 @@ func isExitCode(err error, code int) bool {
 	return ok && e.Code == code
 }
 
+func TestQueriesRemainingWarning_BelowFive(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Queries-Remaining", "3")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv)
+	var stderr bytes.Buffer
+	c.SetStderr(&stderr)
+	resp, err := c.Do(context.Background(), http.MethodGet, "/test", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	_ = resp.Body.Close()
+	if !strings.Contains(stderr.String(), "Warning: 3 queries remaining") {
+		t.Errorf("expected warning message in stderr, got: %q", stderr.String())
+	}
+}
+
+func TestQueriesRemainingZero_ExitsRateLimit(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Queries-Remaining", "0")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv)
+	var stderr bytes.Buffer
+	c.SetStderr(&stderr)
+	_, err := c.Do(context.Background(), http.MethodGet, "/test", nil)
+	if err == nil {
+		t.Fatal("expected error when X-Queries-Remaining is 0")
+	}
+	if !isExitCode(err, 7) {
+		t.Errorf("expected exit code 7, got: %v", err)
+	}
+	if !strings.Contains(stderr.String(), "Error: monthly query limit reached") {
+		t.Errorf("expected limit-reached message in stderr, got: %q", stderr.String())
+	}
+}
+
 func TestIsOlderVersion(t *testing.T) {
 	cases := []struct {
 		current, minimum string
