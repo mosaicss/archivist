@@ -1,0 +1,7 @@
+# Historical false positive: the fake `sk_test_notaclittoken` test fixture
+# from internal/auth/credentials_test.go was a deliberate-reject value used
+# to verify ValidateTokenFormat rejects non-mc_pat_ inputs. The working tree
+# has been rewritten (commit replaces sk_test_… with wrong_prefix_…) but
+# gitleaks still flags the historical commit. This pin keeps future scans
+# green without rewriting git history.
+ab6987bad7814ef9534605a9ba5e96054dc889a8:internal/auth/credentials_test.go:stripe-access-token:46

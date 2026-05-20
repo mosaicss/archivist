@@ -43,7 +43,7 @@ func TestTokenFormatValidation(t *testing.T) {
 		t.Errorf("expected valid token to pass, got %v", err)
 	}
 
-	invalidToken := "sk_test_notaclittoken"
+	invalidToken := "wrong_prefix_notaclittoken"
 	if err := auth.ValidateTokenFormat(invalidToken); err == nil {
 		t.Error("expected invalid token to fail, got nil")
 	}
