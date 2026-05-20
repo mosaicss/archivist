@@ -30,7 +30,7 @@ npx -y @mosaic-finance/archivist install
 Pinned installs are recommended for reproducibility:
 
 ```sh
-npx -y @mosaic-finance/archivist@0.2.1 install
+npx -y @mosaic-finance/archivist@0.2.2 install
 ```
 
 ### Homebrew (macOS and Linux)
