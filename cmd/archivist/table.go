@@ -20,6 +20,7 @@ import (
 	"github.com/mosaicss/archivist/internal/client"
 	"github.com/mosaicss/archivist/internal/cmd"
 	"github.com/mosaicss/archivist/internal/cmd/flags"
+	"github.com/mosaicss/archivist/internal/defaults"
 	"github.com/mosaicss/archivist/internal/output"
 	"github.com/mosaicss/archivist/internal/resolver"
 	"github.com/mosaicss/archivist/internal/tablespec"
@@ -63,7 +64,13 @@ Spec file mode:
 Saved session commands:
   archivist table list
   archivist table rerun <session_id>
-  archivist table watch <session_id>`,
+  archivist table watch <session_id>
+
+Defaults:
+  When a row pins an issuer (issuer_key) without date_from / date_to,
+  archivist fills "Last 6 months" automatically. Hard cap at 2 years
+  for issuer-locked rows without a filing-type filter.
+  Run 'archivist explain defaults' for details.`,
 		Annotations: map[string]string{
 			"pp:typed-exit-codes": "0,2,3,4,5,6,7,8",
 			"mcp:read-only":       "false",
@@ -109,7 +116,13 @@ func newTableRunCmd(version string) *cobra.Command {
 		Long: `Run a table research job from a YAML or JSON spec file.
 
   archivist table run ./q4-banking-comps.yaml
-  cat spec.yaml | archivist table run --stdin`,
+  cat spec.yaml | archivist table run --stdin
+
+Defaults:
+  When a row pins an issuer (issuer_key) without date_from / date_to,
+  archivist fills "Last 6 months" automatically. Hard cap at 2 years
+  for issuer-locked rows without a filing-type filter.
+  Run 'archivist explain defaults' for details.`,
 		Args: cobra.MaximumNArgs(1),
 		Annotations: map[string]string{
 			"pp:typed-exit-codes": "0,2,3,4,5,6,7,8",
@@ -239,6 +252,9 @@ func runTableFluent(
 		return err
 	}
 
+	// Client-side date defaults (mirrors web row-filter-picker.tsx Last 6 months).
+	applyRowDefaults(cobraCmd, spec, af.Quiet)
+
 	// Cascade pre-validation.
 	if err := validateCascade(cobraCmd, spec, formatFlag, af.DryRun); err != nil {
 		return err
@@ -323,6 +339,9 @@ func runTableFromSpec(
 	if err := resolveCompanies(cobraCmd, c, spec); err != nil {
 		return err
 	}
+
+	// Client-side date defaults (mirrors web row-filter-picker.tsx Last 6 months).
+	applyRowDefaults(cobraCmd, spec, af.Quiet)
 
 	// Cascade pre-validation.
 	if err := validateCascade(cobraCmd, spec, formatFlag, af.DryRun); err != nil {
@@ -476,6 +495,28 @@ func runTableList(cobraCmd *cobra.Command, version, formatFlag string) error {
 }
 
 // ─── shared helpers ───────────────────────────────────────────────────────────
+
+// applyRowDefaults calls defaults.ApplyTableRowDefaults for every row in spec,
+// emitting a one-line stderr notice per filled row (suppressed by --quiet).
+func applyRowDefaults(cobraCmd *cobra.Command, spec *tablespec.TableSpec, quiet bool) {
+	now := time.Now()
+	for i := range spec.Rows {
+		row, applied := defaults.ApplyTableRowDefaults(spec.Rows[i], now)
+		if !applied.Filled {
+			continue
+		}
+		spec.Rows[i] = row
+		if !quiet {
+			label := spec.Rows[i].Company
+			if label == "" {
+				label = fmt.Sprintf("#%d", i+1)
+			}
+			_, _ = fmt.Fprintf(cobraCmd.ErrOrStderr(),
+				"[defaults applied] row %q: date_from=%s date_to=%s (last 6 months; see 'archivist explain defaults')\n",
+				label, applied.DateFrom, applied.DateTo)
+		}
+	}
+}
 
 // resolveToken reads the token from --token flag or ARCHIVIST_TOKEN env var.
 func resolveToken(cobraCmd *cobra.Command) (string, error) {

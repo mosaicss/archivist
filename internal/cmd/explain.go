@@ -16,13 +16,15 @@ func newExplainCmd() *cobra.Command {
 		Long: `explain provides human-readable documentation for archivist rules and behavior.
 
 Available subcommands:
-  cascade     Explain the filter cascade rules enforced at spec-parse time.`,
+  cascade     Explain the filter cascade rules enforced at spec-parse time.
+  defaults    Explain the default date window applied to issuer-locked rows.`,
 		Annotations: map[string]string{
 			"pp:typed-exit-codes": "0",
 			"mcp:read-only":       "true",
 		},
 	}
 	root.AddCommand(newExplainCascadeCmd())
+	root.AddCommand(newExplainDefaultsCmd())
 	return root
 }
 
