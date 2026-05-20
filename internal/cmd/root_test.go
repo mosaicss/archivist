@@ -76,16 +76,17 @@ func TestHelpListsAllVerbsInOrder(t *testing.T) {
 }
 
 func TestStubVerbReturnsNotImplemented(t *testing.T) {
+	// All Phase 1 verbs are now real commands — no stubs remain in this story:
+	//   auth       — Story 36.2
+	//   chat       — Story 36.3
+	//   table      — Story 36.4 (registered in package main)
+	//   companies  — Story 36.5
+	//   usage      — Story 36.12
+	//   update     — Story 36.11 (this story)
+	// This test is retained as a skeleton for future stubs.
 	cases := []struct {
 		verb, story string
-	}{
-		// auth is no longer a stub — it's a real command (Story 36.2)
-		// chat is no longer a stub — it's a real command (Story 36.3)
-		// table is no longer a stub — it's a real command (Story 36.4), registered in package main
-		// companies is no longer a stub — it's a real command (Story 36.5)
-		// usage is no longer a stub — it's a real command (Story 36.12)
-		{"update", "36.11"},
-	}
+	}{}
 	for _, tc := range cases {
 		tc := tc
 		t.Run(tc.verb, func(t *testing.T) {

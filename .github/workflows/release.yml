@@ -26,6 +26,17 @@ jobs:
           go-version: "1.22"
           cache: true
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Inject version into SKILL.md
+        run: |
+          VERSION="${{ github.ref_name }}"
+          sed -i "1s/.*/<!-- version: ${VERSION} -->/" skill/SKILL.md
+
       - name: Run goreleaser
         uses: goreleaser/goreleaser-action@v6
         with:
@@ -34,10 +45,52 @@ jobs:
           args: release --clean --config goreleaser.yaml
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+          APPLE_DEVELOPER_ID_CERT_P12_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_CERT_P12_BASE64 }}
+          APPLE_DEVELOPER_ID_CERT_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_CERT_PASSWORD }}
+          APPLE_API_KEY_ISSUER: ${{ secrets.APPLE_API_KEY_ISSUER }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
 
-      # TODO(36.11): SLSA build provenance via actions/attest-build-provenance
-      # and macOS notarization via Apple Developer secrets. Both deferred to
-      # the distribution-channels story where curl|sh + npm + brew actually
-      # need signed + provenance-attested artifacts. v0.1.0 ships with
-      # SHA256SUMS-only verification; Mac users clear gatekeeper with
-      # `xattr -d com.apple.quarantine ~/go/bin/archivist`.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-path: dist/archivist_v*_*
+
+      - name: Inject SHA256 hashes into npm package
+        run: |
+          VERSION="${{ github.ref_name }}"
+          # Strip leading v for the SUMS file name
+          VER="${VERSION#v}"
+          SUMS_FILE="dist/archivist_v${VER}_SHA256SUMS"
+          if [ ! -f "$SUMS_FILE" ]; then
+            echo "SHA256SUMS file not found: $SUMS_FILE"
+            exit 1
+          fi
+          while IFS='  ' read -r hash filename; do
+            # Replace placeholder tokens like SHA256_DARWIN_ARM64 with the real hash
+            PLACEHOLDER=$(echo "$filename" | sed 's/archivist_v[0-9._]*_//; s/\.\(tar\.gz\|zip\)//' | tr '[:lower:]' '[:upper:]' | tr '-' '_')
+            sed -i "s|SHA256_${PLACEHOLDER}|${hash}|g" \
+              packages/npm-orchestrator/bin/archivist-install.js
+          done < "$SUMS_FILE"
+          # Also inject the version into package.json
+          sed -i "s/\"version\": \"0.0.0\"/\"version\": \"${VER}\"/" \
+            packages/npm-orchestrator/package.json
+
+      - name: Publish npm package
+        if: ${{ secrets.NPM_TOKEN != '' }}
+        run: |
+          cd packages/npm-orchestrator
+          npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Deploy install.sh to SiteGround
+        if: ${{ secrets.SITEGROUND_DEPLOY_KEY != '' }}
+        run: |
+          eval "$(ssh-agent -s)"
+          echo "${{ secrets.SITEGROUND_DEPLOY_KEY }}" | ssh-add -
+          rsync -avz --delete \
+            -e "ssh -o StrictHostKeyChecking=no" \
+            scripts/install.sh \
+            "${{ secrets.SITEGROUND_SSH_USER }}@${{ secrets.SITEGROUND_SSH_HOST }}:${{ secrets.SITEGROUND_INSTALL_PATH }}/install.sh"
