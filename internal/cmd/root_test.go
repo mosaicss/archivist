@@ -77,7 +77,7 @@ func TestStubVerbReturnsNotImplemented(t *testing.T) {
 	cases := []struct {
 		verb, story string
 	}{
-		{"auth", "36.2"},
+		// auth is no longer a stub — it's a real command (Story 36.2)
 		{"chat", "36.3"},
 		{"table", "36.4"},
 		{"companies", "36.5"},
