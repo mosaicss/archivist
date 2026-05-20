@@ -48,7 +48,7 @@ func TestChatRequestBody(t *testing.T) {
 			receivedBody = buf.Bytes()
 			// Respond with a minimal SSE stream
 			w.Header().Set("Content-Type", "text/event-stream")
-			_, _ = fmt.Fprint(w, sseData(map[string]string{"type": "text-delta", "textDelta": "Hello from AAPL"}))
+			_, _ = fmt.Fprint(w, sseData(map[string]string{"type": "text-delta", "delta": "Hello from AAPL"}))
 			_, _ = fmt.Fprint(w, sseData(map[string]interface{}{"type": "finish", "conversationId": "conv-123"}))
 			_, _ = fmt.Fprint(w, "data: [DONE]\n")
 		}
@@ -148,7 +148,7 @@ func TestChatCompanyAutoResolution_ExactMatch(t *testing.T) {
 			})
 		case "/chat":
 			w.Header().Set("Content-Type", "text/event-stream")
-			_, _ = fmt.Fprint(w, sseData(map[string]string{"type": "text-delta", "textDelta": "Answer"}))
+			_, _ = fmt.Fprint(w, sseData(map[string]string{"type": "text-delta", "delta": "Answer"}))
 			_, _ = fmt.Fprint(w, sseData(map[string]interface{}{"type": "finish", "conversationId": "c1"}))
 			_, _ = fmt.Fprint(w, "data: [DONE]\n")
 		}
@@ -215,7 +215,7 @@ func TestChatCompanyIssuerKeyBypass(t *testing.T) {
 			w.WriteHeader(http.StatusInternalServerError)
 		case "/chat":
 			w.Header().Set("Content-Type", "text/event-stream")
-			_, _ = fmt.Fprint(w, sseData(map[string]string{"type": "text-delta", "textDelta": "Answer"}))
+			_, _ = fmt.Fprint(w, sseData(map[string]string{"type": "text-delta", "delta": "Answer"}))
 			_, _ = fmt.Fprint(w, sseData(map[string]interface{}{"type": "finish", "conversationId": "c1"}))
 			_, _ = fmt.Fprint(w, "data: [DONE]\n")
 		}
@@ -236,7 +236,7 @@ func TestChatStreamFlagSetsAcceptHeader(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		acceptHeader = r.Header.Get("Accept")
 		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = fmt.Fprint(w, sseData(map[string]string{"type": "text-delta", "textDelta": "Streaming answer"}))
+		_, _ = fmt.Fprint(w, sseData(map[string]string{"type": "text-delta", "delta": "Streaming answer"}))
 		_, _ = fmt.Fprint(w, sseData(map[string]interface{}{"type": "finish", "conversationId": "c-stream"}))
 		_, _ = fmt.Fprint(w, "data: [DONE]\n")
 	}))
@@ -252,7 +252,7 @@ func TestChatStreamFlagSetsAcceptHeader(t *testing.T) {
 func TestChatMarkdownOutput(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = fmt.Fprint(w, sseData(map[string]string{"type": "text-delta", "textDelta": "AAPL reported [cite:1] strong supply chain"}))
+		_, _ = fmt.Fprint(w, sseData(map[string]string{"type": "text-delta", "delta": "AAPL reported [cite:1] strong supply chain"}))
 		_, _ = fmt.Fprint(w, sseData(map[string]interface{}{"type": "finish", "conversationId": "conv-abc"}))
 		_, _ = fmt.Fprint(w, "data: [DONE]\n")
 	}))
@@ -277,7 +277,7 @@ func TestChatMarkdownOutput(t *testing.T) {
 func TestChatJSONOutput(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = fmt.Fprint(w, sseData(map[string]string{"type": "text-delta", "textDelta": "JSON answer here"}))
+		_, _ = fmt.Fprint(w, sseData(map[string]string{"type": "text-delta", "delta": "JSON answer here"}))
 		_, _ = fmt.Fprint(w, sseData(map[string]interface{}{"type": "finish", "conversationId": "conv-json"}))
 		_, _ = fmt.Fprint(w, "data: [DONE]\n")
 	}))
@@ -354,7 +354,7 @@ func TestChatError5xx(t *testing.T) {
 func TestChatCompactStripsFooter(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = fmt.Fprint(w, sseData(map[string]string{"type": "text-delta", "textDelta": "Compact answer"}))
+		_, _ = fmt.Fprint(w, sseData(map[string]string{"type": "text-delta", "delta": "Compact answer"}))
 		_, _ = fmt.Fprint(w, sseData(map[string]interface{}{"type": "finish", "conversationId": "conv-compact"}))
 		_, _ = fmt.Fprint(w, "data: [DONE]\n")
 	}))
@@ -380,7 +380,7 @@ func TestChatFilingTypeCSV(t *testing.T) {
 			_, _ = buf.ReadFrom(r.Body)
 			receivedBody = buf.Bytes()
 			w.Header().Set("Content-Type", "text/event-stream")
-			_, _ = fmt.Fprint(w, sseData(map[string]string{"type": "text-delta", "textDelta": "Answer"}))
+			_, _ = fmt.Fprint(w, sseData(map[string]string{"type": "text-delta", "delta": "Answer"}))
 			_, _ = fmt.Fprint(w, sseData(map[string]interface{}{"type": "finish", "conversationId": "c1"}))
 			_, _ = fmt.Fprint(w, "data: [DONE]\n")
 		}
@@ -414,7 +414,7 @@ func TestChatStructuredParamsOmittedWhenEmpty(t *testing.T) {
 			_, _ = buf.ReadFrom(r.Body)
 			receivedBody = buf.Bytes()
 			w.Header().Set("Content-Type", "text/event-stream")
-			_, _ = fmt.Fprint(w, sseData(map[string]string{"type": "text-delta", "textDelta": "Answer"}))
+			_, _ = fmt.Fprint(w, sseData(map[string]string{"type": "text-delta", "delta": "Answer"}))
 			_, _ = fmt.Fprint(w, sseData(map[string]interface{}{"type": "finish", "conversationId": "c1"}))
 			_, _ = fmt.Fprint(w, "data: [DONE]\n")
 		}
@@ -440,7 +440,7 @@ func TestChatConversationIDIncluded(t *testing.T) {
 			_, _ = buf.ReadFrom(r.Body)
 			receivedBody = buf.Bytes()
 			w.Header().Set("Content-Type", "text/event-stream")
-			_, _ = fmt.Fprint(w, sseData(map[string]string{"type": "text-delta", "textDelta": "Follow-up answer"}))
+			_, _ = fmt.Fprint(w, sseData(map[string]string{"type": "text-delta", "delta": "Follow-up answer"}))
 			_, _ = fmt.Fprint(w, sseData(map[string]interface{}{"type": "finish", "conversationId": "resume-id"}))
 			_, _ = fmt.Fprint(w, "data: [DONE]\n")
 		}

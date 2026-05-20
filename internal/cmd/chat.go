@@ -387,16 +387,35 @@ func parseSSEEvent(event *sseEvent, result *chatResult, showProgress bool, stder
 	case "text-delta":
 		result.Markdown += event.TextDelta
 
-	case "tool-result":
-		// Tool results may contain citation/source data
-		if event.ToolName == "search_filings" && event.Result != nil {
-			parseCitationsFromToolResult(event.Result, result)
+	case "tool-output-available":
+		// AI SDK v6 emits tool results as "tool-output-available" with the
+		// payload under `output`. The earlier event "tool-input-available"
+		// (handled below) carries the toolName for the same toolCallId.
+		toolName := result.toolNameByCallID[event.ToolCallID]
+		if toolName == "search_filings" && event.Output != nil {
+			parseCitationsFromToolResult(event.Output, result)
 		}
 
-	case "tool-call":
+	case "tool-input-available":
+		// Track toolCallId → toolName so the matching tool-output-available
+		// later can be routed to the right citation handler.
+		if result.toolNameByCallID == nil {
+			result.toolNameByCallID = map[string]string{}
+		}
+		if event.ToolCallID != "" && event.ToolName != "" {
+			result.toolNameByCallID[event.ToolCallID] = event.ToolName
+		}
 		// Progress: show tool invocations when streaming
 		if showProgress && !quiet && event.ToolName != "" {
 			_, _ = fmt.Fprintf(stderr, "  %s...\n", toolProgressMessage(event.ToolName, event.ToolInput))
+		}
+
+	case "data-status":
+		// Transient progress (tool_start, tool_complete) — print summary if streaming
+		if showProgress && !quiet && event.Data != nil {
+			if summary, ok := event.Data["summary"].(string); ok && summary != "" {
+				_, _ = fmt.Fprintf(stderr, "  %s\n", summary)
+			}
 		}
 
 	case "finish":
@@ -737,6 +756,10 @@ type chatResult struct {
 	ConversationID  string
 	TaskID          string
 	AppliedDefaults map[string]interface{}
+	// toolNameByCallID maps SSE toolCallId → toolName so tool-output-available
+	// events (which carry only the callId) can be routed back to the matching
+	// toolName-aware handler (e.g. citation parsing for search_filings).
+	toolNameByCallID map[string]string
 }
 
 type chatCitation struct {
@@ -759,13 +782,26 @@ type citationSource struct {
 	URL          string `json:"url"`
 }
 
-// sseEvent is a generic SSE event payload from the Vercel AI SDK stream.
+// sseEvent is a generic SSE event payload from the Vercel AI SDK v6
+// UI Message Stream (chat-api sets header `x-vercel-ai-ui-message-stream: v1`).
+//
+// Key types seen on the wire:
+//   - text-start / text-delta / text-end (delta carries the chunk text)
+//   - tool-input-start / tool-input-delta / tool-input-available
+//   - tool-output-available (output carries the result payload)
+//   - data-status (transient progress messages with {event, tool, summary})
+//   - start-step / finish-step
+//
+// ConversationID / AppliedDefaults are not currently emitted by chat-api;
+// the structs are kept here for forward-compat if/when the server adds them.
 type sseEvent struct {
 	Type            string                 `json:"type"`
-	TextDelta       string                 `json:"textDelta"`
+	TextDelta       string                 `json:"delta"`
+	ToolCallID      string                 `json:"toolCallId"`
 	ToolName        string                 `json:"toolName"`
-	ToolInput       map[string]interface{} `json:"toolInput"`
-	Result          interface{}            `json:"result"`
+	ToolInput       map[string]interface{} `json:"input"`
+	Output          interface{}            `json:"output"`
+	Data            map[string]interface{} `json:"data"`
 	ConversationID  string                 `json:"conversationId"`
 	TaskID          string                 `json:"taskId"`
 	AppliedDefaults map[string]interface{} `json:"appliedDefaults"`
