@@ -27,6 +27,8 @@ var (
 
 func main() {
 	root := cmd.NewRootCmd(version, commit, date)
+	// Register verbs that live in package main (table — Story 36.4).
+	root.AddCommand(newTableCmd(version))
 	err := root.Execute()
 	if err == nil {
 		return

@@ -53,7 +53,9 @@ func TestHelpListsAllVerbsInOrder(t *testing.T) {
 		t.Fatalf("execute: %v", err)
 	}
 	helpText := out.String()
-	verbsInOrder := []string{"auth", "chat", "table", "companies", "usage", "update", "version"}
+	// "table" is registered by cmd/archivist/main.go (package main), not here.
+	// TestHelpListsTableVerb in cmd/archivist/table_test.go covers that.
+	verbsInOrder := []string{"auth", "chat", "companies", "usage", "update", "version"}
 	lastIdx := -1
 	for _, verb := range verbsInOrder {
 		// Cobra renders subcommands as "  <use>   <short>" under
@@ -79,8 +81,8 @@ func TestStubVerbReturnsNotImplemented(t *testing.T) {
 	}{
 		// auth is no longer a stub — it's a real command (Story 36.2)
 		// chat is no longer a stub — it's a real command (Story 36.3)
+		// table is no longer a stub — it's a real command (Story 36.4), registered in package main
 		// companies is no longer a stub — it's a real command (Story 36.5)
-		{"table", "36.4"},
 		{"usage", "36.12"},
 		{"update", "36.11"},
 	}
