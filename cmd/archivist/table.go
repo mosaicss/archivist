@@ -494,6 +494,9 @@ func runTableList(cobraCmd *cobra.Command, version, formatFlag string) error {
 
 // applyRowDefaults calls defaults.ApplyTableRowDefaults for every row in spec,
 // emitting a one-line stderr notice per filled row (suppressed by --quiet).
+// Story 37.8 — message format reflects partial fills: only the filled fields
+// appear in the stderr line, so users see exactly which date(s) the CLI
+// chose for them and which they provided.
 func applyRowDefaults(cobraCmd *cobra.Command, spec *tablespec.TableSpec, quiet bool) {
 	now := time.Now()
 	for i := range spec.Rows {
@@ -502,15 +505,23 @@ func applyRowDefaults(cobraCmd *cobra.Command, spec *tablespec.TableSpec, quiet 
 			continue
 		}
 		spec.Rows[i] = row
-		if !quiet {
-			label := spec.Rows[i].Company
-			if label == "" {
-				label = fmt.Sprintf("#%d", i+1)
-			}
-			_, _ = fmt.Fprintf(cobraCmd.ErrOrStderr(),
-				"[defaults applied] row %q: date_from=%s date_to=%s (last 6 months; see 'archivist explain defaults')\n",
-				label, applied.DateFrom, applied.DateTo)
+		if quiet {
+			continue
 		}
+		label := spec.Rows[i].Company
+		if label == "" {
+			label = fmt.Sprintf("#%d", i+1)
+		}
+		var fills []string
+		if applied.DateFrom != "" {
+			fills = append(fills, "date_from="+applied.DateFrom)
+		}
+		if applied.DateTo != "" {
+			fills = append(fills, "date_to="+applied.DateTo)
+		}
+		_, _ = fmt.Fprintf(cobraCmd.ErrOrStderr(),
+			"[defaults applied] row %q: %s (%s; see 'archivist explain defaults')\n",
+			label, strings.Join(fills, " "), applied.DateLabel)
 	}
 }
 

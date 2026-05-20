@@ -26,9 +26,15 @@ var (
 )
 
 func main() {
-	root := cmd.NewRootCmd(version, commit, date)
+	// Resolve "dev"/"unknown" ldflag defaults once at startup. For binaries
+	// installed via `go install` (no goreleaser ldflags), this pulls the real
+	// module tag + VCS info from debug.ReadBuildInfo so every verb — version,
+	// doctor, update, usage, table — reports the same number (Story 37.9).
+	resolvedVersion, resolvedCommit, resolvedDate := cmd.ResolveBuildInfo(version, commit, date)
+
+	root := cmd.NewRootCmd(resolvedVersion, resolvedCommit, resolvedDate)
 	// Register verbs that live in package main (table — Story 36.4).
-	root.AddCommand(newTableCmd(version))
+	root.AddCommand(newTableCmd(resolvedVersion))
 	err := root.Execute()
 	if err == nil {
 		return

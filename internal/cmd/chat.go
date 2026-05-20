@@ -20,11 +20,9 @@ import (
 	"github.com/mosaicss/archivist/internal/auth"
 	"github.com/mosaicss/archivist/internal/client"
 	"github.com/mosaicss/archivist/internal/cmd/flags"
+	"github.com/mosaicss/archivist/internal/resolver"
 	"github.com/spf13/cobra"
 )
-
-// issuerKeyPattern matches known issuer_key format: lowercase alphanumeric + underscores, ending _XX (2-letter country code).
-var issuerKeyPattern = regexp.MustCompile(`^[a-z0-9_]+_[a-z]{2}$`)
 
 // NewChatCmd returns the full `archivist chat` command (replaces the stub from 36.1).
 func NewChatCmd(version string) *cobra.Command {
@@ -122,7 +120,10 @@ func NewChatCmd(version string) *cobra.Command {
 
 			// --company auto-resolution
 			if resolvedCompany != "" {
-				if !issuerKeyPattern.MatchString(resolvedCompany) {
+				// Literal issuer_key (cik:NNN, uuid:UUID, sym_us/ca) — bypass AutoResolve
+				// so the typed id passes through unchanged. Bug fixed for the table verb
+				// in 37.5; this is the chat-verb sibling.
+				if !resolver.IsLiteralIssuerKey(resolvedCompany) {
 					// Free-text: resolve via /companies/search
 					issuerKey, resolveErr := resolveCompany(cmd, c, resolvedCompany, format)
 					if resolveErr != nil {

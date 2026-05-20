@@ -207,27 +207,39 @@ func TestChatCompanyAutoResolution_Ambiguous(t *testing.T) {
 }
 
 func TestChatCompanyIssuerKeyBypass(t *testing.T) {
-	companiesSearchCalled := false
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/companies/search":
-			companiesSearchCalled = true
-			w.WriteHeader(http.StatusInternalServerError)
-		case "/chat":
-			w.Header().Set("Content-Type", "text/event-stream")
-			_, _ = fmt.Fprint(w, sseData(map[string]string{"type": "text-delta", "delta": "Answer"}))
-			_, _ = fmt.Fprint(w, sseData(map[string]interface{}{"type": "finish", "conversationId": "c1"}))
-			_, _ = fmt.Fprint(w, "data: [DONE]\n")
-		}
-	}))
-	defer srv.Close()
-
-	_, _, err := executeChat(t, srv.URL, "chat", "What is revenue?", "--company", "aapl_us")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	// Each literal form must short-circuit AutoResolve. Mirrors 37.5's table-verb
+	// fix; this exercises the chat-verb call-site (chat.go:resolver.IsLiteralIssuerKey).
+	literals := []string{
+		"aapl_us",
+		"shop_ca",
+		"cik:320193",
+		"uuid:3162c889-bb75-49cf-b605-3295ae6e092d",
 	}
-	if companiesSearchCalled {
-		t.Error("expected no /companies/search call for issuer_key format input")
+	for _, lit := range literals {
+		t.Run(lit, func(t *testing.T) {
+			companiesSearchCalled := false
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/companies/search":
+					companiesSearchCalled = true
+					w.WriteHeader(http.StatusInternalServerError)
+				case "/chat":
+					w.Header().Set("Content-Type", "text/event-stream")
+					_, _ = fmt.Fprint(w, sseData(map[string]string{"type": "text-delta", "delta": "Answer"}))
+					_, _ = fmt.Fprint(w, sseData(map[string]interface{}{"type": "finish", "conversationId": "c1"}))
+					_, _ = fmt.Fprint(w, "data: [DONE]\n")
+				}
+			}))
+			defer srv.Close()
+
+			_, _, err := executeChat(t, srv.URL, "chat", "What is revenue?", "--company", lit)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if companiesSearchCalled {
+				t.Errorf("expected no /companies/search call for literal %q", lit)
+			}
+		})
 	}
 }
 
