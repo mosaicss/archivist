@@ -103,6 +103,10 @@ notarize:
 
 brews:
   - name: archivist
+    # Disabled when HOMEBREW_TAP_GITHUB_TOKEN secret is empty (default —
+    # tap repo creation is out-of-scope per RELEASE_OPS_36_11.md). Set the
+    # secret to enable. Same conditional shape as `notarize.macos.enabled`.
+    disable: '{{ if eq .Env.HOMEBREW_TAP_GITHUB_TOKEN "" }}true{{ end }}'
     ids:
       - archivist
     repository:
