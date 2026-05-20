@@ -40,10 +40,14 @@ jobs:
           path: coverage.out
           if-no-files-found: ignore
 
+      - name: Install golangci-lint v2
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh \
+            | sh -s -- -b $(go env GOPATH)/bin v2.12.2
+          golangci-lint --version
+
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
-        with:
-          version: v2.12.2
+        run: golangci-lint run
 
       - name: go build
         run: go build ./cmd/archivist
