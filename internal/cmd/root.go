@@ -54,13 +54,7 @@ func NewRootCmd(version, commit, date string) *cobra.Command {
 	root.PersistentFlags().String("token", "", "Override ARCHIVIST_TOKEN for this call (e.g., --token mc_pat_...)")
 
 	root.AddCommand(newAuthCmd(version))
-	root.AddCommand(newStubCmd(stubMeta{
-		name:       "chat",
-		use:        "chat <question>",
-		short:      "Run a research question against Mosaic filings",
-		story:      "36.3",
-		typedCodes: "0,2,4,5,7,9",
-	}))
+	root.AddCommand(NewChatCmd(version))
 	root.AddCommand(newStubCmd(stubMeta{
 		name:       "table",
 		use:        "table",
