@@ -15,6 +15,12 @@ jobs:
     name: goreleaser release
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      # Pulled to job-level env so step-level `if:` can read them via
+      # ${{ env.X != '' }}. GH Actions rejects `${{ secrets.X != '' }}`
+      # in step `if:` conditions ("Unrecognized named-value: 'secrets'").
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+      SITEGROUND_DEPLOY_KEY: ${{ secrets.SITEGROUND_DEPLOY_KEY }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -23,7 +29,9 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.22"
+          # Bumped to 1.25 to match go.mod after the x/net v0.54 security
+          # bump in 36.14. 1.22 would break `go build`.
+          go-version: "1.25"
           cache: true
 
       - name: Set up Node.js
@@ -78,7 +86,7 @@ jobs:
             packages/npm-orchestrator/package.json
 
       - name: Publish npm package
-        if: ${{ secrets.NPM_TOKEN != '' }}
+        if: ${{ env.NPM_TOKEN != '' }}
         run: |
           cd packages/npm-orchestrator
           npm publish --access public --provenance
@@ -86,7 +94,7 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Deploy install.sh to SiteGround
-        if: ${{ secrets.SITEGROUND_DEPLOY_KEY != '' }}
+        if: ${{ env.SITEGROUND_DEPLOY_KEY != '' }}
         run: |
           eval "$(ssh-agent -s)"
           echo "${{ secrets.SITEGROUND_DEPLOY_KEY }}" | ssh-add -
