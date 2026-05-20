@@ -55,6 +55,7 @@ func NewRootCmd(version, commit, date string) *cobra.Command {
 
 	root.AddCommand(newAuthCmd(version))
 	root.AddCommand(NewChatCmd(version))
+	root.AddCommand(newDoctorCmd(version, commit, date))
 	// table command registered by cmd/archivist/main.go after root is built
 	// (Story 36.4: cmd/archivist/table.go lives in package main).
 	root.AddCommand(newCompaniesCmd())
