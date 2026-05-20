@@ -1,0 +1,30 @@
+# Binaries (anchored to repo root and cmd/archivist/ so the cmd/archivist/
+# source directory itself is not ignored)
+/archivist
+/archivist.exe
+/cmd/archivist/archivist
+/cmd/archivist/archivist.exe
+
+# Goreleaser
+/dist/
+
+# Test + coverage
+*.test
+*.out
+coverage.out
+coverage.html
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# macOS noise
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Local env
+.env
+.envrc

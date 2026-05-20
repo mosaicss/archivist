@@ -1,0 +1,83 @@
+# goreleaser config for the Mosaic Archivist CLI.
+#
+# Builds 5 platform targets (darwin arm64/amd64, linux arm64/amd64, windows
+# amd64), produces .tar.gz + .zip archives, emits a single SHA256SUMS file.
+#
+# TODO(36.11): wire SLSA build provenance via actions/attest-build-provenance
+# in .github/workflows/release.yml, and enable macOS notarization via signs:
+# blocks when the curl|sh + npm + brew channels need them. v0.1.0 ships
+# unsigned with SHA256SUMS only per audit revision 2026-05-19.
+
+version: 2
+
+project_name: archivist
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: archivist
+    main: ./cmd/archivist
+    binary: archivist
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.ShortCommit}}
+      - -X main.date={{ time "2006-01-02" }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: archivist
+    ids:
+      - archivist
+    name_template: "archivist_v{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: "archivist_v{{ .Version }}_SHA256SUMS"
+  algorithm: sha256
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot"
+
+changelog:
+  sort: asc
+  use: github
+  groups:
+    - title: Features
+      regexp: "^.*?feat(\\(.+\\))??!?:.+$"
+      order: 0
+    - title: Bug fixes
+      regexp: "^.*?fix(\\(.+\\))??!?:.+$"
+      order: 1
+    - title: Other changes
+      order: 999
+
+release:
+  github:
+    owner: mosaicss
+    name: archivist
+  draft: false
+  prerelease: auto
+  name_template: "v{{ .Version }}"

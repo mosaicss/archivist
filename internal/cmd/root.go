@@ -1,0 +1,100 @@
+// Annotation discipline for future MCP enablement.
+//
+// Every Cobra command in this binary sets a minimum set of Annotations so a
+// future MCP server (cobratree-style walker; see architecture E36 §11.1) can
+// generate MCP tool definitions from the Cobra tree at runtime. The walker
+// reads:
+//
+//	"pp:typed-exit-codes"  — comma-separated exit codes the verb emits.
+//	"mcp:read-only"        — "true" for verbs that never mutate server state.
+//	"mcp:hidden"           — "true" to opt out of MCP exposure entirely.
+//
+// Adopt these annotations on every new command. They cost nothing now and
+// eliminate the MCP-retrofit pain when the cobratree walker is reimplemented
+// later in the project lifecycle.
+
+package cmd
+
+import (
+	"github.com/spf13/cobra"
+)
+
+func init() {
+	// Force registration order (auth, chat, table, companies, usage, update,
+	// version) per AC3. Cobra's default alphabetical sort would render
+	// "companies" before "table"; the story spec is explicit about the order.
+	cobra.EnableCommandSorting = false
+}
+
+const longDescription = `Archivist is the Mosaic command line surface for filings research.
+
+It lets any AI agent (Claude Code, Cursor, custom orchestrators) or shell
+context (bash, cron, CI) drive Mosaic's chat and table research over Clerk
+identity. The Mosaic web UI is the audit surface for every CLI call.
+
+Phase 1 verb behavior lands across Story 36.2 to 36.13. Run 'archivist version'
+for build info and 'archivist --help' for the verb list.`
+
+// NewRootCmd returns the root archivist command with all verbs registered.
+// version/commit/date come from -ldflags injection in cmd/archivist/main.go.
+func NewRootCmd(version, commit, date string) *cobra.Command {
+	root := &cobra.Command{
+		Use:   "archivist",
+		Short: "Mosaic Archivist CLI",
+		Long:  longDescription,
+		Annotations: map[string]string{
+			"pp:typed-exit-codes": "0,2",
+		},
+		SilenceErrors: true,
+		SilenceUsage:  true,
+	}
+	root.CompletionOptions.DisableDefaultCmd = true
+
+	root.AddCommand(newStubCmd(stubMeta{
+		name:       "auth",
+		use:        "auth",
+		short:      "Manage credentials (env var ARCHIVIST_TOKEN; dashboard issues tokens)",
+		story:      "36.2",
+		typedCodes: "0,2,4,5,9",
+	}))
+	root.AddCommand(newStubCmd(stubMeta{
+		name:       "chat",
+		use:        "chat <question>",
+		short:      "Run a research question against Mosaic filings",
+		story:      "36.3",
+		typedCodes: "0,2,4,5,7,9",
+	}))
+	root.AddCommand(newStubCmd(stubMeta{
+		name:       "table",
+		use:        "table",
+		short:      "Build or rerun a research table over filings",
+		story:      "36.4",
+		typedCodes: "0,2,4,5,7,8,9",
+	}))
+	root.AddCommand(newStubCmd(stubMeta{
+		name:       "companies",
+		use:        "companies",
+		short:      "Search or fetch issuer records",
+		story:      "36.5",
+		typedCodes: "0,2,3,4,5,6,7,9",
+		readOnly:   true,
+	}))
+	root.AddCommand(newStubCmd(stubMeta{
+		name:       "usage",
+		use:        "usage",
+		short:      "Report quota and rate limit consumption",
+		story:      "36.12",
+		typedCodes: "0,2,4,5,7,9",
+		readOnly:   true,
+	}))
+	root.AddCommand(newStubCmd(stubMeta{
+		name:       "update",
+		use:        "update",
+		short:      "Replace the binary in place with the latest release",
+		story:      "36.11",
+		typedCodes: "0,1,2,5,9",
+	}))
+	root.AddCommand(NewVersionCmd(version, commit, date))
+
+	return root
+}
