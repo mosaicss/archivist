@@ -881,6 +881,91 @@ func buildWirePayload(spec *tablespec.TableSpec) wirePayload {
 	}
 }
 
+// ─── Wire response ───────────────────────────────────────────────────────────
+//
+// chat-api emits cells with integer row/column indices, a state string, a
+// natural-language summary, and a `phrases` list keyed by source_number;
+// the full source list lives at the top level. The CLI's renderers
+// (markdown/csv/xlsx/json) consume a flatter shape with string row/col
+// ids, a value, and per-cell citation strings. wireTableResponse +
+// toTableResult translate at the boundary so renderers stay unchanged.
+
+type wireSource struct {
+	SourceNumber  int    `json:"source_number"`
+	FilingID      string `json:"filing_id"`
+	CompanyName   string `json:"company_name"`
+	Symbol        string `json:"symbol"`
+	FormType      string `json:"formtype"`
+	FormDesc      string `json:"formdescription"`
+	DateFiled     string `json:"datefiled"`
+	URL           string `json:"url"`
+}
+
+type wirePhrase struct {
+	SourceNumber int    `json:"source_number"`
+	Phrase       string `json:"phrase"`
+}
+
+type wireCell struct {
+	RowIndex    int          `json:"row_index"`
+	ColumnIndex int          `json:"column_index"`
+	State       string       `json:"state"`
+	Summary     *string      `json:"summary"`
+	Phrases     []wirePhrase `json:"phrases"`
+}
+
+type wireTableResponse struct {
+	Cells           []wireCell             `json:"cells"`
+	Sources         []wireSource           `json:"sources"`
+	SourceOffset    int                    `json:"sourceOffset"`
+	TaskID          string                 `json:"task_id,omitempty"`
+	AppliedDefaults map[string]interface{} `json:"applied_defaults,omitempty"`
+}
+
+func (w wireTableResponse) toTableResult() output.TableResult {
+	var citations []output.Citation
+	for _, s := range w.Sources {
+		citations = append(citations, output.Citation{
+			ID:         fmt.Sprintf("%d", s.SourceNumber),
+			Title:      strings.TrimSpace(s.CompanyName + " " + s.FormType),
+			URL:        s.URL,
+			FilingDate: s.DateFiled,
+			FilingType: s.FormType,
+			IssuerKey:  s.Symbol,
+		})
+	}
+
+	var cells []output.Cell
+	for _, c := range w.Cells {
+		summary := ""
+		if c.Summary != nil {
+			summary = *c.Summary
+		}
+		// Per-cell citation tokens: bracketed source_numbers
+		var citeTokens []string
+		seen := map[int]bool{}
+		for _, p := range c.Phrases {
+			if p.SourceNumber > 0 && !seen[p.SourceNumber] {
+				seen[p.SourceNumber] = true
+				citeTokens = append(citeTokens, fmt.Sprintf("%d", p.SourceNumber))
+			}
+		}
+		cells = append(cells, output.Cell{
+			RowID:     fmt.Sprintf("R%d", c.RowIndex),
+			ColID:     fmt.Sprintf("C%d", c.ColumnIndex),
+			Value:     summary,
+			Citations: citeTokens,
+		})
+	}
+
+	return output.TableResult{
+		Cells:           cells,
+		Citations:       citations,
+		TaskID:          w.TaskID,
+		AppliedDefaults: w.AppliedDefaults,
+	}
+}
+
 // ─── HTTP execution ───────────────────────────────────────────────────────────
 
 // executeTable posts to /table/search or /table/search/stream and renders output.
@@ -927,11 +1012,12 @@ func executeTable(
 		return &cmd.ExitError{Code: cmd.ExitServerError}
 	}
 
-	var result output.TableResult
-	if err := json.Unmarshal(respBody, &result); err != nil {
+	var wire wireTableResponse
+	if err := json.Unmarshal(respBody, &wire); err != nil {
 		_, _ = fmt.Fprintf(cobraCmd.ErrOrStderr(), "decode response: %v\n", err)
 		return &cmd.ExitError{Code: cmd.ExitServerError}
 	}
+	result := wire.toTableResult()
 
 	// Build watch URL.
 	if result.TaskID != "" {

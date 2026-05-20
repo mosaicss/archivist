@@ -442,27 +442,42 @@ func parseSSEEvent(event *sseEvent, result *chatResult, showProgress bool, stder
 	}
 }
 
-// parseCitationsFromToolResult extracts citations from a search_filings tool result.
+// parseCitationsFromToolResult extracts citations from a search_filings
+// tool result. The chat-api wraps the source list under `sources` in the
+// tool-output-available payload, but the pre-36.3 test fixtures used a
+// top-level array. Try both shapes so existing tests keep passing.
 func parseCitationsFromToolResult(result interface{}, r *chatResult) {
 	data, err := json.Marshal(result)
 	if err != nil {
 		return
 	}
-	// Try as array of source objects
+	// New (production) shape: { sources: [...], ... }
+	var wrapped struct {
+		Sources []citationSource `json:"sources"`
+	}
+	if err := json.Unmarshal(data, &wrapped); err == nil && len(wrapped.Sources) > 0 {
+		appendCitations(r, wrapped.Sources)
+		return
+	}
+	// Legacy / test-fixture shape: top-level array.
 	var sources []citationSource
 	if err := json.Unmarshal(data, &sources); err == nil {
-		for _, s := range sources {
-			if s.SourceNumber > 0 {
-				r.Citations = append(r.Citations, chatCitation{
-					Number:   s.SourceNumber,
-					Ticker:   s.Ticker,
-					FormType: s.FormType,
-					DateFiled: s.DateFiled,
-					Section:  s.Section,
-					Page:     s.Page,
-					URL:      s.URL,
-				})
-			}
+		appendCitations(r, sources)
+	}
+}
+
+func appendCitations(r *chatResult, sources []citationSource) {
+	for _, s := range sources {
+		if s.SourceNumber > 0 {
+			r.Citations = append(r.Citations, chatCitation{
+				Number:    s.SourceNumber,
+				Ticker:    s.Ticker,
+				FormType:  s.FormType,
+				DateFiled: s.DateFiled,
+				Section:   s.Section,
+				Page:      s.Page,
+				URL:       s.URL,
+			})
 		}
 	}
 }
@@ -497,9 +512,21 @@ func renderChatResult(cmd *cobra.Command, result *chatResult, format string, noC
 	return renderMarkdown(cmd.OutOrStdout(), cmd.ErrOrStderr(), result, watchURL, af, noColor)
 }
 
+// markupBlockRegex strips <highlights>...</highlights> and
+// <follow-ups>...</follow-ups> blocks that chat-api emits inline for the
+// web UI's hover/preview features. CLI markdown output drops them; the
+// JSON path preserves them (raw markdown is available to programmatic
+// consumers as result.Markdown).
+var markupBlockRegex = regexp.MustCompile(`(?s)\s*<(?:highlights|follow-ups)>.*?</(?:highlights|follow-ups)>\s*`)
+
+func stripChatMarkupBlocks(s string) string {
+	out := markupBlockRegex.ReplaceAllString(s, "")
+	return strings.TrimRight(out, "\n") + "\n"
+}
+
 func renderMarkdown(stdout, stderr io.Writer, result *chatResult, watchURL string, af flags.AgentFlags, noColor bool) error {
-	// Main markdown answer to stdout
-	_, _ = fmt.Fprintln(stdout, result.Markdown)
+	// Main markdown answer to stdout (with web-UI-only markup stripped)
+	_, _ = fmt.Fprintln(stdout, stripChatMarkupBlocks(result.Markdown))
 
 	if !af.Compact {
 		// Citations to stdout
@@ -772,12 +799,15 @@ type chatCitation struct {
 	URL       string `json:"url,omitempty"`
 }
 
+// citationSource matches the per-source shape emitted by chat-api's
+// search_filings tool. Field tags align with the production wire format
+// (symbol/formtype/datefiled — no underscores).
 type citationSource struct {
 	SourceNumber int    `json:"source_number"`
-	Ticker       string `json:"ticker"`
-	FormType     string `json:"form_type"`
-	DateFiled    string `json:"date_filed"`
-	Section      string `json:"section"`
+	Ticker       string `json:"symbol"`
+	FormType     string `json:"formtype"`
+	DateFiled    string `json:"datefiled"`
+	Section      string `json:"section_header"`
 	Page         int    `json:"page"`
 	URL          string `json:"url"`
 }
