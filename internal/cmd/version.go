@@ -84,11 +84,20 @@ func readSkillVersion() (version, path string) {
 	return "", ""
 }
 
-// resolveBuildInfo returns the version/commit/date triple, falling back to
+// ResolveBuildInfo returns the version/commit/date triple, falling back to
 // runtime/debug.ReadBuildInfo when ldflags weren't injected (the `go install`
 // path). The caller's values win for goreleaser-built binaries; ReadBuildInfo
 // fills in for `go install` so users see the real tag and VCS info even
 // without goreleaser's ldflags.
+//
+// Story 37.9 promoted this from package-internal to exported so main.go can
+// resolve once at startup and pass the canonical triple to every verb
+// (doctor, update, usage, etc.). Previously only the version verb resolved,
+// and the others reported "dev"/"vdev" on `go install` builds.
+func ResolveBuildInfo(version, commit, date string) (string, string, string) {
+	return resolveBuildInfo(version, commit, date)
+}
+
 func resolveBuildInfo(version, commit, date string) (string, string, string) {
 	if version != "dev" {
 		return version, commit, date
