@@ -11,7 +11,38 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 )
+
+// Literal issuer_key forms recognized by IsLiteralIssuerKey. Inputs matching
+// any of these MUST bypass AutoResolve — they are already canonical issuer
+// references, not free-text search prompts.
+//
+// Story 37.5 added cikLiteralRE and uuidLiteralRE after the table verb's old
+// `^[a-z0-9_]+$` bypass missed `cik:NNN` (Apple → resolved to Citigroup).
+var (
+	cikLiteralRE    = regexp.MustCompile(`^cik:[0-9]+$`)
+	uuidLiteralRE   = regexp.MustCompile(`^uuid:[0-9a-f-]{8,}$`)
+	symbolCountryRE = regexp.MustCompile(`^[a-z0-9.]+_(us|ca)$`)
+)
+
+// IsLiteralIssuerKey reports whether s is already a canonical issuer_key
+// literal and should bypass AutoResolve. Three forms are recognized:
+//
+//   - cik:NNN              — SEC Central Index Key literal (e.g. "cik:320193")
+//   - uuid:HEX             — UUID literal for issuers without a CIK
+//   - <symbol>_(us|ca)     — legacy symbol+country form (e.g. "aapl_us")
+//
+// Callers (chat verb, table verb) should check this BEFORE calling AutoResolve
+// to avoid sending a literal id through the fuzzy company-search path.
+func IsLiteralIssuerKey(s string) bool {
+	if s == "" {
+		return false
+	}
+	return cikLiteralRE.MatchString(s) ||
+		uuidLiteralRE.MatchString(s) ||
+		symbolCountryRE.MatchString(s)
+}
 
 // Client is the minimal interface the resolver needs from the HTTP client.
 // The concrete *client.Client from internal/client satisfies this interface.

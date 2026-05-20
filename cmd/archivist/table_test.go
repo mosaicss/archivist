@@ -13,6 +13,7 @@ import (
 	"github.com/mosaicss/archivist/internal/cmd"
 	"github.com/mosaicss/archivist/internal/output"
 	"github.com/mosaicss/archivist/internal/resolver"
+	"github.com/mosaicss/archivist/internal/tablespec"
 	"github.com/spf13/cobra"
 )
 
@@ -240,3 +241,109 @@ func TestAutoResolution_Ambiguous(t *testing.T) {
 // calling resolver.AutoResolve, not by the resolver itself. Coverage for the
 // caller-side bypass lives in chat_test.go.
 
+// ─── Story 37.5 — literal issuer_key bypass ───────────────────────────────────
+
+// failOnCallClient fails the test if any HTTP method is invoked. Used to prove
+// that resolveCompanies bypasses the resolver for literal issuer_keys.
+type failOnCallClient struct {
+	t *testing.T
+}
+
+func (f *failOnCallClient) Do(_ context.Context, method, path string, _ io.Reader) (*http.Response, error) {
+	f.t.Errorf("HTTP call must not happen for literal issuer_key — got %s %s", method, path)
+	return &http.Response{StatusCode: http.StatusInternalServerError, Body: io.NopCloser(bytes.NewReader(nil))}, nil
+}
+
+// TestBuildWirePayload_PreservesCIKLiteral covers AC6 — the wire layer must
+// pass `cik:320193` through to chat-api unchanged. Regression test for the
+// 36.14 T10 smoke where the literal silently became `cik:831001` upstream of
+// this function.
+func TestBuildWirePayload_PreservesCIKLiteral(t *testing.T) {
+	spec := mustSpec37_5(t, "cik:320193")
+	payload := buildWirePayload(spec)
+	if len(payload.Rows) != 1 {
+		t.Fatalf("Rows: want 1, got %d", len(payload.Rows))
+	}
+	if payload.Rows[0].Filters.IssuerKey != "cik:320193" {
+		t.Errorf("Filters.IssuerKey: want %q, got %q", "cik:320193", payload.Rows[0].Filters.IssuerKey)
+	}
+}
+
+// TestBuildWirePayload_PreservesUUIDLiteral mirrors AC6 for the uuid: form.
+func TestBuildWirePayload_PreservesUUIDLiteral(t *testing.T) {
+	const uuidLit = "uuid:3162c889-bb75-49cf-b605-3295ae6e092d"
+	spec := mustSpec37_5(t, uuidLit)
+	payload := buildWirePayload(spec)
+	if payload.Rows[0].Filters.IssuerKey != uuidLit {
+		t.Errorf("Filters.IssuerKey: want %q, got %q", uuidLit, payload.Rows[0].Filters.IssuerKey)
+	}
+}
+
+// TestResolveCompanies_LiteralBypass covers AC3 at the call-site level —
+// resolveCompanies MUST NOT invoke the HTTP client when a row's Company field
+// is one of the three literal issuer_key forms.
+func TestResolveCompanies_LiteralBypass(t *testing.T) {
+	literals := []string{
+		"cik:320193",
+		"uuid:3162c889-bb75-49cf-b605-3295ae6e092d",
+		"aapl_us",
+	}
+	for _, lit := range literals {
+		t.Run(lit, func(t *testing.T) {
+			spec := mustSpec37_5(t, lit)
+			fc := &failOnCallClient{t: t}
+
+			cobraCmd := newTableCmd("test")
+			cobraCmd.SetOut(io.Discard)
+			cobraCmd.SetErr(io.Discard)
+
+			if err := resolveCompanies(cobraCmd, fc, spec); err != nil {
+				t.Fatalf("resolveCompanies: unexpected error: %v", err)
+			}
+			// Literal must pass through unchanged.
+			if spec.Rows[0].Company != lit {
+				t.Errorf("row Company mutated: want %q, got %q", lit, spec.Rows[0].Company)
+			}
+		})
+	}
+}
+
+// TestResolveCompanies_FreeTextHitsResolver covers AC4 — free-text inputs
+// MUST still flow through AutoResolve. Uses the fakeHTTPClient to return a
+// canned unambiguous result and asserts the row's Company is rewritten.
+func TestResolveCompanies_FreeTextHitsResolver(t *testing.T) {
+	aapl := "aapl_us"
+	results := []resolver.CompanyResult{
+		{IssuerKey: &aapl, CompanyName: "Apple Inc.", Symbol: "AAPL:US", Exchange: "NGS", FilingCount: 4127},
+	}
+	body, _ := json.Marshal(results)
+	fc := &fakeHTTPClient{response: body, status: http.StatusOK}
+
+	spec := mustSpec37_5(t, "Apple")
+	cobraCmd := newTableCmd("test")
+	cobraCmd.SetOut(io.Discard)
+	cobraCmd.SetErr(io.Discard)
+
+	if err := resolveCompanies(cobraCmd, fc, spec); err != nil {
+		t.Fatalf("resolveCompanies: unexpected error: %v", err)
+	}
+	if spec.Rows[0].Company != "aapl_us" {
+		t.Errorf("free-text not resolved: want %q, got %q", "aapl_us", spec.Rows[0].Company)
+	}
+}
+
+// mustSpec37_5 builds a minimal valid TableSpec with one row + one filings
+// column for the 37.5 regression tests. The Company field is the only
+// parameter that varies across these tests.
+func mustSpec37_5(t *testing.T, company string) *tablespec.TableSpec {
+	t.Helper()
+	spec, err := buildSpecFromFlags(
+		[]string{"company=" + company + ",filing-type=10-K,date-from=2025-08-01"},
+		[]string{"name=FY2025 revenue,source=filings,mode=rrf,query=total net sales revenue annual"},
+		3,
+	)
+	if err != nil {
+		t.Fatalf("buildSpecFromFlags: %v", err)
+	}
+	return spec
+}
