@@ -61,13 +61,8 @@ func NewRootCmd(version, commit, date string) *cobra.Command {
 		story:      "36.3",
 		typedCodes: "0,2,4,5,7,9",
 	}))
-	root.AddCommand(newStubCmd(stubMeta{
-		name:       "table",
-		use:        "table",
-		short:      "Build or rerun a research table over filings",
-		story:      "36.4",
-		typedCodes: "0,2,4,5,7,8,9",
-	}))
+	// table command registered by cmd/archivist/main.go after root is built
+	// (Story 36.4: cmd/archivist/table.go lives in package main).
 	root.AddCommand(newStubCmd(stubMeta{
 		name:       "companies",
 		use:        "companies",
