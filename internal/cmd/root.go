@@ -51,7 +51,7 @@ func NewRootCmd(version, commit, date string) *cobra.Command {
 	root.CompletionOptions.DisableDefaultCmd = true
 
 	// Global --token flag: overrides ARCHIVIST_TOKEN for a single invocation.
-	root.PersistentFlags().String("token", "", "Override ARCHIVIST_TOKEN for this call (e.g., --token mc_pat_...)")
+	root.PersistentFlags().String("token", "", "Override ARCHIVIST_TOKEN for this call (e.g., --token ak_...)")
 
 	root.AddCommand(newAuthCmd(version))
 	root.AddCommand(NewChatCmd(version))

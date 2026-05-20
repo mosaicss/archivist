@@ -114,8 +114,8 @@ func TestDoctorMalformedToken(t *testing.T) {
 	if exitCode != 4 {
 		t.Errorf("expected exit code 4, got %d; output:\n%s", exitCode, buf.String())
 	}
-	if !strings.Contains(buf.String(), "mc_pat_") {
-		t.Errorf("expected mc_pat_ in FAIL message; got:\n%s", buf.String())
+	if !strings.Contains(buf.String(), "ak_") {
+		t.Errorf("expected ak_ in FAIL message; got:\n%s", buf.String())
 	}
 }
 

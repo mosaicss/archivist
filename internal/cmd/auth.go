@@ -13,7 +13,11 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const dashboardURL = "https://mosaic-finance.com/account/cli-tokens"
+// Tokens are issued from Clerk's UserProfile popup, reached via the user
+// avatar on any signed-in page on mosaic-finance.com. The 36.2 cleanup
+// removed the standalone /account/cli-tokens page; this URL points to a
+// stable signed-in landing so users can open the avatar menu from there.
+const dashboardURL = "https://mosaic-finance.com/chat"
 
 // newAuthCmd returns the `archivist auth` command with real subcommands.
 func newAuthCmd(version string) *cobra.Command {
@@ -46,12 +50,13 @@ func newAuthLoginCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), `To set up your Archivist CLI token:
 
-1. Open: %s
-2. Click "Issue Token" and copy the token.
-3. Add to your shell profile:
-   export ARCHIVIST_TOKEN=mc_pat_...
+1. Open: %s (sign in if prompted).
+2. Click your user avatar (top right) → Manage account → API keys.
+3. Click "Add new key", give it a name, and copy the token (starts with ak_...).
+4. Add to your shell profile:
+   export ARCHIVIST_TOKEN=ak_...
 
-Or pass per-command with --token mc_pat_...
+Or pass per-command with --token ak_...
 `, dashboardURL)
 
 			if openBrowser {

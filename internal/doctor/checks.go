@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mosaicss/archivist/internal/auth"
 	"github.com/mosaicss/archivist/internal/client"
 )
 
@@ -166,12 +167,12 @@ func Check4Token(cfg *RunConfig) CheckResult {
 	if cfg.Token == "" {
 		return CheckResult{Name: "Token", Status: StatusSkip, Detail: "skipped: no credential"}
 	}
-	if !strings.HasPrefix(cfg.Token, "mc_pat_") {
+	if err := auth.ValidateTokenFormat(cfg.Token); err != nil {
 		return CheckResult{
 			Name:       "Token",
 			Status:     StatusFail,
-			Message:    "token format unrecognized; expected mc_pat_... prefix",
-			Suggestion: "Re-issue your token at https://mosaic-finance.com/account/cli-tokens",
+			Message:    "token format unrecognized; expected ak_... prefix",
+			Suggestion: "Create a new key via the avatar menu → Manage account → API keys on https://mosaic-finance.com",
 		}
 	}
 	return CheckResult{
@@ -479,23 +480,30 @@ func tokenFingerprint(token string) string {
 }
 
 // tokenKeyID derives a display-safe key_id string from the token.
-// Shows mc_pat_ prefix and last 3 chars; never the full token.
+// Shows first 10 chars and last 3 chars; never the full token.
 func tokenKeyID(token string) string {
 	if len(token) < 15 {
-		return "mc_pat_???"
+		return "ak_???"
 	}
 	return token[:10] + "..." + token[len(token)-3:]
 }
 
-// extractKeyID derives the key_id component (prefix + first 8 chars after prefix).
+// extractKeyID derives a key_id component for fingerprinting display:
+// "<prefix>_<first-8-chars-after-prefix>". Falls back to first 10 chars
+// if no recognized prefix.
 func extractKeyID(token string) string {
-	const prefix = "mc_pat_"
-	if !strings.HasPrefix(token, prefix) {
+	for _, prefix := range []string{"ak_", "mc_pat_"} {
+		if !strings.HasPrefix(token, prefix) {
+			continue
+		}
+		rest := token[len(prefix):]
+		if len(rest) >= 8 {
+			return prefix + rest[:8]
+		}
 		return token
 	}
-	rest := token[len(prefix):]
-	if len(rest) >= 8 {
-		return prefix + rest[:8]
+	if len(token) >= 10 {
+		return token[:10]
 	}
 	return token
 }

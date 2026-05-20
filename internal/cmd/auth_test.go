@@ -25,7 +25,7 @@ func TestAuthLoginPrintsURL(t *testing.T) {
 	}
 
 	output := out.String()
-	if !strings.Contains(output, "https://mosaic-finance.com/account/cli-tokens") {
+	if !strings.Contains(output, "https://mosaic-finance.com/chat") {
 		t.Errorf("expected dashboard URL in output, got:\n%s", output)
 	}
 	if !strings.Contains(output, "export ARCHIVIST_TOKEN") {
@@ -115,7 +115,7 @@ func TestAuthLogoutRepurposed(t *testing.T) {
 	if !strings.Contains(output, "not available") {
 		t.Errorf("expected 'not available' in output, got:\n%s", output)
 	}
-	if !strings.Contains(output, "https://mosaic-finance.com/account/cli-tokens") {
+	if !strings.Contains(output, "https://mosaic-finance.com/chat") {
 		t.Errorf("expected dashboard URL in output, got:\n%s", output)
 	}
 }

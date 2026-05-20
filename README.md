@@ -105,17 +105,18 @@ archivist-cli v0.2.0 (commit abc1234 built 2026-05-20) darwin/arm64
 
 ## Authenticating
 
-Generate a CLI token at `https://mosaic-finance.com/account/cli-tokens`, then:
+Open https://mosaic-finance.com (sign in if needed), click your user avatar (top right)
+→ Manage account → API keys → Add new key. Copy the `ak_...` token, then:
 
 ```sh
-export ARCHIVIST_TOKEN=mc_pat_<your-token>
+export ARCHIVIST_TOKEN=ak_<your-token>
 archivist auth login
 ```
 
 Or pass per-call:
 
 ```sh
-archivist --token mc_pat_<your-token> chat --company shopify-inc-tsx "What are the key risks?"
+archivist --token ak_<your-token> chat --company shopify-inc-tsx "What are the key risks?"
 ```
 
 ## Self-update
