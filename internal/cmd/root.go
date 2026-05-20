@@ -50,13 +50,10 @@ func NewRootCmd(version, commit, date string) *cobra.Command {
 	}
 	root.CompletionOptions.DisableDefaultCmd = true
 
-	root.AddCommand(newStubCmd(stubMeta{
-		name:       "auth",
-		use:        "auth",
-		short:      "Manage credentials (env var ARCHIVIST_TOKEN; dashboard issues tokens)",
-		story:      "36.2",
-		typedCodes: "0,2,4,5,9",
-	}))
+	// Global --token flag: overrides ARCHIVIST_TOKEN for a single invocation.
+	root.PersistentFlags().String("token", "", "Override ARCHIVIST_TOKEN for this call (e.g., --token mc_pat_...)")
+
+	root.AddCommand(newAuthCmd(version))
 	root.AddCommand(newStubCmd(stubMeta{
 		name:       "chat",
 		use:        "chat <question>",
