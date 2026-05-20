@@ -1,9 +1,13 @@
 package cmd
 
 import (
+	"bufio"
 	"fmt"
+	"os"
+	"path/filepath"
 	"runtime"
 	"runtime/debug"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -28,9 +32,56 @@ func NewVersionCmd(version, commit, date string) *cobra.Command {
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(),
 				"archivist-cli %s (commit %s built %s) %s/%s\n",
 				rv, rc, rd, runtime.GOOS, runtime.GOARCH)
+
+			skillVer, skillPath := readSkillVersion()
+			if skillVer != "" {
+				binaryVer := strings.TrimPrefix(rv, "v")
+				sVer := strings.TrimPrefix(skillVer, "v")
+				if binaryVer != sVer {
+					_, _ = fmt.Fprintf(cmd.OutOrStdout(),
+						"  skill: %s at %s [outdated — binary is %s]\n",
+						skillVer, skillPath, rv)
+					_, _ = fmt.Fprintf(cmd.ErrOrStderr(),
+						"[skill outdated: binary %s, skill %s; run 'archivist update --skill' to sync]\n",
+						rv, skillVer)
+				} else {
+					_, _ = fmt.Fprintf(cmd.OutOrStdout(),
+						"  skill: %s at %s\n",
+						skillVer, skillPath)
+				}
+			}
 			return nil
 		},
 	}
+}
+
+// readSkillVersion reads the version header from ~/.claude/skills/archivist/SKILL.md.
+// Returns ("", "") if the file doesn't exist or has no version header.
+// Expected first line format: <!-- version: x.y.z -->
+func readSkillVersion() (version, path string) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", ""
+	}
+	skillPath := filepath.Join(home, ".claude", "skills", "archivist", "SKILL.md")
+	f, err := os.Open(skillPath)
+	if err != nil {
+		return "", ""
+	}
+	defer func() { _ = f.Close() }()
+
+	scanner := bufio.NewScanner(f)
+	if scanner.Scan() {
+		line := scanner.Text()
+		// Expected: <!-- version: x.y.z -->
+		if strings.HasPrefix(line, "<!-- version:") && strings.HasSuffix(line, "-->") {
+			ver := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(line, "<!-- version:"), "-->"))
+			if ver != "" {
+				return ver, skillPath
+			}
+		}
+	}
+	return "", ""
 }
 
 // resolveBuildInfo returns the version/commit/date triple, falling back to

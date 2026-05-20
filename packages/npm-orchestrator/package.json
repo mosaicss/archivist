@@ -1,0 +1,34 @@
+{
+  "name": "@mosaic-finance/archivist",
+  "version": "0.0.0",
+  "description": "Archivist CLI for Mosaic filings research — npm orchestrator",
+  "bin": {
+    "archivist": "bin/archivist-install.js"
+  },
+  "scripts": {
+    "install-cli": "node bin/archivist-install.js"
+  },
+  "dependencies": {},
+  "devDependencies": {},
+  "files": [
+    "bin/",
+    "index.js",
+    "README.md"
+  ],
+  "license": "Apache-2.0",
+  "homepage": "https://mosaic-finance.com/products/archivist-cli",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mosaicss/archivist.git"
+  },
+  "keywords": [
+    "archivist",
+    "mosaic",
+    "filings",
+    "research",
+    "cli"
+  ],
+  "engines": {
+    "node": ">=16"
+  }
+}

@@ -25,6 +25,11 @@ coverage.html
 .AppleDouble
 .LSOverride
 
-# Local env
+# Local env (covers .env, .env.local, .env.production, etc. — keep .env*.example committable)
 .env
+.env.*
+!.env*.example
 .envrc
+
+# JS deps (defense — no JS in this repo today, but blocks accidental adds)
+node_modules/

@@ -1,0 +1,6 @@
+{
+  "category": "data-research",
+  "tags": ["finance", "SEC", "SEDAR", "filings", "archivist"],
+  "installCommand": "npx -y @mosaic-finance/archivist install",
+  "homepage": "https://mosaic-finance.com/products/archivist-cli"
+}

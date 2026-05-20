@@ -1,0 +1,13 @@
+# Minimal 2-row x 2-column table spec.
+# Run with: archivist table --spec table-spec.yaml
+version: "1"
+rows:
+  - type: company
+    company: shopify-inc-tsx
+  - type: company
+    company: lightspeed-commerce-tsx
+columns:
+  - type: filings
+    question: "What was total revenue in the most recent fiscal year?"
+  - type: filings
+    question: "What is the primary business risk cited in the annual report?"

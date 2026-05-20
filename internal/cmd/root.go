@@ -50,51 +50,19 @@ func NewRootCmd(version, commit, date string) *cobra.Command {
 	}
 	root.CompletionOptions.DisableDefaultCmd = true
 
-	root.AddCommand(newStubCmd(stubMeta{
-		name:       "auth",
-		use:        "auth",
-		short:      "Manage credentials (env var ARCHIVIST_TOKEN; dashboard issues tokens)",
-		story:      "36.2",
-		typedCodes: "0,2,4,5,9",
-	}))
-	root.AddCommand(newStubCmd(stubMeta{
-		name:       "chat",
-		use:        "chat <question>",
-		short:      "Run a research question against Mosaic filings",
-		story:      "36.3",
-		typedCodes: "0,2,4,5,7,9",
-	}))
-	root.AddCommand(newStubCmd(stubMeta{
-		name:       "table",
-		use:        "table",
-		short:      "Build or rerun a research table over filings",
-		story:      "36.4",
-		typedCodes: "0,2,4,5,7,8,9",
-	}))
-	root.AddCommand(newStubCmd(stubMeta{
-		name:       "companies",
-		use:        "companies",
-		short:      "Search or fetch issuer records",
-		story:      "36.5",
-		typedCodes: "0,2,3,4,5,6,7,9",
-		readOnly:   true,
-	}))
-	root.AddCommand(newStubCmd(stubMeta{
-		name:       "usage",
-		use:        "usage",
-		short:      "Report quota and rate limit consumption",
-		story:      "36.12",
-		typedCodes: "0,2,4,5,7,9",
-		readOnly:   true,
-	}))
-	root.AddCommand(newStubCmd(stubMeta{
-		name:       "update",
-		use:        "update",
-		short:      "Replace the binary in place with the latest release",
-		story:      "36.11",
-		typedCodes: "0,1,2,5,9",
-	}))
+	// Global --token flag: overrides ARCHIVIST_TOKEN for a single invocation.
+	root.PersistentFlags().String("token", "", "Override ARCHIVIST_TOKEN for this call (e.g., --token mc_pat_...)")
+
+	root.AddCommand(newAuthCmd(version))
+	root.AddCommand(NewChatCmd(version))
+	root.AddCommand(newDoctorCmd(version, commit, date))
+	// table command registered by cmd/archivist/main.go after root is built
+	// (Story 36.4: cmd/archivist/table.go lives in package main).
+	root.AddCommand(newCompaniesCmd())
+	root.AddCommand(NewUsageCmd(version))
+	root.AddCommand(NewUpdateCmd(version))
 	root.AddCommand(NewVersionCmd(version, commit, date))
+	root.AddCommand(newExplainCmd())
 
 	return root
 }
