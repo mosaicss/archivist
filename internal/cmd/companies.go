@@ -460,15 +460,4 @@ func formatCount(n int) string {
 	return b.String()
 }
 
-// isTerminal returns true when w is an *os.File connected to a TTY.
-func isTerminal(w io.Writer) bool {
-	f, ok := w.(*os.File)
-	if !ok {
-		return false
-	}
-	fi, err := f.Stat()
-	if err != nil {
-		return false
-	}
-	return (fi.Mode() & os.ModeCharDevice) != 0
-}
+// isTerminal lives in chat.go (Story 36.3) and is reused across verbs.
