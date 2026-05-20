@@ -240,9 +240,3 @@ func TestAutoResolution_Ambiguous(t *testing.T) {
 // calling resolver.AutoResolve, not by the resolver itself. Coverage for the
 // caller-side bypass lives in chat_test.go.
 
-// panicClient panics if Do is called — confirms no network request in bypass path.
-type panicClient struct{}
-
-func (p *panicClient) Do(_ context.Context, _, _ string, _ io.Reader) (*http.Response, error) {
-	panic("unexpected HTTP call in issuer-key bypass path")
-}
