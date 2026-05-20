@@ -68,14 +68,7 @@ func NewRootCmd(version, commit, date string) *cobra.Command {
 		story:      "36.4",
 		typedCodes: "0,2,4,5,7,8,9",
 	}))
-	root.AddCommand(newStubCmd(stubMeta{
-		name:       "companies",
-		use:        "companies",
-		short:      "Search or fetch issuer records",
-		story:      "36.5",
-		typedCodes: "0,2,3,4,5,6,7,9",
-		readOnly:   true,
-	}))
+	root.AddCommand(newCompaniesCmd())
 	root.AddCommand(newStubCmd(stubMeta{
 		name:       "usage",
 		use:        "usage",
