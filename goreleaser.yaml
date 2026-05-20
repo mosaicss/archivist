@@ -103,10 +103,11 @@ notarize:
 
 brews:
   - name: archivist
-    # Disabled when HOMEBREW_TAP_GITHUB_TOKEN secret is empty (default —
-    # tap repo creation is out-of-scope per RELEASE_OPS_36_11.md). Set the
-    # secret to enable. Same conditional shape as `notarize.macos.enabled`.
-    disable: '{{ if eq .Env.HOMEBREW_TAP_GITHUB_TOKEN "" }}true{{ end }}'
+    # NOTE: brew tap publishing is currently skipped at the workflow level
+    # via `--skip=homebrew` in release.yml because HOMEBREW_TAP_GITHUB_TOKEN
+    # secret is not provisioned (out-of-scope per RELEASE_OPS_36_11.md).
+    # When the operator provisions the secret + tap repo, remove the
+    # `--skip=homebrew` flag from release.yml to re-enable.
     ids:
       - archivist
     repository:
