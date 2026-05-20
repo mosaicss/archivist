@@ -47,6 +47,10 @@ archives:
   - id: archivist
     ids:
       - archivist
+      # Include the universal darwin binary too — without this, the macOS
+      # archive is missing entirely because `universal_binaries.replace: true`
+      # deletes the per-arch darwin binaries.
+      - archivist-universal
     name_template: "archivist_v{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     formats:
       - tar.gz
