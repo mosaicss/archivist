@@ -92,6 +92,7 @@ func NewRootCmd(version, commit, date string) *cobra.Command {
 		typedCodes: "0,1,2,5,9",
 	}))
 	root.AddCommand(NewVersionCmd(version, commit, date))
+	root.AddCommand(newExplainCmd())
 
 	return root
 }
