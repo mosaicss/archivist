@@ -347,3 +347,139 @@ func mustSpec37_5(t *testing.T, company string) *tablespec.TableSpec {
 	}
 	return spec
 }
+
+// ─── Session 2026-05-21 — citation remap (cell-local → global) ─────────────
+
+// TestToTableResult_CitationRemap covers the wire-response translation: each
+// phrase's source_number is a 1-based CELL-LOCAL index into cell.results, and
+// must be remapped to the GLOBAL source_number stored on each result before
+// being stamped on output.Cell.Citations. Without the remap, a Newmont cell's
+// phrase indices 1-5 would render as global citations 1-5 (which point to
+// Barrick + first Newmont sources) — citation pollution that misled CLI JSON
+// consumers even though the web UI did the remap correctly.
+//
+// Scenario mirrors the 2026-05-21 multi-cell smoke (Barrick + Newmont + FCX
+// row, single column). Three cells, each with 5 phrases over its 2-filing
+// retrieval. Globally numbered sources: 1-2 Barrick, 3-4 Newmont, 5-6 FCX.
+func TestToTableResult_CitationRemap(t *testing.T) {
+	mkSummary := func(s string) *string { return &s }
+
+	w := wireTableResponse{
+		Sources: []wireSource{
+			{SourceNumber: 1, CompanyName: "Barrick Mining Corporation", FormType: "40-F"},
+			{SourceNumber: 2, CompanyName: "Barrick Mining Corporation", FormType: "6-K"},
+			{SourceNumber: 3, CompanyName: "Newmont Corporation", FormType: "10-K"},
+			{SourceNumber: 4, CompanyName: "Newmont Corporation", FormType: "10-Q"},
+			{SourceNumber: 5, CompanyName: "Freeport-McMoRan Inc.", FormType: "10-Q"},
+			{SourceNumber: 6, CompanyName: "Freeport-McMoRan Inc.", FormType: "10-K"},
+		},
+		Cells: []wireCell{
+			{
+				RowIndex: 0, ColumnIndex: 0, State: "loaded",
+				Summary: mkSummary("Barrick reported $16.96B in 2025."),
+				// Barrick row: 5 chunks across the 2 Barrick filings (global 1, 2).
+				Results: []wireResult{{1}, {2}, {1}, {2}, {2}},
+				Phrases: []wirePhrase{
+					{SourceNumber: 1, Phrase: "BARRICK MINING CORP"},
+					{SourceNumber: 2, Phrase: "FY"},
+					{SourceNumber: 3, Phrase: "Total $ 16,956 $ 12,922"},
+					{SourceNumber: 4, Phrase: "Gold sales"},
+					{SourceNumber: 5, Phrase: "Revenue"},
+				},
+			},
+			{
+				RowIndex: 1, ColumnIndex: 0, State: "loaded",
+				Summary: mkSummary("Newmont reported $22.67B in 2025."),
+				// Newmont row: chunks 1-4 from 10-K (global 3), chunk 5 from 10-Q (global 4).
+				Results: []wireResult{{3}, {3}, {3}, {3}, {4}},
+				Phrases: []wirePhrase{
+					{SourceNumber: 1, Phrase: "Newmont Corporation"},
+					{SourceNumber: 2, Phrase: "Net revenue"},
+					{SourceNumber: 3, Phrase: "39.1"},
+					{SourceNumber: 4, Phrase: "stockholders"},
+					{SourceNumber: 5, Phrase: "STATEMENTS OF OPERATIONS"},
+				},
+			},
+			{
+				RowIndex: 2, ColumnIndex: 0, State: "loaded",
+				Summary: mkSummary("Freeport reported $25.92B in 2025."),
+				// FCX row: mix of 10-Q (global 5) and 10-K (global 6).
+				Results: []wireResult{{5}, {6}, {6}, {5}, {5}},
+				Phrases: []wirePhrase{
+					{SourceNumber: 1, Phrase: "Consolidated revenues totaled $6.2 billion"},
+					{SourceNumber: 2, Phrase: "Atlantic Copper revenues totaled $3.2 billion in 2025"},
+					{SourceNumber: 3, Phrase: "Copper Mines Product Revenues"},
+					{SourceNumber: 4, Phrase: "Following is a summary"},
+					{SourceNumber: 5, Phrase: "CONSOLIDATED STATEMENTS OF INCOME"},
+				},
+			},
+		},
+	}
+
+	res := w.toTableResult()
+
+	if len(res.Cells) != 3 {
+		t.Fatalf("Cells: want 3, got %d", len(res.Cells))
+	}
+
+	// Barrick row must cite ONLY {1, 2}; never {3, 4, 5} (those are Newmont/FCX).
+	wantBarrick := []string{"1", "2"}
+	if !equalStringSet(res.Cells[0].Citations, wantBarrick) {
+		t.Errorf("Barrick row citations: want %v, got %v", wantBarrick, res.Cells[0].Citations)
+	}
+
+	// Newmont row must cite ONLY {3, 4}; never {1, 2} (those are Barrick).
+	wantNewmont := []string{"3", "4"}
+	if !equalStringSet(res.Cells[1].Citations, wantNewmont) {
+		t.Errorf("Newmont row citations: want %v, got %v", wantNewmont, res.Cells[1].Citations)
+	}
+
+	// FCX row must cite ONLY {5, 6}; never {1, 2, 3, 4} (other companies).
+	wantFCX := []string{"5", "6"}
+	if !equalStringSet(res.Cells[2].Citations, wantFCX) {
+		t.Errorf("FCX row citations: want %v, got %v", wantFCX, res.Cells[2].Citations)
+	}
+}
+
+func TestToTableResult_CitationRemap_OutOfRangePhrasesDropped(t *testing.T) {
+	// Phrases whose source_number indexes past the cell's results array must
+	// be silently dropped (defensive — the server should never emit these,
+	// but if it does, the CLI shouldn't crash or render garbage).
+	mkSummary := func(s string) *string { return &s }
+	w := wireTableResponse{
+		Sources: []wireSource{{SourceNumber: 1, CompanyName: "Acme", FormType: "10-K"}},
+		Cells: []wireCell{
+			{
+				RowIndex: 0, ColumnIndex: 0, State: "loaded",
+				Summary: mkSummary("Summary."),
+				Results: []wireResult{{1}}, // only one result
+				Phrases: []wirePhrase{
+					{SourceNumber: 1, Phrase: "in range"},
+					{SourceNumber: 0, Phrase: "zero — invalid"},
+					{SourceNumber: 99, Phrase: "out of range"},
+					{SourceNumber: -3, Phrase: "negative"},
+				},
+			},
+		},
+	}
+	res := w.toTableResult()
+	if !equalStringSet(res.Cells[0].Citations, []string{"1"}) {
+		t.Errorf("expected only valid in-range phrase to surface; got %v", res.Cells[0].Citations)
+	}
+}
+
+func equalStringSet(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	seen := map[string]bool{}
+	for _, g := range got {
+		seen[g] = true
+	}
+	for _, w := range want {
+		if !seen[w] {
+			return false
+		}
+	}
+	return true
+}

@@ -914,11 +914,20 @@ type wirePhrase struct {
 	Phrase       string `json:"phrase"`
 }
 
+// wireResult is one retrieval chunk for a cell. Only SourceNumber is needed
+// at the CLI layer — it's the GLOBAL source_number that this cell's local
+// phrase indices map back to. Other fields are intentionally undeclared so
+// the JSON decode skips them.
+type wireResult struct {
+	SourceNumber int `json:"source_number"`
+}
+
 type wireCell struct {
 	RowIndex    int          `json:"row_index"`
 	ColumnIndex int          `json:"column_index"`
 	State       string       `json:"state"`
 	Summary     *string      `json:"summary"`
+	Results     []wireResult `json:"results"`
 	Phrases     []wirePhrase `json:"phrases"`
 }
 
@@ -949,14 +958,25 @@ func (w wireTableResponse) toTableResult() output.TableResult {
 		if c.Summary != nil {
 			summary = *c.Summary
 		}
-		// Per-cell citation tokens: bracketed source_numbers
+		// Per-cell citation tokens: each phrase.SourceNumber is a 1-based
+		// CELL-LOCAL index into cell.Results. The actual citation pointer the
+		// renderer wants is the GLOBAL source_number from cell.Results[i].
+		// Without this remap, a Newmont cell's phrase indices 1-5 would render
+		// as global citations 1-5 (which are Barrick + first Newmont sources)
+		// — citation pollution that pre-2026-05-21 was visible in the JSON
+		// output even though the web Table Mode UI did the remap correctly.
 		var citeTokens []string
 		seen := map[int]bool{}
 		for _, p := range c.Phrases {
-			if p.SourceNumber > 0 && !seen[p.SourceNumber] {
-				seen[p.SourceNumber] = true
-				citeTokens = append(citeTokens, fmt.Sprintf("%d", p.SourceNumber))
+			if p.SourceNumber < 1 || p.SourceNumber > len(c.Results) {
+				continue
 			}
+			globalSN := c.Results[p.SourceNumber-1].SourceNumber
+			if globalSN <= 0 || seen[globalSN] {
+				continue
+			}
+			seen[globalSN] = true
+			citeTokens = append(citeTokens, fmt.Sprintf("%d", globalSN))
 		}
 		cells = append(cells, output.Cell{
 			RowID:     fmt.Sprintf("R%d", c.RowIndex),
