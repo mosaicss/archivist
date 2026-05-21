@@ -20,17 +20,22 @@ import (
 //
 // Story 37.5 added cikLiteralRE and uuidLiteralRE after the table verb's old
 // `^[a-z0-9_]+$` bypass missed `cik:NNN` (Apple → resolved to Citigroup).
+// Session 2026-05-21 added sedarLiteralRE after discovering Canadian-only
+// filers (Aritzia, Pambili, etc.) use the `sedar:NNNNNNNNN` form which was
+// falling through to AutoResolve and fuzzy-matching to preferred-stock series.
 var (
 	cikLiteralRE    = regexp.MustCompile(`^cik:[0-9]+$`)
+	sedarLiteralRE  = regexp.MustCompile(`^sedar:[0-9]+$`)
 	uuidLiteralRE   = regexp.MustCompile(`^uuid:[0-9a-f-]{8,}$`)
 	symbolCountryRE = regexp.MustCompile(`^[a-z0-9.]+_(us|ca)$`)
 )
 
 // IsLiteralIssuerKey reports whether s is already a canonical issuer_key
-// literal and should bypass AutoResolve. Three forms are recognized:
+// literal and should bypass AutoResolve. Four forms are recognized:
 //
-//   - cik:NNN              — SEC Central Index Key literal (e.g. "cik:320193")
-//   - uuid:HEX             — UUID literal for issuers without a CIK
+//   - cik:NNN              — SEC Central Index Key (US + cross-listed Canadian)
+//   - sedar:NNN            — SEDAR Canadian-only filer (e.g. "sedar:000039556")
+//   - uuid:HEX             — UUID for issuers without a CIK/SEDAR (CDRs, funds)
 //   - <symbol>_(us|ca)     — legacy symbol+country form (e.g. "aapl_us")
 //
 // Callers (chat verb, table verb) should check this BEFORE calling AutoResolve
@@ -40,6 +45,7 @@ func IsLiteralIssuerKey(s string) bool {
 		return false
 	}
 	return cikLiteralRE.MatchString(s) ||
+		sedarLiteralRE.MatchString(s) ||
 		uuidLiteralRE.MatchString(s) ||
 		symbolCountryRE.MatchString(s)
 }

@@ -384,10 +384,15 @@ func TestIsLiteralIssuerKey(t *testing.T) {
 		in   string
 		want bool
 	}{
-		// AC3 — three literal forms must short-circuit
+		// AC3 — four literal forms must short-circuit
 		{"cik literal — Apple", "cik:320193", true},
 		{"cik literal — Citigroup", "cik:831001", true},
 		{"cik literal — short cik", "cik:1", true},
+		{"cik literal — leading zeros (real form)", "cik:0002024459", true},
+		{"sedar literal — Aritzia", "sedar:000039556", true},
+		{"sedar literal — Pambili", "sedar:000023867", true},
+		{"sedar literal — Morguard", "sedar:000004260", true},
+		{"sedar literal — Lithium Ionic", "sedar:000051325", true},
 		{"uuid literal — full v4", "uuid:3162c889-bb75-49cf-b605-3295ae6e092d", true},
 		{"uuid literal — minimum length", "uuid:abcdef01", true},
 		{"symbol_country — us", "aapl_us", true},
@@ -404,6 +409,9 @@ func TestIsLiteralIssuerKey(t *testing.T) {
 		{"cik without prefix", "320193", false},
 		{"cik with letters", "cik:abc", false},
 		{"cik trailing space", "cik:320193 ", false},
+		{"sedar without prefix", "000039556", false},
+		{"sedar with letters", "sedar:abc123", false},
+		{"sedar uppercase prefix", "SEDAR:000039556", false},
 		{"uuid wrong prefix", "guid:abcdef01", false},
 		{"uuid too short", "uuid:abc", false},
 		{"uuid uppercase hex", "uuid:ABCDEF01", false},
@@ -430,6 +438,7 @@ func TestIsLiteralIssuerKey(t *testing.T) {
 func TestAutoResolveBypass_LiteralIssuerKeys(t *testing.T) {
 	literals := []string{
 		"cik:320193",
+		"sedar:000039556",
 		"uuid:3162c889-bb75-49cf-b605-3295ae6e092d",
 		"aapl_us",
 	}
