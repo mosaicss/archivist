@@ -468,6 +468,49 @@ func TestToTableResult_CitationRemap_OutOfRangePhrasesDropped(t *testing.T) {
 	}
 }
 
+// ─── Story 39.7 — table run --stdin reads the COMMAND's stdin ────────────────
+
+// TestTableRunStdin_UsesInjectedReader covers AC7's regression leg: `table run
+// --stdin` must read the spec from cobraCmd.InOrStdin(), NOT os.Stdin. Under
+// `archivist mcp serve`, process stdin is the JSON-RPC channel — a dispatched
+// verb reading os.Stdin would swallow protocol frames. CLI pipe behavior is
+// unchanged because cobra defaults InOrStdin() to os.Stdin.
+func TestTableRunStdin_UsesInjectedReader(t *testing.T) {
+	t.Setenv("ARCHIVIST_TOKEN", "mc_pat_testtoken")
+	const specYAML = `top_n: 3
+rows:
+  - company: aapl_us
+    filing-type: 10-K
+    date-from: 2025-08-01
+columns:
+  - name: Revenue
+    source: filings
+    mode: rrf
+    query: total net sales revenue annual
+`
+	root := buildRootForTest("dev")
+	root.SetIn(strings.NewReader(specYAML))
+	var out, errBuf bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&errBuf)
+	root.SetArgs([]string{"table", "run", "--stdin", "--dry-run"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("table run --stdin --dry-run: %v\nstderr: %s", err, errBuf.String())
+	}
+
+	var payload map[string]interface{}
+	if err := json.Unmarshal(out.Bytes(), &payload); err != nil {
+		t.Fatalf("dry-run output is not valid JSON: %v\noutput: %s", err, out.String())
+	}
+	if _, ok := payload["rows"]; !ok {
+		t.Error("dry-run JSON missing 'rows'")
+	}
+	if _, ok := payload["columns"]; !ok {
+		t.Error("dry-run JSON missing 'columns'")
+	}
+}
+
 func equalStringSet(got, want []string) bool {
 	if len(got) != len(want) {
 		return false

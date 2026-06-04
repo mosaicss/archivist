@@ -46,6 +46,9 @@ func newAuthLoginCmd() *cobra.Command {
 		Annotations: map[string]string{
 			"pp:typed-exit-codes": "0,1",
 			"mcp:read-only":       "true",
+			// Hidden from MCP: --open launches a browser; token setup is an
+			// operator action, not an agent tool (Story 39.7).
+			"mcp:hidden": "true",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), `To set up your Archivist CLI token:

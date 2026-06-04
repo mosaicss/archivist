@@ -290,7 +290,10 @@ func runTableFromSpec(
 
 	if af.Stdin {
 		specName = "stdin"
-		spec, parseErr = parseSpecFromReader(os.Stdin, ".yaml")
+		// InOrStdin (not os.Stdin): under `archivist mcp serve`, process stdin
+		// is the JSON-RPC channel; dispatch injects the spec via SetIn. CLI
+		// pipes are unchanged — cobra defaults InOrStdin() to os.Stdin (39.7).
+		spec, parseErr = parseSpecFromReader(cobraCmd.InOrStdin(), ".yaml")
 	} else {
 		if len(args) == 0 {
 			_, _ = fmt.Fprintln(cobraCmd.ErrOrStderr(),
