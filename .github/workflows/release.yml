@@ -53,10 +53,11 @@ jobs:
           # --skip=validate bypasses the dirty-git check; the "Inject
           # version into SKILL.md" step deliberately modifies the file
           # in-workflow, which is a trusted modification, not user drift.
-          # --skip=homebrew suppresses tap publishing until the operator
-          # provisions HOMEBREW_TAP_GITHUB_TOKEN + mosaic-finance/homebrew-tap
-          # repo (out-of-scope per RELEASE_OPS_36_11.md).
-          args: release --clean --skip=validate,homebrew --config goreleaser.yaml
+          # Homebrew cask publishing is LIVE (Story 39.9): goreleaser pushes
+          # Casks/archivist.rb to mosaic-finance/homebrew-tap on every tag,
+          # so the repo + HOMEBREW_TAP_GITHUB_TOKEN secret must exist or the
+          # release fails. See RELEASE_OPS_36_11.md §4.
+          args: release --clean --skip=validate --config goreleaser.yaml
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
