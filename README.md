@@ -130,6 +130,48 @@ archivist update --check  # checks for updates without installing
 For brew-installed binaries: `brew upgrade mosaic-finance/tap/archivist`.
 For npm-installed binaries: `npx -y @mosaic-finance/archivist@latest install`.
 
+## MCP server
+
+`archivist mcp serve` runs the binary as an MCP server over stdio. Every CLI
+verb becomes an MCP tool with the same auth flow, exit code semantics, and
+web UI audit surface, so any MCP host (Claude Desktop, Cursor, custom agents)
+can drive Mosaic filing research without shell access.
+
+Prerequisites: the `archivist` binary on PATH and a valid `ARCHIVIST_TOKEN`
+(see Authenticating above).
+
+Claude Desktop config (`claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "archivist": {
+      "command": "archivist",
+      "args": ["mcp", "serve"],
+      "env": { "ARCHIVIST_TOKEN": "ak_..." }
+    }
+  }
+}
+```
+
+Tools exposed (15): `auth_status`, `auth_whoami`, `chat`, `doctor`, `table`,
+`table_run`, `table_rerun`, `table_list`, `table_watch`, `companies_search`,
+`companies_get`, `usage`, `version`, `explain_cascade`, `explain_defaults`.
+Tool names join the CLI verb path with underscores; hosts add their own
+namespace prefix from the server name (`archivist`).
+
+Notes:
+
+- `auth login`, `auth logout`, and `update` are deliberately not exposed:
+  token setup and binary self-replacement are operator actions, not agent
+  tools.
+- `table_run` takes the spec as a `spec_yaml` string parameter, the exact
+  contents of the file you would pass on the command line.
+- MCP calls share the same per account rate limit as the web UI and CLI.
+  Heavy MCP usage draws down the same quota `archivist usage` reports.
+- Long table runs can exceed host tool timeouts: pass `async: true` and poll
+  with `table_watch`.
+
 ## Exit codes
 
 Agents should branch on exit codes, not parse output text:

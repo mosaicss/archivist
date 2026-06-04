@@ -35,6 +35,9 @@ func NewUpdateCmd(currentVersion string) *cobra.Command {
 		Short: "Replace the binary in place with the latest release",
 		Annotations: map[string]string{
 			"pp:typed-exit-codes": "0,3,5",
+			// Hidden from MCP: self-replaces the running binary; agents must
+			// never trigger an in-place update (Story 39.7).
+			"mcp:hidden": "true",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
