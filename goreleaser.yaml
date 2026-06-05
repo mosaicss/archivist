@@ -110,14 +110,14 @@ notarize:
 # would fail the next release). Casks land in the tap's Casks/ directory
 # (the goreleaser default — no `directory:` override). The cask DSL has no
 # `test do` block, so the old formula-only test was dropped here.
-# Publishing requires the mosaic-finance/homebrew-tap repo and the
+# Publishing requires the mosaicfinance/homebrew-tap repo and the
 # HOMEBREW_TAP_GITHUB_TOKEN secret — see RELEASE_OPS_36_11.md §4.
 homebrew_casks:
   - name: archivist
     ids:
       - archivist
     repository:
-      owner: mosaic-finance
+      owner: mosaicfinance
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     homepage: "https://mosaic-finance.com/products/archivist-cli"

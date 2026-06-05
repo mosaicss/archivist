@@ -24,7 +24,7 @@ func TestUpdateChannelRoutingBrew(t *testing.T) {
 	// Execute returns nil for exit 0 instructions path
 	_ = cmd.Execute()
 
-	if !strings.Contains(out.String(), "brew upgrade mosaic-finance/tap/archivist") {
+	if !strings.Contains(out.String(), "brew upgrade mosaicfinance/tap/archivist") {
 		t.Errorf("brew channel: expected upgrade instruction in stdout, got: %q", out.String())
 	}
 }
