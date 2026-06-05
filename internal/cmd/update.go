@@ -126,7 +126,7 @@ func runUpdate(ctx context.Context, cmd *cobra.Command, current string) error {
 
 	switch channel {
 	case "brew":
-		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Run: brew upgrade mosaicfinance/tap/archivist")
+		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Run: brew upgrade mosaic-finance-inc/tap/archivist")
 		return nil
 	case "npm":
 		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Run: npx -y @mosaic-finance/archivist@latest install")
