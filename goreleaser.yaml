@@ -105,36 +105,52 @@ notarize:
         key_id: "{{.Env.APPLE_API_KEY_ID}}"
         key: "{{.Env.APPLE_API_KEY_P8}}"
 
-brews:
+# Homebrew cask publishing (migrated from `brews:`, which goreleaser fully
+# deprecated in v2.16 — release.yml floats `~> v2`, so the deprecated block
+# would fail the next release). Casks land in the tap's Casks/ directory
+# (the goreleaser default — no `directory:` override). The cask DSL has no
+# `test do` block, so the old formula-only test was dropped here.
+# Publishing requires the mosaic-finance-inc/homebrew-tap repo and the
+# HOMEBREW_TAP_GITHUB_TOKEN secret — see RELEASE_OPS_36_11.md §4.
+homebrew_casks:
   - name: archivist
-    # NOTE: brew tap publishing is currently skipped at the workflow level
-    # via `--skip=homebrew` in release.yml because HOMEBREW_TAP_GITHUB_TOKEN
-    # secret is not provisioned (out-of-scope per RELEASE_OPS_36_11.md).
-    # When the operator provisions the secret + tap repo, remove the
-    # `--skip=homebrew` flag from release.yml to re-enable.
     ids:
       - archivist
     repository:
-      owner: mosaic-finance
+      owner: mosaic-finance-inc
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     homepage: "https://mosaic-finance.com/products/archivist-cli"
     description: "Archivist CLI for Mosaic filings research"
     license: "Apache-2.0"
-    post_install: |
-      skill_dir = File.expand_path("~/.claude/skills/archivist")
-      if File.directory?(File.expand_path("~/.claude/skills"))
-        system "mkdir", "-p", skill_dir
-        system "curl", "-fsSL", "-o", "/tmp/archivist-skill.tar.gz",
-          "https://github.com/mosaicss/archivist/releases/download/v#{version}/archivist_v#{version}_skill-bundle.tar.gz"
-        system "tar", "-xzf", "/tmp/archivist-skill.tar.gz", "-C", skill_dir, "--strip-components=0"
-        system "rm", "-f", "/tmp/archivist-skill.tar.gz"
-      end
-      system "mkdir", "-p", File.expand_path("~/.archivist")
-      system "sh", "-c", "echo brew > ~/.archivist/install-channel"
-    test: |
-      output = shell_output("#{bin}/archivist version")
-      assert_match version.to_s, output
+    hooks:
+      post:
+        install: |
+          # Strip the Gatekeeper quarantine flag. Release binaries are
+          # unsigned until the operator provisions Apple notarization
+          # (RELEASE_OPS_36_11.md section 2). macOS only: Homebrew >= 4.5
+          # installs casks with Linux binaries on Linux too, where
+          # /usr/bin/xattr does not exist and would abort the install.
+          if OS.mac?
+            system_command "/usr/bin/xattr",
+                           args: ["-dr", "com.apple.quarantine", "#{staged_path}/archivist"]
+          end
+          # Fetch the matching Claude skill bundle when ~/.claude/skills
+          # exists (same semantics as the pre-cask formula post_install).
+          if File.directory?(File.expand_path("~/.claude/skills"))
+            skill_dir = File.expand_path("~/.claude/skills/archivist")
+            FileUtils.mkdir_p skill_dir
+            system_command "/usr/bin/curl",
+                           args: ["-fsSL", "-o", "/tmp/archivist-skill.tar.gz",
+                                  "https://github.com/mosaicss/archivist/releases/download/v#{version}/archivist_v#{version}_skill-bundle.tar.gz"]
+            system_command "/usr/bin/tar",
+                           args: ["-xzf", "/tmp/archivist-skill.tar.gz", "-C", skill_dir]
+            FileUtils.rm_f "/tmp/archivist-skill.tar.gz"
+          end
+          # Stamp the install channel so `archivist update` routes users to
+          # `brew upgrade` instead of self-replacing the binary.
+          FileUtils.mkdir_p File.expand_path("~/.archivist")
+          File.write File.expand_path("~/.archivist/install-channel"), "brew\n"
 
 release:
   github:

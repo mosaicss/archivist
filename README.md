@@ -33,13 +33,15 @@ Pinned installs are recommended for reproducibility:
 npx -y @mosaic-finance/archivist@0.2.5 install
 ```
 
-### Homebrew (macOS and Linux)
+### Homebrew (macOS)
 
 ```sh
-brew install mosaic-finance/tap/archivist
+brew install mosaic-finance-inc/tap/archivist
 ```
 
-Also installs the Claude Code skill automatically.
+Installs the universal macOS binary as a Homebrew cask, places the Claude Code
+skill automatically, and clears the Gatekeeper quarantine flag so no manual
+`xattr` step is needed. On Linux, use the curl | bash installer above instead.
 
 ### GitHub Releases (manual download)
 
@@ -127,7 +129,7 @@ archivist update --skill  # refreshes the Claude Code skill only
 archivist update --check  # checks for updates without installing
 ```
 
-For brew-installed binaries: `brew upgrade mosaic-finance/tap/archivist`.
+For brew-installed binaries: `brew upgrade mosaic-finance-inc/tap/archivist`.
 For npm-installed binaries: `npx -y @mosaic-finance/archivist@latest install`.
 
 ## MCP server
@@ -242,8 +244,10 @@ git push origin v0.2.0
 The `.github/workflows/release.yml` workflow runs goreleaser, builds 5 platform
 binaries, generates `archivist_v<version>_SHA256SUMS` and `archivist_v<version>_skill-bundle.tar.gz`,
 publishes artifacts to GitHub Releases, attests SLSA provenance, publishes the npm
-package (if `NPM_TOKEN` secret is set), updates the Homebrew tap formula, and deploys
-`install.sh` to `https://install.mosaic-finance.com`.
+package (if `NPM_TOKEN` secret is set), pushes the Homebrew cask `Casks/archivist.rb`
+to the `mosaic-finance-inc/homebrew-tap` repo, and deploys `install.sh` to
+`https://install.mosaic-finance.com`. The tap repo and `HOMEBREW_TAP_GITHUB_TOKEN`
+secret must exist before tagging or the release fails at the cask publish step.
 
 ## Architecture
 

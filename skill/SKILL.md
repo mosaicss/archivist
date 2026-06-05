@@ -105,5 +105,5 @@ archivist update --skill  # refresh only the Claude Code skill files
 archivist update --check  # check whether an update is available without installing
 ```
 
-For brew-installed binaries: `brew upgrade mosaic-finance/tap/archivist`.
+For brew-installed binaries: `brew upgrade mosaic-finance-inc/tap/archivist`.
 For npm-installed binaries: `npx -y @mosaic-finance/archivist@latest install`.
