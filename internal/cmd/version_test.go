@@ -126,3 +126,26 @@ func TestReadSkillVersion(t *testing.T) {
 		t.Error("readSkillVersion() path is empty")
 	}
 }
+
+// TestReadSkillVersionAfterFrontmatter verifies the version marker is found
+// when YAML frontmatter precedes it (post-39.10 SKILL.md shape — frontmatter
+// is required for Claude Code skill discovery, so the marker is no longer
+// guaranteed to be line 1).
+func TestReadSkillVersionAfterFrontmatter(t *testing.T) {
+	tmpHome := t.TempDir()
+	skillDir := filepath.Join(tmpHome, ".claude", "skills", "archivist")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := "---\nname: archivist\ndescription: Research filings.\n---\n<!-- version: v0.2.13 -->\n# Archivist\n"
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("HOME", tmpHome)
+
+	ver, _ := readSkillVersion()
+	if ver != "v0.2.13" {
+		t.Errorf("readSkillVersion() version = %q; want v0.2.13 (marker below frontmatter)", ver)
+	}
+}

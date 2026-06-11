@@ -1,3 +1,7 @@
+---
+name: archivist
+description: Research SEC and SEDAR public company filings with the Archivist CLI. Use when the user invokes /archivist or asks to research filings, financials, risk factors, or build multi-company comparison tables from the terminal. Requires the archivist binary on PATH and an authenticated Mosaic account.
+---
 <!-- version: 0.0.0 -->
 # Archivist CLI — Claude Code Skill
 
