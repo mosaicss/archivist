@@ -68,7 +68,15 @@ archives:
     formats:
       - tar.gz
     files:
-      - src: skill/**/*
+      # skill/**/* does NOT match direct children of skill/ — it silently
+      # dropped SKILL.md from every bundle v0.2.8 through v0.2.12 (found in
+      # the 39.10 funnel smoke: /archivist never registered). List the file
+      # explicitly; examples/* keeps the historical flat layout.
+      # Single-file src: dst is the in-archive PATH (dst: "." would rename
+      # the file to "."). Glob src: dst is a directory prefix.
+      - src: skill/SKILL.md
+        dst: SKILL.md
+      - src: skill/examples/*
         dst: .
 
 checksum:

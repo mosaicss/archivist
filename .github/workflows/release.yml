@@ -43,7 +43,14 @@ jobs:
       - name: Inject version into SKILL.md
         run: |
           VERSION="${{ github.ref_name }}"
-          sed -i "1s/.*/<!-- version: ${VERSION} -->/" skill/SKILL.md
+          # Target the marker line, NOT line 1 — line 1 is the YAML frontmatter
+          # delimiter Claude Code requires for skill discovery. The pre-fix
+          # "1s" form clobbered whatever sat on line 1.
+          sed -i "s|^<!-- version: .* -->$|<!-- version: ${VERSION} -->|" skill/SKILL.md
+          # Fail loud if the marker wasn't found/replaced.
+          grep -q "^<!-- version: ${VERSION} -->$" skill/SKILL.md
+          # And the frontmatter must have survived intact.
+          head -1 skill/SKILL.md | grep -qx -- "---"
 
       - name: Run goreleaser
         uses: goreleaser/goreleaser-action@v6

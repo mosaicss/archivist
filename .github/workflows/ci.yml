@@ -52,6 +52,27 @@ jobs:
       - name: go build
         run: go build ./cmd/archivist
 
+      # Regression gate for the skill bundle (39.10 finding: skill/**/* glob
+      # silently dropped SKILL.md from v0.2.8–v0.2.12, so /archivist never
+      # registered in Claude Code from any install channel). Snapshot-build
+      # the archives and assert the bundle ships a discoverable skill.
+      - name: Snapshot build (skill bundle gate)
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --snapshot --clean --skip=validate --config goreleaser.yaml
+
+      - name: Verify skill bundle contents
+        run: |
+          BUNDLE=$(ls dist/archivist_*_skill-bundle.tar.gz)
+          tar -tzf "$BUNDLE" | grep -qx "SKILL.md" || { echo "FAIL: SKILL.md missing from skill bundle"; tar -tzf "$BUNDLE"; exit 1; }
+          mkdir -p /tmp/skill-check && tar -xzf "$BUNDLE" -C /tmp/skill-check SKILL.md
+          head -1 /tmp/skill-check/SKILL.md | grep -qx -- "---" || { echo "FAIL: SKILL.md missing YAML frontmatter (Claude Code discovery)"; exit 1; }
+          grep -q "^name: archivist$" /tmp/skill-check/SKILL.md || { echo "FAIL: frontmatter missing name"; exit 1; }
+          grep -q "^<!-- version: " /tmp/skill-check/SKILL.md || { echo "FAIL: version marker missing"; exit 1; }
+          echo "skill bundle OK: SKILL.md present with frontmatter + version marker"
+
       - name: Install shellcheck
         run: |
           sudo apt-get update -qq

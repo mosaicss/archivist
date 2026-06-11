@@ -57,7 +57,9 @@ func NewVersionCmd(version, commit, date string) *cobra.Command {
 
 // readSkillVersion reads the version header from ~/.claude/skills/archivist/SKILL.md.
 // Returns ("", "") if the file doesn't exist or has no version header.
-// Expected first line format: <!-- version: x.y.z -->
+// Marker format: <!-- version: x.y.z -->. The marker sits below the YAML
+// frontmatter Claude Code requires for skill discovery, so scan the head of
+// the file rather than assuming line 1 (pre-frontmatter bundles had it first).
 func readSkillVersion() (version, path string) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -70,8 +72,9 @@ func readSkillVersion() (version, path string) {
 	}
 	defer func() { _ = f.Close() }()
 
+	const maxHeaderLines = 20
 	scanner := bufio.NewScanner(f)
-	if scanner.Scan() {
+	for i := 0; i < maxHeaderLines && scanner.Scan(); i++ {
 		line := scanner.Text()
 		// Expected: <!-- version: x.y.z -->
 		if strings.HasPrefix(line, "<!-- version:") && strings.HasSuffix(line, "-->") {
