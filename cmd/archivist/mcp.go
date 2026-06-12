@@ -285,7 +285,7 @@ Claude Desktop config:
 			if _, err := auth.ResolveToken(tokenFlag); err != nil {
 				if errors.Is(err, auth.ErrNoToken) {
 					_, _ = fmt.Fprintln(c.ErrOrStderr(),
-						"archivist mcp serve: no credentials found. Run 'archivist auth login' for setup instructions.")
+						"archivist mcp serve: no credentials found. Run 'archivist auth login --token ak_...' to save a credential, or set ARCHIVIST_TOKEN.")
 				} else {
 					_, _ = fmt.Fprintln(c.ErrOrStderr(), err.Error())
 				}

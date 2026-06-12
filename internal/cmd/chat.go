@@ -65,7 +65,7 @@ func NewChatCmd(version string) *cobra.Command {
 			if err != nil {
 				if errors.Is(err, auth.ErrNoToken) {
 					_, _ = fmt.Fprintln(cmd.ErrOrStderr(),
-						"archivist chat: no credentials found. Run 'archivist auth login' to authenticate.")
+						"archivist chat: no credentials found. Run 'archivist auth login --token ak_...' to save a credential, or set ARCHIVIST_TOKEN.")
 				} else {
 					_, _ = fmt.Fprintln(cmd.ErrOrStderr(), err.Error())
 				}

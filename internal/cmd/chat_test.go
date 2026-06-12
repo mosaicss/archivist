@@ -476,6 +476,9 @@ func TestChatFlagValidationNoToken(t *testing.T) {
 	}))
 	defer srv.Close()
 
+	// Sandbox HOME: the credentials file rung (41.3) would otherwise resolve
+	// a real ~/.archivist/credentials and break the no-token expectation.
+	t.Setenv("HOME", t.TempDir())
 	t.Setenv("ARCHIVIST_TOKEN", "")
 	t.Setenv("ARCHIVIST_BASE_URL", srv.URL)
 
@@ -491,6 +494,9 @@ func TestChatFlagValidationNoToken(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "no credentials found") {
 		t.Errorf("expected no credentials message, got: %s", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "--token") {
+		t.Errorf("guidance should mention 'auth login --token' persistence, got: %s", stderr.String())
 	}
 }
 
