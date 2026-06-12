@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -18,6 +19,9 @@ import (
 // withGoodSkill creates a temp SKILL.md with matching version so skill check passes.
 func makeDoctorRoot(t *testing.T, baseURL string) (*cobra.Command, *bytes.Buffer) {
 	t.Helper()
+	// Sandbox HOME: the credentials file rung (41.3) must never read the
+	// developer's real ~/.archivist/credentials in tests.
+	t.Setenv("HOME", t.TempDir())
 	root := cmd.NewRootCmd("0.4.2", "abc1234", "2026-05-20")
 	var buf bytes.Buffer
 	root.SetOut(&buf)
@@ -35,6 +39,7 @@ func makeDoctorRoot(t *testing.T, baseURL string) (*cobra.Command, *bytes.Buffer
 // makeDoctorRootWithSkill creates a root command with a valid matching skill file.
 func makeDoctorRootWithSkill(t *testing.T, baseURL string) (*cobra.Command, *bytes.Buffer) {
 	t.Helper()
+	t.Setenv("HOME", t.TempDir())
 	f, err := os.CreateTemp("", "SKILL-*.md")
 	if err != nil {
 		t.Fatalf("could not create temp skill file: %v", err)
@@ -438,6 +443,153 @@ func TestDoctorTokenNeverPrinted(t *testing.T) {
 	_ = root2.Execute()
 	if strings.Contains(buf2.String(), rawToken) {
 		t.Errorf("raw token appeared in JSON output:\n%s", buf2.String())
+	}
+}
+
+// allPassHandler mocks /health + /account/cli-tokens for a fully green run.
+func allPassHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/health":
+			w.Header().Set("X-Queries-Remaining", "412")
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+		case "/account/cli-tokens":
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"user_email": "test@example.com", "tier": "pro", "tokens": []interface{}{},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}
+}
+
+// writeDoctorCredFile writes ~/.archivist/credentials in the sandboxed HOME
+// with the given mode. Must run AFTER makeDoctorRoot (which sets HOME).
+func writeDoctorCredFile(t *testing.T, content string, mode os.FileMode) string {
+	t.Helper()
+	home := os.Getenv("HOME")
+	if err := os.MkdirAll(home+"/.archivist", 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := home + "/.archivist/credentials"
+	if err := os.WriteFile(path, []byte(content), mode); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestDoctorCredentialsSourceEnv(t *testing.T) {
+	t.Setenv("ARCHIVIST_TOKEN", "mc_pat_testtoken123")
+	srv := httptest.NewServer(allPassHandler())
+	defer srv.Close()
+
+	root, buf := makeDoctorRoot(t, srv.URL)
+	root.SetArgs([]string{"doctor"})
+	_ = root.Execute()
+
+	if !strings.Contains(buf.String(), "source: env") {
+		t.Errorf("expected 'source: env' in Credentials detail; got:\n%s", buf.String())
+	}
+}
+
+func TestDoctorCredentialsSourceFile(t *testing.T) {
+	t.Setenv("ARCHIVIST_TOKEN", "")
+	srv := httptest.NewServer(allPassHandler())
+	defer srv.Close()
+
+	root, buf := makeDoctorRoot(t, srv.URL)
+	writeDoctorCredFile(t, "mc_pat_fromfile123\n", 0o600)
+	root.SetArgs([]string{"doctor"})
+
+	err := root.Execute()
+	if exitCodeFrom(err) != 0 {
+		t.Errorf("expected exit 0 with file credential, got %d; output:\n%s", exitCodeFrom(err), buf.String())
+	}
+	if !strings.Contains(buf.String(), "source: file") {
+		t.Errorf("expected 'source: file' in Credentials detail; got:\n%s", buf.String())
+	}
+	if strings.Contains(buf.String(), "WARN: credentials file permissions") {
+		t.Errorf("0600 file must not WARN; got:\n%s", buf.String())
+	}
+}
+
+func TestDoctorCredentialsFilePermsWarn(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("file modes are advisory on windows; perms check skipped there")
+	}
+	t.Setenv("ARCHIVIST_TOKEN", "")
+	srv := httptest.NewServer(allPassHandler())
+	defer srv.Close()
+
+	root, buf := makeDoctorRoot(t, srv.URL)
+	writeDoctorCredFile(t, "mc_pat_fromfile123\n", 0o644)
+	root.SetArgs([]string{"doctor"})
+
+	err := root.Execute()
+	if exitCodeFrom(err) != 0 {
+		t.Errorf("perms drift is WARN not FAIL; expected exit 0, got %d; output:\n%s", exitCodeFrom(err), buf.String())
+	}
+	if !strings.Contains(buf.String(), "WARN") || !strings.Contains(buf.String(), "chmod 600") {
+		t.Errorf("expected perms WARN with chmod 600 suggestion; got:\n%s", buf.String())
+	}
+}
+
+func TestDoctorPermsWarnAlsoWhenEnvShadowsFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("file modes are advisory on windows; perms check skipped there")
+	}
+	t.Setenv("ARCHIVIST_TOKEN", "mc_pat_testtoken123")
+	srv := httptest.NewServer(allPassHandler())
+	defer srv.Close()
+
+	root, buf := makeDoctorRoot(t, srv.URL)
+	writeDoctorCredFile(t, "mc_pat_fromfile123\n", 0o644)
+	root.SetArgs([]string{"doctor"})
+
+	_ = root.Execute()
+	if !strings.Contains(buf.String(), "chmod 600") {
+		t.Errorf("perms WARN must fire when the file exists even if env is the active source; got:\n%s", buf.String())
+	}
+}
+
+func TestDoctorNoCredentialNamesAllRungs(t *testing.T) {
+	t.Setenv("ARCHIVIST_TOKEN", "")
+	srv := httptest.NewServer(allPassHandler())
+	defer srv.Close()
+
+	root, buf := makeDoctorRoot(t, srv.URL)
+	root.SetArgs([]string{"doctor"})
+
+	err := root.Execute()
+	if exitCodeFrom(err) != 4 {
+		t.Errorf("expected exit 4, got %d", exitCodeFrom(err))
+	}
+	out := buf.String()
+	for _, rung := range []string{"--token", "ARCHIVIST_TOKEN", "credentials"} {
+		if !strings.Contains(out, rung) {
+			t.Errorf("FAIL message must name rung %q; got:\n%s", rung, out)
+		}
+	}
+	if strings.Contains(out, "/account/cli-tokens") {
+		t.Errorf("stale dashboard URL must be gone from Check3; got:\n%s", out)
+	}
+}
+
+func TestDoctorStaleURLGoneFromRevokedMessage(t *testing.T) {
+	t.Setenv("ARCHIVIST_TOKEN", "mc_pat_testtoken123")
+	srv := httptest.NewServer(cliTokensHandler(http.StatusUnauthorized, nil))
+	defer srv.Close()
+
+	root, buf := makeDoctorRoot(t, srv.URL)
+	root.SetArgs([]string{"doctor"})
+
+	_ = root.Execute()
+	if strings.Contains(buf.String(), "/account/cli-tokens") {
+		t.Errorf("stale dashboard URL must be gone from Check7 401 message; got:\n%s", buf.String())
 	}
 }
 

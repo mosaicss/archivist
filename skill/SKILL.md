@@ -78,7 +78,7 @@ Agents should branch on exit codes, not parse output text:
 | 1 | Generic error | Log and surface to user |
 | 2 | Usage error (bad flags or spec) | Fix the invocation |
 | 3 | Not found (company, file, session) | Try a different search term |
-| 4 | Auth error (missing or expired token) | Run `archivist auth login` |
+| 4 | Auth error (missing or expired token) | Run `archivist auth login --token ak_...` (or set `ARCHIVIST_TOKEN`) |
 | 5 | Server error or CLI version too old | Run `archivist update` then retry |
 | 6 | Ambiguous company match | Re-run with `--company <issuer_key>` |
 | 7 | Rate limit or quota exhausted | Wait or upgrade tier |
@@ -88,7 +88,7 @@ Agents should branch on exit codes, not parse output text:
 ## Available verbs
 
 ```
-archivist auth      Manage credentials
+archivist auth      Manage credentials (auth login saves ~/.archivist/credentials)
 archivist chat      Run a research question
 archivist table     Build or rerun a research table
 archivist companies Search or fetch issuer records

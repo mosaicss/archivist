@@ -108,14 +108,25 @@ archivist-cli v0.2.0 (commit abc1234 built 2026-05-20) darwin/arm64
 ## Authenticating
 
 Open https://mosaic-finance.com (sign in if needed), click your user avatar (top right)
-→ Manage account → API keys → Add new key. Copy the `ak_...` token, then:
+→ Manage account → API keys → Add new key. Copy the `ak_...` token, then save it once:
+
+```sh
+archivist auth login --token ak_<your-token>
+```
+
+The CLI verifies the token against the server and writes it to
+`~/.archivist/credentials` (mode 0600). Every new terminal works from then on.
+`archivist auth status` shows which credential is active and where it came
+from; `archivist auth logout` deletes the saved file.
+
+For CI and scripting, the environment variable override is still supported and
+takes precedence over the saved file:
 
 ```sh
 export ARCHIVIST_TOKEN=ak_<your-token>
-archivist auth login
 ```
 
-Or pass per-call:
+Or pass per-call (highest precedence):
 
 ```sh
 archivist --token ak_<your-token> chat --company shopify-inc-tsx "What are the key risks?"
@@ -139,8 +150,9 @@ verb becomes an MCP tool with the same auth flow, exit code semantics, and
 web UI audit surface, so any MCP host (Claude Desktop, Cursor, custom agents)
 can drive Mosaic filing research without shell access.
 
-Prerequisites: the `archivist` binary on PATH and a valid `ARCHIVIST_TOKEN`
-(see Authenticating above).
+Prerequisites: the `archivist` binary on PATH and an authenticated archivist
+CLI (one-time `archivist auth login --token ak_...`, or `ARCHIVIST_TOKEN`; see
+Authenticating above).
 
 Claude Desktop config (`claude_desktop_config.json`):
 
@@ -155,6 +167,9 @@ Claude Desktop config (`claude_desktop_config.json`):
   }
 }
 ```
+
+The `env` block is optional once `archivist auth login` has saved a
+credential; keep it to pin a specific token for the MCP host.
 
 Tools exposed (15): `auth_status`, `auth_whoami`, `chat`, `doctor`, `table`,
 `table_run`, `table_rerun`, `table_list`, `table_watch`, `companies_search`,

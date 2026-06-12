@@ -286,7 +286,7 @@ func (e *ExitCodeError) Error() string {
 }
 
 // ErrUnauthorized is returned when the server rejects the credential.
-var ErrUnauthorized = fmt.Errorf("token invalid or revoked. Re-issue at https://mosaic-finance.com/account/cli-tokens")
+var ErrUnauthorized = fmt.Errorf("token invalid or revoked. Create a new key via the avatar menu (Manage account → API keys) at https://mosaic-finance.com")
 
 // CLITokensResponse is the shape returned by GET /account/cli-tokens.
 type CLITokensResponse struct {
