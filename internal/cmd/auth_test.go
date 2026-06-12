@@ -326,6 +326,78 @@ func TestAuthStatusJSONHasSource(t *testing.T) {
 	}
 }
 
+func TestAuthStatusSingleSourceLabel(t *testing.T) {
+	sandboxAuthHome(t)
+	srv := serveCLITokens(t, http.StatusOK)
+	t.Setenv("ARCHIVIST_BASE_URL", srv.URL)
+	t.Setenv("ARCHIVIST_TOKEN", "ak_envtokenvalue123")
+
+	output, err := runAuthCmd(t, "auth", "status")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(output, "Credential source: env") {
+		t.Errorf("expected 'Credential source: env', got:\n%s", output)
+	}
+	if strings.Contains(output, "source: source:") {
+		t.Errorf("double source label must be gone, got:\n%s", output)
+	}
+}
+
+// serveCLITokensEmptyEmail mocks an account whose Firestore projection has no
+// email (the admin-account shape found in the 41.3 smoke).
+func serveCLITokensEmptyEmail(t *testing.T) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"user_email": "",
+			"tier":       "admin",
+			"tokens":     []interface{}{},
+		})
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestAuthStatusEmptyEmailRendersClean(t *testing.T) {
+	sandboxAuthHome(t)
+	srv := serveCLITokensEmptyEmail(t)
+	t.Setenv("ARCHIVIST_BASE_URL", srv.URL)
+	t.Setenv("ARCHIVIST_TOKEN", "ak_envtokenvalue123")
+
+	output, err := runAuthCmd(t, "auth", "status")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.Contains(output, "Logged in as  ") {
+		t.Errorf("empty email must not render a dangling 'as', got:\n%s", output)
+	}
+	if !strings.Contains(output, "Logged in (tier: admin)") {
+		t.Errorf("expected 'Logged in (tier: admin)' for empty email, got:\n%s", output)
+	}
+}
+
+func TestAuthLoginEmptyEmailRendersClean(t *testing.T) {
+	home := sandboxAuthHome(t)
+	srv := serveCLITokensEmptyEmail(t)
+	t.Setenv("ARCHIVIST_BASE_URL", srv.URL)
+
+	output, err := runAuthCmd(t, "auth", "login", "--token", "ak_1234567890abcdefxyz")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.Contains(output, "Account:  (tier:") {
+		t.Errorf("empty email must not render a blank Account value, got:\n%s", output)
+	}
+	if !strings.Contains(output, "unknown (tier: admin)") {
+		t.Errorf("expected 'unknown (tier: admin)' for empty email, got:\n%s", output)
+	}
+	if _, statErr := os.Stat(credPath(home)); statErr != nil {
+		t.Errorf("login should still save the credential: %v", statErr)
+	}
+}
+
 func TestAuthStatusShadowNoteWhenEnvOverridesFile(t *testing.T) {
 	home := sandboxAuthHome(t)
 	srv := serveCLITokens(t, http.StatusOK)

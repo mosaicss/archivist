@@ -111,7 +111,7 @@ func Check2Skill(cfg *RunConfig) CheckResult {
 			Message: "SKILL.md found but version field is missing or unreadable",
 		}
 	}
-	if skillVersion != cfg.Version && cfg.Version != "dev" {
+	if !versionsEqual(skillVersion, cfg.Version) && cfg.Version != "dev" {
 		return CheckResult{
 			Name:       "Skill",
 			Status:     StatusWarn,
@@ -127,27 +127,42 @@ func Check2Skill(cfg *RunConfig) CheckResult {
 	}
 }
 
-// parseSkillVersion reads the YAML frontmatter version field from a SKILL.md reader.
+// parseSkillVersion reads the version from a SKILL.md reader. Two formats:
+// a `version:` field inside the YAML frontmatter (pre-v0.2.13 bundles), or
+// an HTML comment marker `<!-- version: vX.Y.Z -->` below the frontmatter
+// (v0.2.13+ — Claude Code's frontmatter schema has no version field, so the
+// release pipeline injects the marker after it). Scans the head of the file;
+// same contract as cmd's readSkillVersion.
 func parseSkillVersion(r io.Reader) string {
+	const maxHeaderLines = 20
 	scanner := bufio.NewScanner(r)
 	inFrontmatter := false
-	for scanner.Scan() {
+	for i := 0; i < maxHeaderLines && scanner.Scan(); i++ {
 		line := scanner.Text()
 		if line == "---" {
-			if !inFrontmatter {
-				inFrontmatter = true
-				continue
-			}
-			break
+			inFrontmatter = !inFrontmatter
+			continue
 		}
 		if inFrontmatter && strings.HasPrefix(line, "version:") {
 			parts := strings.SplitN(line, ":", 2)
-			if len(parts) == 2 {
+			if len(parts) == 2 && strings.TrimSpace(parts[1]) != "" {
 				return strings.TrimSpace(parts[1])
+			}
+		}
+		if strings.HasPrefix(line, "<!-- version:") && strings.HasSuffix(line, "-->") {
+			ver := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(line, "<!-- version:"), "-->"))
+			if ver != "" {
+				return ver
 			}
 		}
 	}
 	return ""
+}
+
+// versionsEqual compares two version strings ignoring a leading "v"
+// (the skill marker carries v0.2.14; ldflags inject 0.2.14).
+func versionsEqual(a, b string) bool {
+	return strings.TrimPrefix(a, "v") == strings.TrimPrefix(b, "v")
 }
 
 // Check3Credentials checks that a credential was found on any ladder rung

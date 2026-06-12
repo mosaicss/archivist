@@ -135,9 +135,13 @@ func loginWithToken(cmd *cobra.Command, version, token string) error {
 		return &ExitError{Code: ExitGenericError}
 	}
 
+	account := resp.UserEmail
+	if account == "" {
+		account = "unknown"
+	}
 	_, _ = fmt.Fprintf(cmd.OutOrStdout(),
 		"Token verified and saved.\n  Account: %s (tier: %s)\n  Key:     %s\n  File:    %s\nEvery new terminal can now run archivist without setup.\n",
-		resp.UserEmail, resp.Tier, auth.MaskToken(token), path)
+		account, resp.Tier, auth.MaskToken(token), path)
 	return nil
 }
 
@@ -261,9 +265,13 @@ func runAuthStatus(cmd *cobra.Command, version string, _ bool) error {
 		t := resp.Tokens[0]
 		keyInfo = fmt.Sprintf(" [key: %s issued %s]", t.KeyID, t.CreatedAt[:10])
 	}
+	identity := fmt.Sprintf("Logged in (tier: %s)", resp.Tier)
+	if resp.UserEmail != "" {
+		identity = fmt.Sprintf("Logged in as %s (tier: %s)", resp.UserEmail, resp.Tier)
+	}
 	_, _ = fmt.Fprintf(cmd.OutOrStdout(),
-		"Logged in as %s (tier: %s)%s\nCredential source: %s\n",
-		resp.UserEmail, resp.Tier, keyInfo, describeSource(source))
+		"%s%s\nCredential source: %s\n",
+		identity, keyInfo, describeSource(source))
 
 	// Shadow note: a flag or env credential silently masking a saved file is
 	// exactly the two-terminals confusion this command exists to dispel.
@@ -280,19 +288,19 @@ func runAuthStatus(cmd *cobra.Command, version string, _ bool) error {
 
 // describeSource renders the ladder rung for human output, naming the
 // credentials file path (with the home directory shortened to ~) for the
-// file rung.
+// file rung. The caller supplies the "Credential source:" label.
 func describeSource(source auth.Source) string {
 	if source != auth.SourceFile {
-		return fmt.Sprintf("source: %s", source)
+		return source.String()
 	}
 	path, err := auth.CredentialsPath()
 	if err != nil {
-		return "source: file"
+		return "file"
 	}
 	if home, homeErr := os.UserHomeDir(); homeErr == nil {
 		path = strings.Replace(path, home, "~", 1)
 	}
-	return fmt.Sprintf("source: file (%s)", path)
+	return fmt.Sprintf("file (%s)", path)
 }
 
 // openURL opens a URL in the default system browser.

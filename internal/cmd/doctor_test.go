@@ -593,6 +593,63 @@ func TestDoctorStaleURLGoneFromRevokedMessage(t *testing.T) {
 	}
 }
 
+// writeSkillFile writes a temp SKILL.md with the given content and points
+// ARCHIVIST_SKILL_PATH at it.
+func writeSkillFile(t *testing.T, content string) {
+	t.Helper()
+	f, err := os.CreateTemp("", "SKILL-*.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = f.WriteString(content)
+	_ = f.Close()
+	t.Cleanup(func() { _ = os.Remove(f.Name()) })
+	t.Setenv("ARCHIVIST_SKILL_PATH", f.Name())
+}
+
+func TestDoctorSkillCommentMarkerVersion(t *testing.T) {
+	// The v0.2.13 skill bundle moved the version out of the YAML frontmatter
+	// into an HTML comment below it (Claude Code frontmatter has no version
+	// field). Doctor must read that marker, normalizing the leading v.
+	t.Setenv("ARCHIVIST_TOKEN", "mc_pat_testtoken123")
+	srv := httptest.NewServer(allPassHandler())
+	defer srv.Close()
+
+	root, buf := makeDoctorRoot(t, srv.URL)
+	writeSkillFile(t, "---\nname: archivist\ndescription: x\n---\n<!-- version: v0.4.2 -->\n# Skill\n")
+	root.SetArgs([]string{"doctor"})
+
+	err := root.Execute()
+	if exitCodeFrom(err) != 0 {
+		t.Errorf("expected exit 0, got %d; output:\n%s", exitCodeFrom(err), buf.String())
+	}
+	out := buf.String()
+	if strings.Contains(out, "version field is missing") {
+		t.Errorf("comment-style version marker must be readable; got:\n%s", out)
+	}
+	if strings.Contains(out, "does not match binary") {
+		t.Errorf("v0.4.2 marker must match binary 0.4.2 (leading v normalized); got:\n%s", out)
+	}
+}
+
+func TestDoctorSkillCommentMarkerMismatch(t *testing.T) {
+	t.Setenv("ARCHIVIST_TOKEN", "mc_pat_testtoken123")
+	srv := httptest.NewServer(allPassHandler())
+	defer srv.Close()
+
+	root, buf := makeDoctorRoot(t, srv.URL)
+	writeSkillFile(t, "---\nname: archivist\ndescription: x\n---\n<!-- version: v0.9.9 -->\n# Skill\n")
+	root.SetArgs([]string{"doctor"})
+
+	err := root.Execute()
+	if exitCodeFrom(err) != 0 {
+		t.Errorf("skill mismatch is WARN not FAIL; expected exit 0, got %d", exitCodeFrom(err))
+	}
+	if !strings.Contains(buf.String(), "does not match") {
+		t.Errorf("expected version mismatch WARN; got:\n%s", buf.String())
+	}
+}
+
 // exitCodeFrom extracts the exit code from an ExitError, or 0 for nil.
 func exitCodeFrom(err error) int {
 	if err == nil {
