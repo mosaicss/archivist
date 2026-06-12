@@ -55,29 +55,26 @@ func runDoctor(cmd *cobra.Command, version, commit, date, formatFlag string, qui
 		}
 	}
 
-	// Resolve token without failing — doctor reports missing token as check 3 FAIL
+	// Resolve token via the shared auth ladder (flag > env > file) without
+	// failing — doctor reports a missing credential as check 3 FAIL and a
+	// malformed one as check 4 FAIL. Resolve returns the found token and its
+	// source even when the only problem is the format, so the checks can
+	// still report on what was found.
 	tokenFlag, _ := cmd.Root().PersistentFlags().GetString("token")
-	token := tokenFlag
-	if token == "" {
-		token = os.Getenv("ARCHIVIST_TOKEN")
-	}
-	// Validate format but don't require it here — check 4 reports format errors
-	if token != "" {
-		if err := auth.ValidateTokenFormat(token); err != nil {
-			// keep token as-is so check 4 can report the problem
-			_ = err
-		}
-	}
+	token, source, _ := auth.Resolve(tokenFlag)
+	credsPath, _ := auth.CredentialsPath()
 
 	baseURL := os.Getenv("ARCHIVIST_BASE_URL")
 
 	cfg := &doctor.RunConfig{
-		Token:     token,
-		Version:   version,
-		Commit:    commit,
-		Date:      date,
-		NoNetwork: noNetwork,
-		BaseURL:   baseURL,
+		Token:           token,
+		TokenSource:     source.String(),
+		CredentialsPath: credsPath,
+		Version:         version,
+		Commit:          commit,
+		Date:            date,
+		NoNetwork:       noNetwork,
+		BaseURL:         baseURL,
 	}
 
 	ctx := context.Background()

@@ -53,13 +53,18 @@ type CheckResult struct {
 
 // RunConfig holds injectable dependencies for all checks.
 type RunConfig struct {
-	Token      string
-	Version    string
-	Commit     string
-	Date       string
-	HTTPClient *http.Client
-	BaseURL    string
-	NoNetwork  bool
+	Token string
+	// TokenSource names the auth ladder rung the token came from
+	// ("flag", "env", "file", or "none"); set by runDoctor from auth.Resolve.
+	TokenSource string
+	// CredentialsPath is the ~/.archivist/credentials path (injectable for tests).
+	CredentialsPath string
+	Version         string
+	Commit          string
+	Date            string
+	HTTPClient      *http.Client
+	BaseURL         string
+	NoNetwork       bool
 	// SkillPath overrides the default ~/.claude/skills/archivist/SKILL.md path (for tests).
 	SkillPath string
 }
@@ -145,21 +150,37 @@ func parseSkillVersion(r io.Reader) string {
 	return ""
 }
 
-// Check3Credentials checks that ARCHIVIST_TOKEN is set.
+// Check3Credentials checks that a credential was found on any ladder rung
+// (flag > env > file) and reports its source. When the credentials file
+// exists, permission drift produces a WARN (not a FAIL — the token still
+// works); skipped on windows where file modes are advisory.
 func Check3Credentials(cfg *RunConfig) CheckResult {
 	if cfg.Token == "" {
 		return CheckResult{
 			Name:       "Credentials",
 			Status:     StatusFail,
-			Message:    "ARCHIVIST_TOKEN not set",
-			Suggestion: "Visit https://mosaic-finance.com/account/cli-tokens to issue a token",
+			Message:    "no credential found: checked --token flag, ARCHIVIST_TOKEN, and ~/.archivist/credentials",
+			Suggestion: "Run 'archivist auth login --token ak_...' to save a credential",
 		}
 	}
-	return CheckResult{
+	source := cfg.TokenSource
+	if source == "" {
+		source = "unknown"
+	}
+	result := CheckResult{
 		Name:   "Credentials",
 		Status: StatusPass,
-		Detail: fmt.Sprintf("ARCHIVIST_TOKEN set (key_id: %s, fingerprint: %s)", tokenKeyID(cfg.Token), tokenFingerprint(cfg.Token)),
+		Detail: fmt.Sprintf("source: %s (key_id: %s, fingerprint: %s)", source, tokenKeyID(cfg.Token), tokenFingerprint(cfg.Token)),
 	}
+	if runtime.GOOS != "windows" && cfg.CredentialsPath != "" {
+		if fi, err := os.Stat(cfg.CredentialsPath); err == nil && fi.Mode().IsRegular() && fi.Mode().Perm() != 0o600 {
+			result.Status = StatusWarn
+			result.Message = fmt.Sprintf("credentials file permissions are %04o, want 0600; run: chmod 600 %s",
+				fi.Mode().Perm(), cfg.CredentialsPath)
+			result.Suggestion = fmt.Sprintf("chmod 600 %s", cfg.CredentialsPath)
+		}
+	}
+	return result
 }
 
 // Check4Token validates the token format and derives display fields.
@@ -327,8 +348,8 @@ func Check7User(ctx context.Context, cfg *RunConfig, probe *ServerProbeResult) (
 		return CheckResult{
 			Name:       "User",
 			Status:     StatusFail,
-			Message:    "token invalid or revoked; re-issue at https://mosaic-finance.com/account/cli-tokens",
-			Suggestion: "Re-issue your token at https://mosaic-finance.com/account/cli-tokens",
+			Message:    "token invalid or revoked; create a new key via the avatar menu (Manage account → API keys) on https://mosaic-finance.com",
+			Suggestion: "Create a new key via the avatar menu (Manage account → API keys) on https://mosaic-finance.com, then run 'archivist auth login --token ak_...'",
 		}, nil
 	}
 	if resp.StatusCode == http.StatusForbidden {
