@@ -12,69 +12,42 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
-	"strings"
 )
 
-// Literal issuer_key forms recognized by NormalizeIssuerKey / IsLiteralIssuerKey.
-// Inputs matching any of these MUST bypass AutoResolve — they are already
-// canonical issuer references, not free-text search prompts.
+// Literal issuer_key forms recognized by IsLiteralIssuerKey. Inputs matching
+// any of these MUST bypass AutoResolve — they are already canonical issuer
+// references, not free-text search prompts.
 //
 // Story 37.5 added cikLiteralRE and uuidLiteralRE after the table verb's old
 // `^[a-z0-9_]+$` bypass missed `cik:NNN` (Apple → resolved to Citigroup).
 // Session 2026-05-21 added sedarLiteralRE after discovering Canadian-only
 // filers (Aritzia, Pambili, etc.) use the `sedar:NNNNNNNNN` form which was
 // falling through to AutoResolve and fuzzy-matching to preferred-stock series.
-// Story 41.10 added symbolCountryColonRE: the human-typed ticker:country
-// shorthand `SYMBOL:CA` (the market/QuoteMedia convention, e.g. "GSKR:CA")
-// fuzzed into the ambiguity list because only the underscore wire form
-// `gskr_ca` was recognized. It is normalized to the underscore form rather
-// than matched as-is — the backend wire form is lowercase-underscore.
 var (
-	cikLiteralRE         = regexp.MustCompile(`^cik:[0-9]+$`)
-	sedarLiteralRE       = regexp.MustCompile(`^sedar:[0-9]+$`)
-	uuidLiteralRE        = regexp.MustCompile(`^uuid:[0-9a-f-]{8,}$`)
-	symbolCountryRE      = regexp.MustCompile(`^[a-z0-9.]+_(us|ca)$`)
-	symbolCountryColonRE = regexp.MustCompile(`^[a-z0-9.]+:(us|ca)$`)
+	cikLiteralRE    = regexp.MustCompile(`^cik:[0-9]+$`)
+	sedarLiteralRE  = regexp.MustCompile(`^sedar:[0-9]+$`)
+	uuidLiteralRE   = regexp.MustCompile(`^uuid:[0-9a-f-]{8,}$`)
+	symbolCountryRE = regexp.MustCompile(`^[a-z0-9.]+_(us|ca)$`)
 )
 
-// NormalizeIssuerKey reports whether s is (or normalizes to) a canonical literal
-// issuer_key and returns the wire form. Five forms are recognized:
+// IsLiteralIssuerKey reports whether s is already a canonical issuer_key
+// literal and should bypass AutoResolve. Four forms are recognized:
 //
 //   - cik:NNN              — SEC Central Index Key (US + cross-listed Canadian)
 //   - sedar:NNN            — SEDAR Canadian-only filer (e.g. "sedar:000039556")
 //   - uuid:HEX             — UUID for issuers without a CIK/SEDAR (CDRs, funds)
-//   - <symbol>_(us|ca)     — legacy symbol+country wire form (e.g. "aapl_us")
-//   - <SYMBOL>:(US|CA)     — colon ticker:country shorthand (e.g. "GSKR:CA")
-//
-// The first four pass through byte-for-byte (canonical == input). The colon
-// shorthand is normalized to the underscore wire form (lowercased, single
-// `:` → `_`): "GSKR:CA" → "gskr_ca". Returns ("", false) for free-text, which
-// the caller resolves via AutoResolve. The cik:/sedar:/uuid: forms are matched
-// before the colon branch, so their colons are preserved.
-func NormalizeIssuerKey(s string) (string, bool) {
-	if s == "" {
-		return "", false
-	}
-	if cikLiteralRE.MatchString(s) || sedarLiteralRE.MatchString(s) ||
-		uuidLiteralRE.MatchString(s) || symbolCountryRE.MatchString(s) {
-		return s, true
-	}
-	if lower := strings.ToLower(s); symbolCountryColonRE.MatchString(lower) {
-		return strings.Replace(lower, ":", "_", 1), true
-	}
-	return "", false
-}
-
-// IsLiteralIssuerKey reports whether s is already (or normalizes to) a canonical
-// issuer_key literal and should bypass AutoResolve. It is a thin wrapper over
-// NormalizeIssuerKey; callers that need the normalized wire form (e.g. the
-// colon shorthand SYMBOL:CA → symbol_ca) should use NormalizeIssuerKey directly.
+//   - <symbol>_(us|ca)     — legacy symbol+country form (e.g. "aapl_us")
 //
 // Callers (chat verb, table verb) should check this BEFORE calling AutoResolve
 // to avoid sending a literal id through the fuzzy company-search path.
 func IsLiteralIssuerKey(s string) bool {
-	_, ok := NormalizeIssuerKey(s)
-	return ok
+	if s == "" {
+		return false
+	}
+	return cikLiteralRE.MatchString(s) ||
+		sedarLiteralRE.MatchString(s) ||
+		uuidLiteralRE.MatchString(s) ||
+		symbolCountryRE.MatchString(s)
 }
 
 // Client is the minimal interface the resolver needs from the HTTP client.

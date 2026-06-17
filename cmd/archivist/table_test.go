@@ -279,24 +279,18 @@ func TestBuildWirePayload_PreservesUUIDLiteral(t *testing.T) {
 	}
 }
 
-// TestResolveCompanies_LiteralBypass covers AC6 at the call-site level —
+// TestResolveCompanies_LiteralBypass covers AC3 at the call-site level —
 // resolveCompanies MUST NOT invoke the HTTP client when a row's Company field
-// is a literal issuer_key form. The four pre-existing forms pass through
-// unchanged; the colon shorthand GSKR:CA is normalized in place to gskr_ca
-// (Story 41.10) — the substituted value is what reaches the wire.
+// is one of the three literal issuer_key forms.
 func TestResolveCompanies_LiteralBypass(t *testing.T) {
-	cases := []struct {
-		in   string
-		want string // canonical value substituted into row.Company
-	}{
-		{"cik:320193", "cik:320193"},
-		{"uuid:3162c889-bb75-49cf-b605-3295ae6e092d", "uuid:3162c889-bb75-49cf-b605-3295ae6e092d"},
-		{"aapl_us", "aapl_us"},
-		{"GSKR:CA", "gskr_ca"},
+	literals := []string{
+		"cik:320193",
+		"uuid:3162c889-bb75-49cf-b605-3295ae6e092d",
+		"aapl_us",
 	}
-	for _, tc := range cases {
-		t.Run(tc.in, func(t *testing.T) {
-			spec := mustSpec37_5(t, tc.in)
+	for _, lit := range literals {
+		t.Run(lit, func(t *testing.T) {
+			spec := mustSpec37_5(t, lit)
 			fc := &failOnCallClient{t: t}
 
 			cobraCmd := newTableCmd("test")
@@ -306,9 +300,9 @@ func TestResolveCompanies_LiteralBypass(t *testing.T) {
 			if err := resolveCompanies(cobraCmd, fc, spec); err != nil {
 				t.Fatalf("resolveCompanies: unexpected error: %v", err)
 			}
-			// Literal bypasses AutoResolve; colon form is normalized in place.
-			if spec.Rows[0].Company != tc.want {
-				t.Errorf("row Company: want %q, got %q", tc.want, spec.Rows[0].Company)
+			// Literal must pass through unchanged.
+			if spec.Rows[0].Company != lit {
+				t.Errorf("row Company mutated: want %q, got %q", lit, spec.Rows[0].Company)
 			}
 		})
 	}
