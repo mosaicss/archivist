@@ -120,10 +120,14 @@ func NewChatCmd(version string) *cobra.Command {
 
 			// --company auto-resolution
 			if resolvedCompany != "" {
-				// Literal issuer_key (cik:NNN, uuid:UUID, sym_us/ca) — bypass AutoResolve
-				// so the typed id passes through unchanged. Bug fixed for the table verb
-				// in 37.5; this is the chat-verb sibling.
-				if !resolver.IsLiteralIssuerKey(resolvedCompany) {
+				// Literal issuer_key (cik:NNN, uuid:UUID, sym_us/ca) or the colon
+				// shorthand SYMBOL:CA — bypass AutoResolve. NormalizeIssuerKey returns
+				// the wire form: unchanged for the existing literals, gskr_ca for the
+				// colon form (Story 41.10). Bug fixed for the table verb in 37.5; this
+				// is the chat-verb sibling.
+				if key, ok := resolver.NormalizeIssuerKey(resolvedCompany); ok {
+					resolvedCompany = key
+				} else {
 					// Free-text: resolve via /companies/search
 					issuerKey, resolveErr := resolveCompany(cmd, c, resolvedCompany, format)
 					if resolveErr != nil {

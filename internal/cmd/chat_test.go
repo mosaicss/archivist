@@ -208,22 +208,32 @@ func TestChatCompanyAutoResolution_Ambiguous(t *testing.T) {
 
 func TestChatCompanyIssuerKeyBypass(t *testing.T) {
 	// Each literal form must short-circuit AutoResolve. Mirrors 37.5's table-verb
-	// fix; this exercises the chat-verb call-site (chat.go:resolver.IsLiteralIssuerKey).
-	literals := []string{
-		"aapl_us",
-		"shop_ca",
-		"cik:320193",
-		"uuid:3162c889-bb75-49cf-b605-3295ae6e092d",
+	// fix; this exercises the chat-verb call-site (chat.go:resolver.NormalizeIssuerKey).
+	// The colon shorthand GSKR:CA is additionally normalized to gskr_ca before it
+	// reaches the chat request body as structuredParams.company (Story 41.10).
+	cases := []struct {
+		in          string
+		wantCompany string
+	}{
+		{"aapl_us", "aapl_us"},
+		{"shop_ca", "shop_ca"},
+		{"cik:320193", "cik:320193"},
+		{"uuid:3162c889-bb75-49cf-b605-3295ae6e092d", "uuid:3162c889-bb75-49cf-b605-3295ae6e092d"},
+		{"GSKR:CA", "gskr_ca"},
 	}
-	for _, lit := range literals {
-		t.Run(lit, func(t *testing.T) {
+	for _, tc := range cases {
+		t.Run(tc.in, func(t *testing.T) {
 			companiesSearchCalled := false
+			var chatBody []byte
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch r.URL.Path {
 				case "/companies/search":
 					companiesSearchCalled = true
 					w.WriteHeader(http.StatusInternalServerError)
 				case "/chat":
+					buf := new(bytes.Buffer)
+					_, _ = buf.ReadFrom(r.Body)
+					chatBody = buf.Bytes()
 					w.Header().Set("Content-Type", "text/event-stream")
 					_, _ = fmt.Fprint(w, sseData(map[string]string{"type": "text-delta", "delta": "Answer"}))
 					_, _ = fmt.Fprint(w, sseData(map[string]interface{}{"type": "finish", "conversationId": "c1"}))
@@ -232,12 +242,25 @@ func TestChatCompanyIssuerKeyBypass(t *testing.T) {
 			}))
 			defer srv.Close()
 
-			_, _, err := executeChat(t, srv.URL, "chat", "What is revenue?", "--company", lit)
+			_, _, err := executeChat(t, srv.URL, "chat", "What is revenue?", "--company", tc.in)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
 			if companiesSearchCalled {
-				t.Errorf("expected no /companies/search call for literal %q", lit)
+				t.Errorf("expected no /companies/search call for literal %q", tc.in)
+			}
+
+			// AC7: the normalized issuer_key reaches the wire as structuredParams.company.
+			var body map[string]interface{}
+			if err := json.Unmarshal(chatBody, &body); err != nil {
+				t.Fatalf("chat body is not valid JSON: %v\nbody: %s", err, string(chatBody))
+			}
+			sp, ok := body["structuredParams"].(map[string]interface{})
+			if !ok {
+				t.Fatal("structuredParams missing from chat body")
+			}
+			if sp["company"] != tc.wantCompany {
+				t.Errorf("structuredParams.company: got %v, want %q", sp["company"], tc.wantCompany)
 			}
 		})
 	}

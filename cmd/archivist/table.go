@@ -681,9 +681,12 @@ func resolveCompanies(cobraCmd *cobra.Command, c resolver.Client, spec *tablespe
 		if name == "" {
 			continue
 		}
-		// Already a literal issuer_key (cik:NNN, uuid:UUID, sym_us/ca) — bypass
-		// AutoResolve so the typed id passes through unchanged.
-		if resolver.IsLiteralIssuerKey(name) {
+		// Already a literal issuer_key (cik:NNN, uuid:UUID, sym_us/ca) or the
+		// colon shorthand SYMBOL:CA — bypass AutoResolve. NormalizeIssuerKey
+		// returns the wire form: a no-op for the existing literals (key == name)
+		// and the gskr_ca normalization for the colon form (Story 41.10).
+		if key, ok := resolver.NormalizeIssuerKey(name); ok {
+			row.Company = key
 			continue
 		}
 
