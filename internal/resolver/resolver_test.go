@@ -400,13 +400,6 @@ func TestIsLiteralIssuerKey(t *testing.T) {
 		{"symbol_country — numeric in symbol", "brk1_us", true},
 		{"symbol_country — dot in symbol", "brk.a_us", true},
 
-		// AC3 — colon symbol+country shorthand (the human-typed ticker:country form)
-		{"colon shorthand — GSKR:CA", "GSKR:CA", true},
-		{"colon shorthand — lowercase", "gskr:ca", true},
-		{"colon shorthand — mixed case", "Gskr:Ca", true},
-		{"colon shorthand — US", "AAPL:US", true},
-		{"colon shorthand — dot in symbol", "brk.a:us", true},
-
 		// AC4 — free-text MUST fall through
 		{"free-text — single word", "Apple", false},
 		{"free-text — multi-word", "Apple Inc", false},
@@ -426,15 +419,6 @@ func TestIsLiteralIssuerKey(t *testing.T) {
 		{"symbol_country uppercase", "AAPL_US", false},
 		{"symbol no country suffix", "aapl", false},
 		{"empty string", "", false},
-
-		// AC5 — adversarial colon near-misses must NOT normalize to a literal
-		{"colon wrong country", "GSKR:UK", false},
-		{"colon empty symbol", ":CA", false},
-		{"colon empty country", "GSKR:", false},
-		{"colon country too long", "GSKR:CAN", false},
-		{"colon double colon", "gskr:ca:us", false},
-		{"colon space in symbol", "Apple Inc:CA", false},
-		{"colon internal space", "GSKR :CA", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -446,91 +430,34 @@ func TestIsLiteralIssuerKey(t *testing.T) {
 	}
 }
 
-// TestNormalizeIssuerKey covers AC1 + AC3: NormalizeIssuerKey returns the
-// canonical wire form for every recognized literal. The four pre-existing forms
-// pass through byte-for-byte; the colon symbol+country shorthand SYMBOL:CA is
-// rewritten to the underscore wire form symbol_ca (lowercased). Free-text and
-// adversarial colon near-misses return ("", false) so the caller falls through
-// to AutoResolve.
-func TestNormalizeIssuerKey(t *testing.T) {
-	cases := []struct {
-		name    string
-		in      string
-		wantKey string
-		wantOK  bool
-	}{
-		// Colon shorthand → underscore wire form (lowercased, single ':' → '_')
-		{"colon — GSKR:CA", "GSKR:CA", "gskr_ca", true},
-		{"colon — already lower", "gskr:ca", "gskr_ca", true},
-		{"colon — mixed case", "Gskr:Ca", "gskr_ca", true},
-		{"colon — US", "AAPL:US", "aapl_us", true},
-		{"colon — dot in symbol", "brk.a:us", "brk.a_us", true},
-
-		// Four existing literals pass through byte-for-byte (canonical == input)
-		{"passthrough — cik", "cik:320193", "cik:320193", true},
-		{"passthrough — sedar", "sedar:000039556", "sedar:000039556", true},
-		{"passthrough — uuid", "uuid:3162c889-bb75-49cf-b605-3295ae6e092d", "uuid:3162c889-bb75-49cf-b605-3295ae6e092d", true},
-		{"passthrough — symbol_us", "aapl_us", "aapl_us", true},
-		{"passthrough — symbol_ca", "shop_ca", "shop_ca", true},
-
-		// Free-text → no normalization (AutoResolve handles these)
-		{"free-text — single word", "Apple", "", false},
-		{"free-text — multi-word", "Barrick Gold", "", false},
-		{"free-text — empty", "", "", false},
-
-		// Adversarial colon near-misses → no normalization
-		{"adversarial — wrong country", "GSKR:UK", "", false},
-		{"adversarial — empty country", "GSKR:", "", false},
-		{"adversarial — double colon", "gskr:ca:us", "", false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			gotKey, gotOK := NormalizeIssuerKey(tc.in)
-			if gotKey != tc.wantKey || gotOK != tc.wantOK {
-				t.Errorf("NormalizeIssuerKey(%q) = (%q, %v), want (%q, %v)",
-					tc.in, gotKey, gotOK, tc.wantKey, tc.wantOK)
-			}
-		})
-	}
-}
-
 // TestAutoResolveBypass_LiteralIssuerKeys is an integration-level guard: when
-// the table-verb caller short-circuits a literal via NormalizeIssuerKey BEFORE
-// calling AutoResolve, no HTTP call is made and the canonical value (normalized
-// for the colon form, unchanged for the four existing forms) is what the caller
-// substitutes. The test enforces the contract by using a server that fails the
+// the table-verb caller short-circuits a literal via IsLiteralIssuerKey BEFORE
+// calling AutoResolve, no HTTP call is made and the value passes through
+// unchanged. The test enforces the contract by using a server that fails the
 // test if hit — a literal must never reach the wire.
 func TestAutoResolveBypass_LiteralIssuerKeys(t *testing.T) {
-	cases := []struct {
-		in   string
-		want string // canonical wire form the caller substitutes
-	}{
-		{"cik:320193", "cik:320193"},
-		{"sedar:000039556", "sedar:000039556"},
-		{"uuid:3162c889-bb75-49cf-b605-3295ae6e092d", "uuid:3162c889-bb75-49cf-b605-3295ae6e092d"},
-		{"aapl_us", "aapl_us"},
-		{"GSKR:CA", "gskr_ca"},
+	literals := []string{
+		"cik:320193",
+		"sedar:000039556",
+		"uuid:3162c889-bb75-49cf-b605-3295ae6e092d",
+		"aapl_us",
 	}
-	for _, tc := range cases {
-		t.Run(tc.in, func(t *testing.T) {
+	for _, lit := range literals {
+		t.Run(lit, func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				t.Errorf("AutoResolve fired for literal %q (path=%s) — bypass must short-circuit before HTTP", tc.in, r.URL.String())
+				t.Errorf("AutoResolve fired for literal %q (path=%s) — bypass must short-circuit before HTTP", lit, r.URL.String())
 				w.WriteHeader(http.StatusInternalServerError)
 			}))
 			defer srv.Close()
 			mc := &mockClient{server: srv}
 
 			// Caller pattern (mirrors cmd/archivist/table.go:resolveCompanies):
-			key, ok := NormalizeIssuerKey(tc.in)
-			if !ok {
-				// Bypass failed; AutoResolve hitting the server fails the test.
-				_, _ = AutoResolve(context.Background(), mc, tc.in, "")
-				t.Fatalf("NormalizeIssuerKey(%q) = (_, false), want a literal", tc.in)
+			if IsLiteralIssuerKey(lit) {
+				// Bypass — literal passes through unchanged.
+				return
 			}
-			if key != tc.want {
-				t.Errorf("NormalizeIssuerKey(%q) = %q, want %q", tc.in, key, tc.want)
-			}
-			// Bypass — the canonical value passes through; no HTTP.
+			// If we get here the bypass failed; AutoResolve hitting the server fails the test.
+			_, _ = AutoResolve(context.Background(), mc, lit, "")
 		})
 	}
 }
