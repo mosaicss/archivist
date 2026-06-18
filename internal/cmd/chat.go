@@ -24,6 +24,26 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// cliChatModels mirrors chat-api CLI_CHAT_MODELS (vertex.ts) — the cheap suite,
+// i.e. the registry minus the web-chat-only premium. The server allowlist
+// (Story 41.8) is the authoritative gate; this client guard is defense in depth
+// plus a faster, clearer error. Keep in sync on every lineup change.
+var cliChatModels = []string{
+	"gemini-2.5-flash-lite",
+	"gemini-3.1-flash-lite",
+	"gemini-3-flash",
+	"gemini-2.5-flash",
+}
+
+func isCLIChatModelAllowed(model string) bool {
+	for _, m := range cliChatModels {
+		if m == model {
+			return true
+		}
+	}
+	return false
+}
+
 // NewChatCmd returns the full `archivist chat` command (replaces the stub from 36.1).
 func NewChatCmd(version string) *cobra.Command {
 	var (
@@ -53,6 +73,16 @@ func NewChatCmd(version string) *cobra.Command {
 			// --dry-run + --stream is invalid
 			if af.DryRun && stream {
 				_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "--dry-run and --stream cannot be combined")
+				return &ExitError{Code: ExitUsageError}
+			}
+
+			// Story 41.8 — restrict --model to the cheap suite. The premium model
+			// is web-chat-only; the server allowlist rejects it on the CLI surface
+			// (400), but failing fast here is a clearer UX. `table` is unaffected.
+			if model != "" && !isCLIChatModelAllowed(model) {
+				_, _ = fmt.Fprintf(cmd.ErrOrStderr(),
+					"archivist chat: model %q is not available on the CLI. Choose one of: %s.\n",
+					model, strings.Join(cliChatModels, ", "))
 				return &ExitError{Code: ExitUsageError}
 			}
 
@@ -188,7 +218,7 @@ func NewChatCmd(version string) *cobra.Command {
 	cmd.Flags().StringVar(&dateFrom, "date-from", "", "Start of date range (inclusive), YYYY-MM-DD")
 	cmd.Flags().StringVar(&dateTo, "date-to", "", "End of date range (inclusive), YYYY-MM-DD")
 	cmd.Flags().StringArrayVar(&attachFilings, "attach-filing", nil, "Attach one or more specific filing IDs (repeatable)")
-	cmd.Flags().StringVar(&model, "model", "", "Override model (default: user saved preference)")
+	cmd.Flags().StringVar(&model, "model", "", "Override model (default: user saved preference). CLI allows the cheap suite only; premium is web chat only.")
 	cmd.Flags().StringVar(&conversationID, "conversation", "", "Resume an existing conversation thread")
 	cmd.Flags().BoolVar(&stream, "stream", false, "Use SSE streaming; progress on stderr, final answer on stdout")
 	cmd.Flags().StringVar(&format, "format", "", "Output format: markdown or json (default: markdown; auto-json when piped)")

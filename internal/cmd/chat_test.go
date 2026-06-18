@@ -3,6 +3,7 @@ package cmd_test
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -517,5 +518,121 @@ func TestChatJSONErrorOnAuth(t *testing.T) {
 	}
 	if errEnv["error"] == nil {
 		t.Error("expected error field in JSON error envelope")
+	}
+}
+
+// ─── Story 41.8 — --model cheap-suite restriction ───────────────────────────
+
+// A cheap-suite model passes the client guard and is sent to the server.
+func TestChatModelAllowedCheapSuite(t *testing.T) {
+	var receivedBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/chat" {
+			buf := new(bytes.Buffer)
+			_, _ = buf.ReadFrom(r.Body)
+			receivedBody = buf.Bytes()
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = fmt.Fprint(w, sseData(map[string]string{"type": "text-delta", "delta": "ok"}))
+			_, _ = fmt.Fprint(w, sseData(map[string]interface{}{"type": "finish", "conversationId": "c1"}))
+			_, _ = fmt.Fprint(w, "data: [DONE]\n")
+		}
+	}))
+	defer srv.Close()
+
+	_, _, err := executeChat(t, srv.URL, "chat", "What is revenue?", "--model", "gemini-2.5-flash-lite")
+	if err != nil {
+		t.Fatalf("unexpected error for an allowed model: %v", err)
+	}
+
+	var body map[string]interface{}
+	if jsonErr := json.Unmarshal(receivedBody, &body); jsonErr != nil {
+		t.Fatalf("body is not valid JSON: %v\nbody: %s", jsonErr, string(receivedBody))
+	}
+	if body["model"] != "gemini-2.5-flash-lite" {
+		t.Errorf("model: got %v, want gemini-2.5-flash-lite", body["model"])
+	}
+}
+
+// The premium model is web-chat-only and rejected client-side with usage exit 2.
+func TestChatModelRejectsPremium(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("unexpected HTTP call — premium model must be rejected client-side")
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	_, stderr, err := executeChat(t, srv.URL, "chat", "q?", "--model", "gemini-3.1-pro-preview")
+	if err == nil {
+		t.Fatal("expected error for premium model on the CLI")
+	}
+	var exitErr *cmd.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != cmd.ExitUsageError {
+		t.Errorf("expected ExitUsageError (2), got %v", err)
+	}
+	if !strings.Contains(stderr, "not available on the CLI") {
+		t.Errorf("expected rejection message, got: %s", stderr)
+	}
+	// The allowed list must NOT advertise the premium model.
+	idx := strings.Index(stderr, "Choose one of:")
+	if idx == -1 {
+		t.Fatalf("expected allowed-model list in stderr, got: %s", stderr)
+	}
+	if strings.Contains(stderr[idx:], "pro-preview") {
+		t.Errorf("allowed list must not include the premium model, got: %s", stderr)
+	}
+	if !strings.Contains(stderr[idx:], "gemini-2.5-flash-lite") {
+		t.Errorf("allowed list should name the cheap suite, got: %s", stderr)
+	}
+}
+
+// An unknown / removed model id is rejected client-side with usage exit 2.
+func TestChatModelRejectsUnknown(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("unexpected HTTP call — unknown model must be rejected client-side")
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	_, stderr, err := executeChat(t, srv.URL, "chat", "q?", "--model", "opus")
+	if err == nil {
+		t.Fatal("expected error for unknown model on the CLI")
+	}
+	var exitErr *cmd.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != cmd.ExitUsageError {
+		t.Errorf("expected ExitUsageError (2), got %v", err)
+	}
+	if !strings.Contains(stderr, "not available on the CLI") {
+		t.Errorf("expected rejection message, got: %s", stderr)
+	}
+}
+
+// With no --model flag, the request omits the model field so the server applies
+// the user's saved preference / default.
+func TestChatNoModelOmitsModelField(t *testing.T) {
+	var receivedBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/chat" {
+			buf := new(bytes.Buffer)
+			_, _ = buf.ReadFrom(r.Body)
+			receivedBody = buf.Bytes()
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = fmt.Fprint(w, sseData(map[string]string{"type": "text-delta", "delta": "ok"}))
+			_, _ = fmt.Fprint(w, sseData(map[string]interface{}{"type": "finish", "conversationId": "c1"}))
+			_, _ = fmt.Fprint(w, "data: [DONE]\n")
+		}
+	}))
+	defer srv.Close()
+
+	_, _, err := executeChat(t, srv.URL, "chat", "What is revenue?")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var body map[string]interface{}
+	if jsonErr := json.Unmarshal(receivedBody, &body); jsonErr != nil {
+		t.Fatalf("body is not valid JSON: %v\nbody: %s", jsonErr, string(receivedBody))
+	}
+	if _, ok := body["model"]; ok {
+		t.Errorf("model field should be omitted when --model is not set, got: %v", body["model"])
 	}
 }
