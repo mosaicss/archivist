@@ -539,7 +539,7 @@ func TestChatModelAllowedCheapSuite(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, _, err := executeChat(t, srv.URL, "chat", "What is revenue?", "--model", "gemini-2.5-flash-lite")
+	_, _, err := executeChat(t, srv.URL, "chat", "What is revenue?", "--model", "gemini-3.1-flash-lite")
 	if err != nil {
 		t.Fatalf("unexpected error for an allowed model: %v", err)
 	}
@@ -548,8 +548,8 @@ func TestChatModelAllowedCheapSuite(t *testing.T) {
 	if jsonErr := json.Unmarshal(receivedBody, &body); jsonErr != nil {
 		t.Fatalf("body is not valid JSON: %v\nbody: %s", jsonErr, string(receivedBody))
 	}
-	if body["model"] != "gemini-2.5-flash-lite" {
-		t.Errorf("model: got %v, want gemini-2.5-flash-lite", body["model"])
+	if body["model"] != "gemini-3.1-flash-lite" {
+		t.Errorf("model: got %v, want gemini-3.1-flash-lite", body["model"])
 	}
 }
 
@@ -580,7 +580,7 @@ func TestChatModelRejectsPremium(t *testing.T) {
 	if strings.Contains(stderr[idx:], "pro-preview") {
 		t.Errorf("allowed list must not include the premium model, got: %s", stderr)
 	}
-	if !strings.Contains(stderr[idx:], "gemini-2.5-flash-lite") {
+	if !strings.Contains(stderr[idx:], "gemini-3.1-flash-lite") {
 		t.Errorf("allowed list should name the cheap suite, got: %s", stderr)
 	}
 }
@@ -593,16 +593,20 @@ func TestChatModelRejectsUnknown(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, stderr, err := executeChat(t, srv.URL, "chat", "q?", "--model", "opus")
-	if err == nil {
-		t.Fatal("expected error for unknown model on the CLI")
-	}
-	var exitErr *cmd.ExitError
-	if !errors.As(err, &exitErr) || exitErr.Code != cmd.ExitUsageError {
-		t.Errorf("expected ExitUsageError (2), got %v", err)
-	}
-	if !strings.Contains(stderr, "not available on the CLI") {
-		t.Errorf("expected rejection message, got: %s", stderr)
+	// "opus" (Claude, removed) and "gemini-2.5-flash-lite" (dropped 2026-06-23 —
+	// Gemini 2.5 rejects thinkingLevel) are both rejected client-side now.
+	for _, removed := range []string{"opus", "gemini-2.5-flash-lite"} {
+		_, stderr, err := executeChat(t, srv.URL, "chat", "q?", "--model", removed)
+		if err == nil {
+			t.Fatalf("expected error for removed model %q on the CLI", removed)
+		}
+		var exitErr *cmd.ExitError
+		if !errors.As(err, &exitErr) || exitErr.Code != cmd.ExitUsageError {
+			t.Errorf("%s: expected ExitUsageError (2), got %v", removed, err)
+		}
+		if !strings.Contains(stderr, "not available on the CLI") {
+			t.Errorf("%s: expected rejection message, got: %s", removed, stderr)
+		}
 	}
 }
 
