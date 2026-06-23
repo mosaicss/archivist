@@ -28,8 +28,10 @@ import (
 // i.e. the registry minus the web-chat-only premium. The server allowlist
 // (Story 41.8) is the authoritative gate; this client guard is defense in depth
 // plus a faster, clearer error. Keep in sync on every lineup change.
+// 2026-06-23: gemini-2.5-flash-lite dropped — the chat path sends
+// thinkingConfig.thinkingLevel, which Gemini 2.5 rejects (400); it is no longer
+// a registered model server-side. gemini-3.1-flash-lite is the cheap option.
 var cliChatModels = []string{
-	"gemini-2.5-flash-lite",
 	"gemini-3.1-flash-lite",
 	"gemini-3-flash",
 	"gemini-2.5-flash",
