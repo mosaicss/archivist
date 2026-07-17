@@ -31,10 +31,12 @@ import (
 // 2026-06-23: gemini-2.5-flash-lite dropped — the chat path sends
 // thinkingConfig.thinkingLevel, which Gemini 2.5 rejects (400); it is no longer
 // a registered model server-side. gemini-3.1-flash-lite is the cheap option.
+// 2026-07-17 (mosaic Story 52.5): gemini-2.5-flash dropped — the Gemini 2.5
+// line retires 2026-10-16 and the web-search engine repointed to
+// gemini-3-flash; the registry is Gemini-3-only now.
 var cliChatModels = []string{
 	"gemini-3.1-flash-lite",
 	"gemini-3-flash",
-	"gemini-2.5-flash",
 }
 
 func isCLIChatModelAllowed(model string) bool {
@@ -371,6 +373,15 @@ func executeChatRequest(
 		return &ExitError{Code: ExitServerError}
 	}
 
+	// Any other non-2xx (mosaic Story 52.5): 400 MODEL_NOT_ALLOWED from the
+	// authoritative server allowlist, 404, 429 from the CLI rate limiter, etc.
+	// Surface the standardized {error, code, suggestion} body. Pre-52.5 these
+	// fell through to the SSE consumer, which found no "data:" frames in a
+	// JSON error body and rendered an empty result with exit 0.
+	if resp.StatusCode >= 300 {
+		return surfaceChatHTTPError(cmd, resp, format)
+	}
+
 	// Parse SSE stream
 	result, err := consumeSSEStream(resp.Body, stream, cmd.ErrOrStderr(), af.Quiet, noColor)
 	if err != nil {
@@ -673,6 +684,48 @@ func readStdinParams(cmd *cobra.Command) (*stdinParamsPayload, error) {
 }
 
 // writeJSONError writes a JSON error envelope to w.
+// surfaceChatHTTPError reads a non-2xx /chat response carrying the
+// standardized {error, code, suggestion} envelope and maps it to the CLI's
+// typed exit codes: 400/422 usage (2), 404 not-found (3), 429 rate-limit (7),
+// anything else generic (1).
+func surfaceChatHTTPError(cmd *cobra.Command, resp *http.Response, format string) error {
+	var envelope struct {
+		Error      string `json:"error"`
+		Code       string `json:"code"`
+		Suggestion string `json:"suggestion"`
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	_ = json.Unmarshal(body, &envelope)
+
+	msg := envelope.Error
+	if msg == "" {
+		msg = fmt.Sprintf("server returned HTTP %d", resp.StatusCode)
+	}
+	code := envelope.Code
+	if code == "" {
+		code = "HTTP_ERROR"
+	}
+
+	exitCode := ExitGenericError
+	switch resp.StatusCode {
+	case http.StatusBadRequest, http.StatusUnprocessableEntity:
+		exitCode = ExitUsageError
+	case http.StatusNotFound:
+		exitCode = ExitNotFound
+	case http.StatusTooManyRequests:
+		exitCode = ExitRateLimit
+	}
+
+	_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "archivist chat: %s [%s]\n", msg, code)
+	if envelope.Suggestion != "" {
+		_, _ = fmt.Fprintln(cmd.ErrOrStderr(), envelope.Suggestion)
+	}
+	if format == "json" {
+		writeJSONError(cmd.OutOrStdout(), code, msg, exitCode)
+	}
+	return &ExitError{Code: exitCode}
+}
+
 func writeJSONError(w io.Writer, code, message string, exitCode int) {
 	out := map[string]interface{}{
 		"error":     code,

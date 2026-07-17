@@ -593,9 +593,11 @@ func TestChatModelRejectsUnknown(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	// "opus" (Claude, removed) and "gemini-2.5-flash-lite" (dropped 2026-06-23 —
-	// Gemini 2.5 rejects thinkingLevel) are both rejected client-side now.
-	for _, removed := range []string{"opus", "gemini-2.5-flash-lite"} {
+	// "opus" (Claude, removed), "gemini-2.5-flash-lite" (dropped 2026-06-23 —
+	// Gemini 2.5 rejects thinkingLevel), and "gemini-2.5-flash" (dropped in
+	// mosaic Story 52.5 — web-search engine repointed to gemini-3-flash before
+	// the 2026-10-16 Gemini 2.5 retirement) are all rejected client-side now.
+	for _, removed := range []string{"opus", "gemini-2.5-flash-lite", "gemini-2.5-flash"} {
 		_, stderr, err := executeChat(t, srv.URL, "chat", "q?", "--model", removed)
 		if err == nil {
 			t.Fatalf("expected error for removed model %q on the CLI", removed)
@@ -638,5 +640,120 @@ func TestChatNoModelOmitsModelField(t *testing.T) {
 	}
 	if _, ok := body["model"]; ok {
 		t.Errorf("model field should be omitted when --model is not set, got: %v", body["model"])
+	}
+}
+
+// --- mosaic Story 52.5: non-2xx JSON error bodies must surface, not vanish ---
+//
+// Pre-52.5, any 4xx the status switch did not enumerate (400 MODEL_NOT_ALLOWED
+// from the authoritative server allowlist, 404, 429 from the CLI rate limiter)
+// fell through to the SSE consumer, which found no "data:" frames in a JSON
+// error body and returned an empty result with exit 0 — the error vanished.
+
+func TestChatSurfacesServer4xxErrors(t *testing.T) {
+	cases := []struct {
+		name     string
+		status   int
+		body     map[string]interface{}
+		wantExit int
+		wantText string
+	}{
+		{
+			name:   "400 MODEL_NOT_ALLOWED surfaces with usage exit 2",
+			status: http.StatusBadRequest,
+			body: map[string]interface{}{
+				"error":      `Model "gemini-2.5-flash" is not available on this surface.`,
+				"code":       "MODEL_NOT_ALLOWED",
+				"suggestion": "Choose one of: gemini-3.1-flash-lite, gemini-3-flash.",
+			},
+			wantExit: cmd.ExitUsageError,
+			wantText: "MODEL_NOT_ALLOWED",
+		},
+		{
+			name:     "404 surfaces with not-found exit 3",
+			status:   http.StatusNotFound,
+			body:     map[string]interface{}{"error": "Conversation not found.", "code": "CONVERSATION_NOT_FOUND"},
+			wantExit: cmd.ExitNotFound,
+			wantText: "Conversation not found.",
+		},
+		{
+			name:     "429 surfaces with rate-limit exit 7",
+			status:   http.StatusTooManyRequests,
+			body:     map[string]interface{}{"error": "Rate limit exceeded.", "code": "RATE_LIMITED"},
+			wantExit: cmd.ExitRateLimit,
+			wantText: "Rate limit exceeded.",
+		},
+		{
+			name:     "unmapped 4xx surfaces with generic exit 1",
+			status:   http.StatusTeapot,
+			body:     map[string]interface{}{"error": "Teapot.", "code": "TEAPOT"},
+			wantExit: cmd.ExitGenericError,
+			wantText: "Teapot.",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(tc.status)
+				_ = json.NewEncoder(w).Encode(tc.body)
+			}))
+			defer srv.Close()
+
+			stdout, stderr, err := executeChat(t, srv.URL, "chat", "any question")
+			if err == nil {
+				t.Fatalf("expected error for HTTP %d, got exit 0 (stdout: %s)", tc.status, stdout)
+			}
+			var exitErr *cmd.ExitError
+			if !errors.As(err, &exitErr) || exitErr.Code != tc.wantExit {
+				t.Errorf("expected exit %d, got %v", tc.wantExit, err)
+			}
+			if !strings.Contains(stderr, tc.wantText) {
+				t.Errorf("stderr must carry the server error, got: %s", stderr)
+			}
+		})
+	}
+}
+
+// Suggestion text from the standardized error envelope rides along on stderr.
+func TestChatSurfacesServerSuggestion(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"error":      "Bad model.",
+			"code":       "MODEL_NOT_ALLOWED",
+			"suggestion": "Choose one of: gemini-3.1-flash-lite, gemini-3-flash.",
+		})
+	}))
+	defer srv.Close()
+
+	_, stderr, err := executeChat(t, srv.URL, "chat", "q?")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(stderr, "Choose one of: gemini-3.1-flash-lite, gemini-3-flash.") {
+		t.Errorf("expected suggestion on stderr, got: %s", stderr)
+	}
+}
+
+// --format json emits the structured error object on stdout as well.
+func TestChatSurfacesServer4xxJSONFormat(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"error": "Bad model.",
+			"code":  "MODEL_NOT_ALLOWED",
+		})
+	}))
+	defer srv.Close()
+
+	stdout, _, err := executeChat(t, srv.URL, "chat", "q?", "--format", "json")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(stdout, "MODEL_NOT_ALLOWED") {
+		t.Errorf("expected structured JSON error on stdout, got: %s", stdout)
 	}
 }
