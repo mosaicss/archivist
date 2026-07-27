@@ -17,11 +17,32 @@ key returns exit 0 every time.
 ```sh
 # Step 1: resolve
 archivist companies search "Shopify"
-# Output includes issuer_key, e.g. shopify-inc-tsx
+# Output includes issuer_key, e.g. cik:1594805
 
 # Step 2: use the key
-archivist chat --company shopify-inc-tsx "What was the revenue growth driver in Q3 2024?"
+archivist chat --company cik:1594805 "What was the revenue growth driver in Q3 2024?"
 ```
+
+**An `issuer_key` is always `prefix:value`. It is never a slug.** There are four
+prefixes, one per identifier authority:
+
+| Prefix | Authority | Example |
+|--------|-----------|---------|
+| `cik:` | SEC Central Index Key — US filers and cross-listed Canadians | `cik:1594805` |
+| `sedar:` | SEDAR — Canadian-only filers | `sedar:000051994` |
+| `uuid:` | issuers with neither a CIK nor a SEDAR id (CDRs, funds) | `uuid:36947d0a-6e51-4cdd-8dc5-48846b07cae6` |
+| `mkk:` | MKK — Borsa Istanbul filers | `mkk:4028e4a1416e696301416f37201c5f2e` |
+
+Anything that is not one of these forms is treated as a **search term**, not a
+key: it goes to the fuzzy company-search path and can silently resolve to the
+wrong issuer. Never invent a key from a company name.
+
+> **`mkk:` keys do not yet bypass resolution.** The CLI's literal-key check
+> recognizes only `cik:`, `sedar:` and `uuid:`, so `--company mkk:...` falls
+> through to fuzzy search and returns not-found. Turkish issuers currently have
+> no canonical-key escape hatch from ambiguity — resolve them by name via
+> `archivist companies search` and expect exit 6 on ambiguous ones. Tracked as a
+> known gap; this note comes out when the `mkk:` rung ships.
 
 ## Chat vs table
 
@@ -30,7 +51,7 @@ Use `archivist table` for structured multi-company or multi-metric comparisons.
 
 ```sh
 # Chat: one company, open-ended question
-archivist chat --company shopify-inc-tsx "Describe the main risk factors."
+archivist chat --company cik:1594805 "Describe the main risk factors."
 
 # Table: multiple companies, structured spec
 archivist table --spec myspec.yaml
@@ -55,18 +76,19 @@ output to another tool, writing to a file, or running inside an agent loop.
 
 ```sh
 # Interactive: streaming output
-archivist chat --company shopify-inc-tsx --stream "What are the key risks?"
+archivist chat --company cik:1594805 --stream "What are the key risks?"
 
 # Piped: blocking, output is complete before the pipe runs
-archivist chat --company shopify-inc-tsx "Revenue?" | jq .
+archivist chat --company cik:1594805 "Revenue?" | jq .
 ```
 
 ## Citation interpretation
 
 Citations in `archivist chat` output appear as `[1]`, `[2]`, etc. A citations
-block at the end of the response maps each number to a filing ID (e.g.,
-`SEDAR+ filing 2024-annual-report-shopify-inc`). Use `archivist companies get
-<issuer_key>` to retrieve the filing metadata if you need the full document URL.
+block at the end of the response maps each number to a numeric filing ID (e.g.
+`2054838`) plus its form type. Filing IDs are integers, not slugs. Use
+`archivist companies get <issuer_key>` to retrieve filing metadata if you need
+the full document URL.
 
 ## Exit codes
 

@@ -129,7 +129,7 @@ export ARCHIVIST_TOKEN=ak_<your-token>
 Or pass per-call (highest precedence):
 
 ```sh
-archivist --token ak_<your-token> chat --company shopify-inc-tsx "What are the key risks?"
+archivist --token ak_<your-token> chat --company cik:1594805 "What are the key risks?"
 ```
 
 ## Self-update
