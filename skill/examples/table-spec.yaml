@@ -1,11 +1,14 @@
 # Minimal 2-row x 2-column table spec.
 # Run with: archivist table --spec table-spec.yaml
+#
+# `company` takes a canonical issuer_key — always `prefix:value`, never a slug.
+# Resolve one first: archivist companies search "Shopify"
 version: "1"
 rows:
   - type: company
-    company: shopify-inc-tsx
+    company: cik:1594805        # Shopify Inc.
   - type: company
-    company: lightspeed-commerce-tsx
+    company: cik:1823306        # Lightspeed Commerce Inc.
 columns:
   - type: filings
     question: "What was total revenue in the most recent fiscal year?"
