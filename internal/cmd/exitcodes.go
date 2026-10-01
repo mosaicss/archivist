@@ -7,12 +7,12 @@ package cmd
 //	0 = success
 //	1 = generic error
 //	2 = usage error (bad flag combo, bad spec)
-//	3 = not found (companies get <id> matched nothing; missing file; invalid session_id)
-//	4 = auth error (missing/invalid/expired credential; tier mismatch)
+//	3 = not found (no passages; unknown id; companies get matched nothing)
+//	4 = auth error (missing/invalid/expired credential; tier mismatch, e.g. PRO_REQUIRED)
 //	5 = server error (5xx after retries; X-Archivist-Min-CLI-Version block)
-//	6 = ambiguous match (multiple candidates; rerun with --company <id>)
-//	7 = rate limit (429 after retries; per-user quota exhausted)
-//	8 = cascade violation (custom-entity x filings column; country lock conflict)
+//	6 = ambiguous match (a search symbol matched several issuers)
+//	7 = rate limit (429 after retries; monthly fair use limit, CLI_QUOTA)
+//	8 = cascade violation (reserved; no verb emits it since v0.2.22)
 //	9 = not implemented (stub verb in current binary; do NOT retry the verb)
 //
 // Reference: architecture E36 §11.4 (audit revision 2026-05-19).

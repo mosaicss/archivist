@@ -22,22 +22,22 @@ jobs:
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
       SITEGROUND_DEPLOY_KEY: ${{ secrets.SITEGROUND_DEPLOY_KEY }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
-          # Bumped to 1.25 to match go.mod after the x/net v0.54 security
-          # bump in 36.14. 1.22 would break `go build`.
-          go-version: "1.25"
+          # go.mod's `toolchain` directive wins over its `go` line, so the
+          # release builds with exactly the pinned toolchain (go1.27.1).
+          go-version-file: go.mod
           cache: true
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
-          node-version: "20"
+          node-version: "24"
           registry-url: "https://registry.npmjs.org"
 
       - name: Inject version into SKILL.md
@@ -53,7 +53,7 @@ jobs:
           head -1 skill/SKILL.md | grep -qx -- "---"
 
       - name: Run goreleaser
-        uses: goreleaser/goreleaser-action@v6
+        uses: goreleaser/goreleaser-action@v7
         with:
           distribution: goreleaser
           version: "~> v2"
@@ -61,7 +61,7 @@ jobs:
           # version into SKILL.md" step deliberately modifies the file
           # in-workflow, which is a trusted modification, not user drift.
           # Homebrew cask publishing is LIVE (Story 39.9): goreleaser pushes
-          # Casks/archivist.rb to mosaic-finance/homebrew-tap on every tag,
+          # Casks/archivist.rb to mosaic-finance-inc/homebrew-tap on every tag,
           # so the repo + HOMEBREW_TAP_GITHUB_TOKEN secret must exist or the
           # release fails. See RELEASE_OPS_36_11.md §4.
           args: release --clean --skip=validate --config goreleaser.yaml
@@ -75,7 +75,7 @@ jobs:
           APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
 
       - name: Attest build provenance
-        uses: actions/attest-build-provenance@v1
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: dist/archivist_v*_*
 

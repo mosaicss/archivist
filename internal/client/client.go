@@ -1,6 +1,7 @@
 package client
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -15,6 +16,22 @@ import (
 
 // DefaultBaseURL is the production chat-api endpoint. Overrideable via ARCHIVIST_BASE_URL.
 const DefaultBaseURL = "https://chat-api-685186721186.us-central1.run.app"
+
+// AccountURL is the one Mosaic web page the binary prints itself: plans and
+// account access. Every other Mosaic URL it prints is a server-supplied
+// permalink.
+const AccountURL = "https://mosaic-finance.com/en/pricing/"
+
+// maxErrorBody caps how much of an error response body is read.
+const maxErrorBody = 64 * 1024
+
+// ResolveBaseURL returns ARCHIVIST_BASE_URL when set, else DefaultBaseURL.
+func ResolveBaseURL() string {
+	if baseURL := os.Getenv("ARCHIVIST_BASE_URL"); baseURL != "" {
+		return baseURL
+	}
+	return DefaultBaseURL
+}
 
 // Client is the shared HTTP client for chat-api calls.
 type Client struct {
@@ -32,10 +49,7 @@ type Client struct {
 // New returns a Client configured from the environment and provided token.
 // version is the binary version string (from ldflags).
 func New(token, version string) *Client {
-	baseURL := os.Getenv("ARCHIVIST_BASE_URL")
-	if baseURL == "" {
-		baseURL = DefaultBaseURL
-	}
+	baseURL := ResolveBaseURL()
 	origin := os.Getenv("ARCHIVIST_ORIGIN")
 	if origin == "" {
 		origin = "manual"
@@ -66,6 +80,12 @@ func (c *Client) SetStderr(w io.Writer) {
 
 // Do executes an authenticated request to the chat-api, applying retry logic.
 // method controls whether GET (3 retries on 5xx/429/network) or POST (1 retry on 503/network) policy applies.
+//
+// A 429 whose body code is CLI_QUOTA (the monthly fair use ceiling) is never
+// retried: Do returns that response with its body intact so the caller maps
+// it. Any other 429 is retried after Retry-After (clamped to 30 s) and ends in
+// an *ExitCodeError with code 7. A non-2xx response other than 429 and 5xx is
+// returned to the caller unread.
 func (c *Client) Do(ctx context.Context, method, path string, body io.Reader) (*http.Response, error) {
 	url := c.BaseURL + path
 
@@ -110,26 +130,26 @@ func (c *Client) Do(ctx context.Context, method, path string, body io.Reader) (*
 					"Server requires archivist-cli >= %s. You have %s. Run 'archivist update' to upgrade.\n",
 					min, c.Version)
 				_ = resp.Body.Close()
-				return nil, &ExitCodeError{Code: 5, Message: "server requires newer CLI version"}
+				return nil, &ExitCodeError{
+					Code:     5,
+					Message:  "server requires newer CLI version",
+					APICode:  "MIN_CLI_VERSION",
+					Reported: true,
+				}
 			}
 		}
 
-		// Emit quota info per AC7 spec.
+		// Quota info for positive values. X-Queries-Remaining: 0 says nothing
+		// on its own: a successful last allowed call carries it, and so does
+		// the 429 CLI_QUOTA refusal, which is mapped from its body below.
 		if remaining := resp.Header.Get("X-Queries-Remaining"); remaining != "" {
 			n, parseErr := strconv.Atoi(remaining)
-			if parseErr == nil {
-				switch {
-				case n == 0:
-					_, _ = fmt.Fprintln(c.stderr, "[archivist] Error: monthly query limit reached. Run 'archivist usage' for details.")
-					_ = resp.Body.Close()
-					return nil, &ExitCodeError{Code: 7, Message: "monthly query limit reached"}
-				case n < 5 && !c.quiet:
+			if parseErr == nil && n > 0 && !c.quiet {
+				if n < 5 {
 					_, _ = fmt.Fprintf(c.stderr,
 						"[archivist] Warning: %d queries remaining this month. Run 'archivist usage' for details.\n", n)
-				default:
-					if !c.quiet {
-						_, _ = fmt.Fprintf(c.stderr, "[quota] %s queries remaining\n", remaining)
-					}
+				} else {
+					_, _ = fmt.Fprintf(c.stderr, "[quota] %s queries remaining\n", remaining)
 				}
 			}
 		}
@@ -141,10 +161,17 @@ func (c *Client) Do(ctx context.Context, method, path string, body io.Reader) (*
 			return resp, nil
 		}
 
-		// 429 — honor Retry-After, then retry (GET: up to 3, POST: up to 1)
+		// 429 — CLI_QUOTA returns at once; any other 429 honors Retry-After,
+		// then retries (GET: up to 3, POST: up to 1).
 		if status == http.StatusTooManyRequests {
-			retryAfter := parseRetryAfter(resp.Header.Get("Retry-After"))
+			errBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
 			_ = resp.Body.Close()
+			apiErr := parseAPIErrorBody(status, errBody)
+			if apiErr.Code == "CLI_QUOTA" {
+				resp.Body = io.NopCloser(bytes.NewReader(errBody))
+				return resp, nil
+			}
+			retryAfter := parseRetryAfter(resp.Header.Get("Retry-After"))
 			if attempt < maxRetries {
 				select {
 				case <-ctx.Done():
@@ -155,22 +182,28 @@ func (c *Client) Do(ctx context.Context, method, path string, body io.Reader) (*
 				lastErr = fmt.Errorf("rate limited (429)")
 				continue
 			}
-			return nil, &ExitCodeError{Code: 7, Message: fmt.Sprintf("rate limit exceeded. Try again in %v", retryAfter)}
+			code := apiErr.Code
+			if code == "" {
+				code = "RATE_LIMITED"
+			}
+			return nil, &ExitCodeError{
+				Code:       7,
+				Message:    fmt.Sprintf("rate limit exceeded. Try again in %v", retryAfter),
+				APICode:    code,
+				Suggestion: apiErr.Suggestion,
+			}
 		}
 
 		// 5xx — for POST only retry 503; for GET retry any 5xx
 		if status >= 500 {
+			errBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
 			_ = resp.Body.Close()
-			if attempt < maxRetries {
-				if !isGet && status != http.StatusServiceUnavailable {
-					// POST: only retry 503
-					return nil, &ExitCodeError{Code: 5, Message: fmt.Sprintf("server error (HTTP %d). Try again later.", status)}
-				}
+			if attempt < maxRetries && (isGet || status == http.StatusServiceUnavailable) {
 				lastResp = nil
 				lastErr = fmt.Errorf("server error %d", status)
 				continue
 			}
-			return nil, &ExitCodeError{Code: 5, Message: fmt.Sprintf("server error (HTTP %d). Try again later.", status)}
+			return nil, serverError(parseAPIErrorBody(status, errBody))
 		}
 
 		// Success or 4xx (don't retry 4xx other than 429)
@@ -197,6 +230,8 @@ func (c *Client) injectHeaders(req *http.Request) {
 }
 
 // GetCLITokens calls GET /account/cli-tokens and returns the parsed response.
+// A 401 is ErrUnauthorized; any other non-200 is a *APIError; a Do error is
+// wrapped with %w.
 func (c *Client) GetCLITokens(ctx context.Context) (*CLITokensResponse, error) {
 	resp, err := c.Do(ctx, http.MethodGet, "/account/cli-tokens", nil)
 	if err != nil {
@@ -208,7 +243,7 @@ func (c *Client) GetCLITokens(ctx context.Context) (*CLITokensResponse, error) {
 		return nil, ErrUnauthorized
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("server returned %d", resp.StatusCode)
+		return nil, ParseAPIError(resp)
 	}
 
 	var result CLITokensResponse
@@ -279,6 +314,81 @@ func parseSemver(v string) []int {
 type ExitCodeError struct {
 	Code    int
 	Message string
+	// APICode is the server error code, or a client-side one such as
+	// MIN_CLI_VERSION or RATE_LIMITED, for the JSON error envelope.
+	APICode string
+	// Suggestion is the server's suggestion, when the response carried one.
+	Suggestion string
+	// Reported is true when Do already wrote the message to stderr.
+	Reported bool
+}
+
+// serverError shapes a final 5xx as an exit 5 failure carrying the server's
+// own error text when it sent one.
+func serverError(apiErr *APIError) *ExitCodeError {
+	msg := fmt.Sprintf("server error (HTTP %d). Try again later.", apiErr.Status)
+	if apiErr.hasBody {
+		msg = fmt.Sprintf("%s (HTTP %d). Try again later.", apiErr.Message, apiErr.Status)
+	}
+	code := apiErr.Code
+	if code == "" {
+		code = "SERVER_ERROR"
+	}
+	return &ExitCodeError{Code: 5, Message: msg, APICode: code, Suggestion: apiErr.Suggestion}
+}
+
+// APIError is a non-2xx chat-api response decoded from its JSON error body
+// ({error, code, suggestion, account_url, reset_date}). Fields the body did
+// not carry are empty; Message falls back to the HTTP status.
+type APIError struct {
+	Status     int
+	Code       string
+	Message    string
+	Suggestion string
+	AccountURL string
+	ResetDate  string
+	// hasBody is true when the body carried an error message.
+	hasBody bool
+}
+
+func (e *APIError) Error() string {
+	if e.Code != "" {
+		return fmt.Sprintf("%s [%s]", e.Message, e.Code)
+	}
+	return e.Message
+}
+
+// ParseAPIError reads at most 64 KiB of resp's body and decodes the error
+// envelope. A body that is not JSON leaves the fields empty. The caller
+// still closes resp.Body.
+func ParseAPIError(resp *http.Response) *APIError {
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
+	return parseAPIErrorBody(resp.StatusCode, body)
+}
+
+func parseAPIErrorBody(status int, body []byte) *APIError {
+	var envelope struct {
+		Error      any    `json:"error"`
+		Code       string `json:"code"`
+		Suggestion string `json:"suggestion"`
+		AccountURL string `json:"account_url"`
+		ResetDate  string `json:"reset_date"`
+	}
+	_ = json.Unmarshal(body, &envelope)
+	e := &APIError{
+		Status:     status,
+		Code:       envelope.Code,
+		Suggestion: envelope.Suggestion,
+		AccountURL: envelope.AccountURL,
+		ResetDate:  envelope.ResetDate,
+	}
+	if msg, ok := envelope.Error.(string); ok && msg != "" {
+		e.Message = msg
+		e.hasBody = true
+	} else {
+		e.Message = fmt.Sprintf("server returned HTTP %d", status)
+	}
+	return e
 }
 
 func (e *ExitCodeError) Error() string {
@@ -286,7 +396,7 @@ func (e *ExitCodeError) Error() string {
 }
 
 // ErrUnauthorized is returned when the server rejects the credential.
-var ErrUnauthorized = fmt.Errorf("token invalid or revoked. Create a new key via the avatar menu (Manage account → API keys) at https://mosaic-finance.com")
+var ErrUnauthorized = fmt.Errorf("token invalid or revoked. Create a new key via the avatar menu (Manage account → API keys) at %s", AccountURL)
 
 // CLITokensResponse is the shape returned by GET /account/cli-tokens.
 type CLITokensResponse struct {

@@ -61,9 +61,7 @@ func TestHelpListsAllVerbsInOrder(t *testing.T) {
 		t.Fatalf("execute: %v", err)
 	}
 	helpText := out.String()
-	// "table" is registered by cmd/archivist/main.go (package main), not here.
-	// TestHelpListsTableVerb in cmd/archivist/table_test.go covers that.
-	verbsInOrder := []string{"auth", "chat", "companies", "usage", "update", "version"}
+	verbsInOrder := []string{"auth", "search", "read", "toc", "companies", "doctor", "usage", "update", "version"}
 	lastIdx := -1
 	for _, verb := range verbsInOrder {
 		// Cobra renders subcommands as "  <use>   <short>" under
@@ -81,17 +79,61 @@ func TestHelpListsAllVerbsInOrder(t *testing.T) {
 		}
 		lastIdx = loc[0]
 	}
+	for _, removed := range []string{"chat", "table", "explain"} {
+		re := regexp.MustCompile(`(?m)^\s{2,}` + removed + `(\s|$)`)
+		if re.MatchString(helpText) {
+			t.Errorf("removed verb %q still listed in help:\n%s", removed, helpText)
+		}
+	}
+}
+
+// TestRemovedVerbsAreUnknownCommands: chat, table and explain are deleted,
+// not hidden, so cobra reports them as unknown commands (main exits 2).
+func TestRemovedVerbsAreUnknownCommands(t *testing.T) {
+	for _, argv := range [][]string{{"chat", "hi"}, {"table", "run", "x"}, {"explain", "cascade"}} {
+		root := NewRootCmd("dev", "unknown", "unknown")
+		root.SetArgs(argv)
+		root.SetOut(&bytes.Buffer{})
+		root.SetErr(&bytes.Buffer{})
+		err := root.Execute()
+		if err == nil || !strings.Contains(err.Error(), "unknown command") {
+			t.Errorf("%v: want cobra unknown command error, got %v", argv, err)
+		}
+		var exitErr *ExitError
+		if errors.As(err, &exitErr) {
+			t.Errorf("%v: unknown command must not be a typed ExitError", argv)
+		}
+	}
+}
+
+// TestMCPExposedCommandsHaveTitleAndReadOnly: every command the MCP walker
+// exposes (runnable, not mcp:hidden) carries mcp:read-only "true" and a
+// non-empty mcp:title.
+func TestMCPExposedCommandsHaveTitleAndReadOnly(t *testing.T) {
+	root := NewRootCmd("dev", "unknown", "unknown")
+	var walk func(c *cobra.Command)
+	walk = func(c *cobra.Command) {
+		for _, child := range c.Commands() {
+			if child.Name() == "help" || child.Name() == "completion" || child.Annotations["mcp:hidden"] == "true" {
+				continue
+			}
+			if child.RunE != nil {
+				if child.Annotations["mcp:read-only"] != "true" {
+					t.Errorf("%s: mcp:read-only must be \"true\"", child.CommandPath())
+				}
+				if strings.TrimSpace(child.Annotations["mcp:title"]) == "" {
+					t.Errorf("%s: mcp:title must be set", child.CommandPath())
+				}
+			}
+			walk(child)
+		}
+	}
+	walk(root)
 }
 
 func TestStubVerbReturnsNotImplemented(t *testing.T) {
-	// All Phase 1 verbs are now real commands — no stubs remain in this story:
-	//   auth       — Story 36.2
-	//   chat       — Story 36.3
-	//   table      — Story 36.4 (registered in package main)
-	//   companies  — Story 36.5
-	//   usage      — Story 36.12
-	//   update     — Story 36.11 (this story)
-	// This test is retained as a skeleton for future stubs.
+	// Every verb is a real command; no stubs remain. This test is retained as
+	// a skeleton for future stubs.
 	cases := []struct {
 		verb, story string
 	}{}

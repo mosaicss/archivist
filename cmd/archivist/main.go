@@ -30,18 +30,15 @@ func main() {
 	// Resolve "dev"/"unknown" ldflag defaults once at startup. For binaries
 	// installed via `go install` (no goreleaser ldflags), this pulls the real
 	// module tag + VCS info from debug.ReadBuildInfo so every verb — version,
-	// doctor, update, usage, table — reports the same number (Story 37.9).
+	// doctor, update, usage — reports the same number (Story 37.9).
 	resolvedVersion, resolvedCommit, resolvedDate := cmd.ResolveBuildInfo(version, commit, date)
 
-	// newRoot builds the full command tree: internal/cmd verbs + package-main
-	// verbs (table — Story 36.4). The factory is passed to newMCPCmd so the
-	// MCP walker and every tools/call dispatch get a pristine tree; the
-	// closure predates mcp registration below, so dispatch roots exclude mcp
-	// by construction (Story 39.7).
+	// newRoot builds the full command tree. The factory is passed to
+	// newMCPCmd so the MCP walker and every tools/call dispatch get a
+	// pristine tree; the closure predates mcp registration below, so
+	// dispatch roots exclude mcp by construction (Story 39.7).
 	newRoot := func() *cobra.Command {
-		r := cmd.NewRootCmd(resolvedVersion, resolvedCommit, resolvedDate)
-		r.AddCommand(newTableCmd(resolvedVersion))
-		return r
+		return cmd.NewRootCmd(resolvedVersion, resolvedCommit, resolvedDate)
 	}
 
 	root := newRoot()

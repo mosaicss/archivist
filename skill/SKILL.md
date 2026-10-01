@@ -1,135 +1,129 @@
 ---
 name: archivist
-description: Research SEC and SEDAR public company filings with the Archivist CLI. Use when the user invokes /archivist or asks to research filings, financials, risk factors, or build multi-company comparison tables from the terminal. Requires the archivist binary on PATH and an authenticated Mosaic account.
+description: Research SEC and SEDAR public company filings with the Archivist CLI. Use when the user invokes /archivist or asks to research filings, financials, risk factors, or management commentary from the terminal and wants answers cited to the source passage. Requires the archivist binary on PATH and an authenticated Mosaic Pro account.
 ---
 <!-- version: 0.0.0 -->
-# Archivist CLI — Claude Code Skill
+# Archivist CLI: Claude Code skill
 
-Use `archivist` to drive Mosaic filings research from within Claude Code.
-This skill documents the verbs, exit codes, and agent patterns for the Archivist CLI.
+`archivist` searches and reads SEC and SEDAR filings. It returns passages, not
+answers: you read the passages, write the answer, and cite each claim with the
+passage's permalink `url`. Mosaic runs no model for the CLI.
 
-## Resolve first, then research
+## The research loop
 
-Always resolve a company name to its canonical `issuer_key` before running
-`archivist chat` or `archivist table`. Ambiguous names return exit 6; a resolved
-key returns exit 0 every time.
+1. **Find the company symbol** (skip when the user already gave one):
 
-```sh
-# Step 1: resolve
-archivist companies search "Shopify"
-# Output includes issuer_key, e.g. cik:1594805
+   ```sh
+   archivist companies search "Shopify" --format json
+   ```
 
-# Step 2: use the key
-archivist chat --company cik:1594805 "What was the revenue growth driver in Q3 2024?"
-```
+   Take `symbol` from the best result, for example `SHOP:US`.
 
-**An `issuer_key` is always `prefix:value`. It is never a slug.** There are four
-prefixes, one per identifier authority:
+2. **Search for passages:**
 
-| Prefix | Authority | Example |
-|--------|-----------|---------|
-| `cik:` | SEC Central Index Key — US filers and cross-listed Canadians | `cik:1594805` |
-| `sedar:` | SEDAR — Canadian-only filers | `sedar:000051994` |
-| `uuid:` | issuers with neither a CIK nor a SEDAR id (CDRs, funds) | `uuid:36947d0a-6e51-4cdd-8dc5-48846b07cae6` |
-| `mkk:` | MKK — Borsa Istanbul filers | `mkk:4028e4a1416e696301416f37201c5f2e` |
+   ```sh
+   archivist search "revenue growth drivers" --symbol SHOP:US --formtype 10-K --format json
+   ```
 
-Anything that is not one of these forms is treated as a **search term**, not a
-key: it goes to the fuzzy company-search path and can silently resolve to the
-wrong issuer. Never invent a key from a company name.
+   Each result is a passage record: `id` (the chunk id), `filing_id`,
+   `company_name`, `symbol`, `formtype`, `datefiled`, `section_header`,
+   `chunk_index`, `snippet` (the full passage text) and `url`.
 
-> **`mkk:` keys do not yet bypass resolution.** The CLI's literal-key check
-> recognizes only `cik:`, `sedar:` and `uuid:`, so `--company mkk:...` falls
-> through to fuzzy search and returns not-found. Turkish issuers currently have
-> no canonical-key escape hatch from ambiguity — resolve them by name via
-> `archivist companies search` and expect exit 6 on ambiguous ones. Tracked as a
-> known gap; this note comes out when the `mkk:` rung ships.
+3. **Read around a hit** when a snippet is not enough:
 
-## Chat vs table
+   ```sh
+   archivist read passage <chunk_id> --window 2 --format json     # the passage and two neighbours on each side
+   archivist toc <filing_id> --format json                        # the filing's section headers
+   archivist read section <filing_id> "Item 7. Management's Discussion" --format json
+   ```
 
-Use `archivist chat` for free-form research questions about a single company.
-Use `archivist table` for structured multi-company or multi-metric comparisons.
+4. **Answer with citations.** Cite the `url` of every passage you rely on. The
+   link opens that passage in Mosaic's filing viewer. When `url` is null, cite
+   the company, form, filing date and section instead.
 
-```sh
-# Chat: one company, open-ended question
-archivist chat --company cik:1594805 "Describe the main risk factors."
+## Search options
 
-# Table: multiple companies, structured spec
-archivist table --spec myspec.yaml
-```
+| Flag | Meaning |
+|------|---------|
+| `--symbol` | One company, e.g. `AAPL:US` (at most 20 characters) |
+| `--formtype` | One form type, e.g. `10-K`, `40-F`, `Annual information form` |
+| `--date-from`, `--date-to` | Filing date range, `YYYY-MM-DD` |
+| `--mode` | `semantic` (default, takes filters) or `broad` (no filters) |
+| `--limit` | 1 to 25 passages, default 10 |
+| `--cursor` | Continue a truncated response |
 
-## Cascade rules summary
+Bad input fails with exit 2 before any request is sent.
 
-These rules are enforced at the CLI level (exit 8 on violation):
+## Output
 
-- Custom rows (entities you define) only work with web-sourced columns. A custom
-  row combined with a filings column is a cascade violation.
-- Selecting a company locks the country and exchange for that row. You cannot
-  override country after the company is resolved.
-- Country is a projection of the company exchange (e.g., TSX => CA).
-- Sector and industry columns are available only for filings rows, not custom entities.
+Pass `--format json` from an agent. Off a terminal JSON is already the
+default, and it is the server response unchanged. On a terminal the default is
+a table with a `URL` column. Diagnostics (warnings, the truncation hint, error
+text) go to stderr; stdout carries only content.
 
-## When to use --stream
+When a response is truncated, stderr says `More results: rerun with --cursor
+<token>`. Rerun the same command with that `--cursor` to get the rest.
 
-Use `--stream` for interactive terminal output where you want to see results as
-they arrive. Omit `--stream` (the default blocking mode) when you are piping
-output to another tool, writing to a file, or running inside an agent loop.
+A search with no results exits 3 and prints the server's suggestion. When a
+bare symbol matches several issuers it exits 6 with a "Did you mean"
+suggestion: rerun with the full `TICKER:EXCHANGE` symbol from `companies search`.
 
-```sh
-# Interactive: streaming output
-archivist chat --company cik:1594805 --stream "What are the key risks?"
+## Account and fair use
 
-# Piped: blocking, output is complete before the pipe runs
-archivist chat --company cik:1594805 "Revenue?" | jq .
-```
+Agent access needs a Mosaic Pro account. A free account gets exit 4 with the
+plans page, https://mosaic-finance.com/en/pricing/. Every research call counts
+toward a monthly fair use limit; when it is reached, calls exit 7 and stderr
+names the reset date. `archivist usage` shows this month's count.
 
-## Citation interpretation
-
-Citations in `archivist chat` output appear as `[1]`, `[2]`, etc. A citations
-block at the end of the response maps each number to a numeric filing ID (e.g.
-`2054838`) plus its form type. Filing IDs are integers, not slugs. Use
-`archivist companies get <issuer_key>` to retrieve filing metadata if you need
-the full document URL.
+Chat and tables are not CLI features: there is no `chat` or `table` verb. They
+run only in the Mosaic web app.
 
 ## Exit codes
 
-Agents should branch on exit codes, not parse output text:
+Branch on exit codes, not on output text:
 
 | Code | Meaning | Recommended action |
 |------|---------|-------------------|
 | 0 | Success | Continue |
-| 1 | Generic error | Log and surface to user |
-| 2 | Usage error (bad flags or spec) | Fix the invocation |
-| 3 | Not found (company, file, session) | Try a different search term |
-| 4 | Auth error (missing or expired token) | Run `archivist auth login --token ak_...` (or set `ARCHIVIST_TOKEN`) |
-| 5 | Server error or CLI version too old | Run `archivist update` then retry |
-| 6 | Ambiguous company match | Re-run with `--company <issuer_key>` |
-| 7 | Rate limit or quota exhausted | Wait or upgrade tier |
-| 8 | Cascade violation | Fix the table spec |
-| 9 | Not implemented (stub) | Do not retry; use a newer binary |
+| 1 | Generic error | Surface to the user |
+| 2 | Usage error: bad flag, id or argument | Fix the invocation |
+| 3 | Not found: no passages, unknown id or company | Broaden the query or filters |
+| 4 | Auth error: missing or bad credential, or no Pro account | Run `archivist auth status`; see the plans page |
+| 5 | Server error, or this CLI version is too old | Run `archivist update`, then retry |
+| 6 | A search symbol matched several issuers | Rerun with the full `TICKER:EXCHANGE` symbol |
+| 7 | Rate limit or monthly fair use limit reached | Wait; check `archivist usage` |
+| 8 | Reserved | Not emitted |
+| 9 | Not implemented | Do not retry |
 
-## Available verbs
+With `--format json` a failure also prints `{"error": <code>, "message",
+"exit_code", ...}` on stdout, plus `suggestion`, `account_url` or `reset_date`
+when the server sent them.
+
+## Verbs
 
 ```
-archivist auth      Manage credentials (auth login saves ~/.archivist/credentials)
-archivist chat      Run a research question
-archivist table     Build or rerun a research table
-archivist companies Search or fetch issuer records
-archivist usage     Report quota and rate limit consumption
-archivist update    Upgrade the binary in place
-archivist version   Print binary version and platform
-archivist doctor    Diagnose connectivity and auth
-archivist explain   Show default-window and cascade rules
+archivist auth          Manage credentials (auth login saves ~/.archivist/credentials)
+archivist search        Search filing passages
+archivist read passage  Read a passage with its neighbours
+archivist read section  Read a whole filing section
+archivist toc           List a filing's section headers
+archivist companies     Find a company and its symbol
+archivist doctor        Diagnose credentials, connectivity and version
+archivist usage         Report monthly fair use and rate limit consumption
+archivist update        Upgrade the binary and this skill
+archivist version       Print binary version and platform
 ```
+
+`archivist mcp serve` exposes the same research verbs as MCP tools over stdio.
 
 ## Self-update
 
-Keep the binary current to avoid server-enforced version blocks (exit 5):
+Keep the binary current; an old binary exits 5 with "Run 'archivist update'":
 
 ```sh
-archivist update          # self-replace (curl-sh / github-releases channel)
-archivist update --skill  # refresh only the Claude Code skill files
-archivist update --check  # check whether an update is available without installing
+archivist update          # replace the binary (GitHub release install)
+archivist update --skill  # refresh only this skill
+archivist update --check  # check without installing
 ```
 
-For brew-installed binaries: `brew upgrade mosaic-finance-inc/tap/archivist`.
-For npm-installed binaries: `npx -y @mosaic-finance/archivist@latest install`.
+For Homebrew installs: `brew upgrade mosaic-finance-inc/tap/archivist`.

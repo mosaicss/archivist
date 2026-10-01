@@ -213,8 +213,14 @@ func TestDoctorNoCliScope(t *testing.T) {
 	if exitCode != 4 {
 		t.Errorf("expected exit code 4, got %d; output:\n%s", exitCode, buf.String())
 	}
-	if !strings.Contains(buf.String(), "CLI scope") {
-		t.Errorf("expected CLI scope in output; got:\n%s", buf.String())
+	if !strings.Contains(buf.String(), "This requires a Mosaic Pro account.") {
+		t.Errorf("expected the Pro requirement in output; got:\n%s", buf.String())
+	}
+	if !strings.Contains(buf.String(), "https://mosaic-finance.com/en/pricing/") {
+		t.Errorf("expected the account URL in output; got:\n%s", buf.String())
+	}
+	if strings.Contains(buf.String(), "subscription") || strings.Contains(buf.String(), "mosaic-finance.com/account") {
+		t.Errorf("stale subscription text in output:\n%s", buf.String())
 	}
 }
 
@@ -250,6 +256,50 @@ func TestDoctorQuotaExhausted(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "WARN") {
 		t.Errorf("expected WARN for quota; got:\n%s", buf.String())
+	}
+	if !strings.Contains(buf.String(), "monthly fair use limit") {
+		t.Errorf("expected the fair use wording; got:\n%s", buf.String())
+	}
+	if strings.Contains(buf.String(), "table/chat") {
+		t.Errorf("quota text must not name chat or table; got:\n%s", buf.String())
+	}
+}
+
+// TestDoctorQuotaHeaderAbsentSkips: chat-api no longer sends
+// X-Queries-Remaining on normal responses, so its absence is a skip pointing
+// at `archivist usage`, not a warning.
+func TestDoctorQuotaHeaderAbsentSkips(t *testing.T) {
+	t.Setenv("ARCHIVIST_TOKEN", "mc_pat_testtoken123")
+
+	srv := httptest.NewServer(cliTokensHandler(http.StatusOK, map[string]interface{}{
+		"user_email": "test@example.com", "tier": "pro", "tokens": []interface{}{},
+	}))
+	defer srv.Close()
+
+	root, buf := makeDoctorRootWithSkill(t, srv.URL)
+	root.SetArgs([]string{"doctor"})
+
+	err := root.Execute()
+	if exitCode := exitCodeFrom(err); exitCode != 0 {
+		t.Errorf("expected exit code 0, got %d; output:\n%s", exitCode, buf.String())
+	}
+	out := buf.String()
+	if strings.Contains(out, "WARN") {
+		t.Errorf("an absent quota header must not warn; got:\n%s", out)
+	}
+	if !strings.Contains(out, "archivist usage") {
+		t.Errorf("expected a pointer at 'archivist usage'; got:\n%s", out)
+	}
+}
+
+// TestDoctorSkillMissingSuggestsUpdateSkill: a missing skill bundle points at
+// `archivist update --skill`.
+func TestDoctorSkillMissingSuggestsUpdateSkill(t *testing.T) {
+	root, buf := makeDoctorRoot(t, "")
+	root.SetArgs([]string{"doctor", "--no-network"})
+	_ = root.Execute()
+	if !strings.Contains(buf.String(), "archivist update --skill") {
+		t.Errorf("expected 'archivist update --skill' suggestion; got:\n%s", buf.String())
 	}
 }
 

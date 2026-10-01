@@ -25,13 +25,26 @@ type mockCompanyResult struct {
 	IssuerKey      *string `json:"issuer_key"`
 }
 
+// researchCompaniesBody wraps results in the GET /research/companies envelope.
+func researchCompaniesBody(results []mockCompanyResult) map[string]interface{} {
+	if results == nil {
+		results = []mockCompanyResult{}
+	}
+	return map[string]interface{}{"results": results, "truncated": false, "next_cursor": nil}
+}
+
+// serveCompanies answers GET /research/companies with the envelope and
+// GET /companies (the catalog) with the bare list.
 func serveCompanies(results []mockCompanyResult) *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/research/companies" {
+			_ = json.NewEncoder(w).Encode(researchCompaniesBody(results))
+			return
+		}
 		_ = json.NewEncoder(w).Encode(results)
 	}))
 }
-
 
 func runCompaniesCmd(args []string, srv *httptest.Server) (stdout, stderr string, err error) {
 	t := os.TempDir()
@@ -172,9 +185,9 @@ func TestCompaniesSearchLimitClamp(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		capturedLimit = r.URL.Query().Get("limit")
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode([]mockCompanyResult{
+		_ = json.NewEncoder(w).Encode(researchCompaniesBody([]mockCompanyResult{
 			{CompanyName: "Apple Inc.", Exchange: "NGS", FilingCount: 100, IssuerKey: strPtrCmd("aapl_us")},
-		})
+		}))
 	}))
 	defer srv.Close()
 
@@ -226,6 +239,80 @@ func TestCompaniesSearchDryRun(t *testing.T) {
 	if !strings.Contains(stdout, "q=Apple") {
 		t.Errorf("expected query in dry-run URL, got: %q", stdout)
 	}
+	if !strings.Contains(stdout, "/research/companies?") {
+		t.Errorf("expected the research route in dry-run URL, got: %q", stdout)
+	}
+}
+
+// TestCompaniesSearchUsesResearchRoute asserts the request path.
+func TestCompaniesSearchUsesResearchRoute(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(researchCompaniesBody([]mockCompanyResult{
+			{CompanyName: "Apple Inc.", Symbol: "AAPL:US", Exchange: "NGS", FilingCount: 1, IssuerKey: strPtrCmd("cik:320193")},
+		}))
+	}))
+	defer srv.Close()
+
+	if _, _, err := runCompaniesCmd([]string{"companies", "search", "--format", "json", "Apple"}, srv); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotPath != "/research/companies" {
+		t.Errorf("path: got %q, want /research/companies", gotPath)
+	}
+}
+
+// TestCompaniesSearchCLIQuotaExit7: the fair use refusal is exit 7 after one
+// request, with the reset date on stderr and the JSON envelope on stdout.
+func TestCompaniesSearchCLIQuotaExit7(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.Header().Set("X-Queries-Remaining", "0")
+		w.Header().Set("Retry-After", "2592000")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error":"Monthly fair use limit reached.","code":"CLI_QUOTA","suggestion":"The limit resets on 2026-11-01. Run 'archivist usage' for details.","limit":1000,"used":1000,"reset_date":"2026-11-01"}`))
+	}))
+	defer srv.Close()
+
+	stdout, stderr, err := runCompaniesCmd([]string{"companies", "search", "--format", "json", "Apple"}, srv)
+	var exitErr *ExitError
+	if !isExitCode(err, ExitRateLimit, &exitErr) {
+		t.Fatalf("expected exit 7, got %T %v", err, err)
+	}
+	if calls != 1 {
+		t.Errorf("expected exactly 1 request, got %d", calls)
+	}
+	if !strings.Contains(stderr, "Monthly fair use limit reached.") || !strings.Contains(stderr, "2026-11-01") {
+		t.Errorf("stderr must name the error and reset date:\n%s", stderr)
+	}
+	var env map[string]interface{}
+	if err := json.Unmarshal([]byte(stdout), &env); err != nil {
+		t.Fatalf("stdout is not the JSON envelope: %v\n%s", err, stdout)
+	}
+	if env["error"] != "CLI_QUOTA" || env["exit_code"] != float64(ExitRateLimit) || env["reset_date"] != "2026-11-01" {
+		t.Errorf("unexpected envelope: %v", env)
+	}
+}
+
+// TestCompaniesSearchProRequiredExit4 maps the free account refusal to 4.
+func TestCompaniesSearchProRequiredExit4(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"error":"This requires a Mosaic Pro account.","code":"PRO_REQUIRED","account_url":"https://mosaic-finance.com/en/pricing/"}`))
+	}))
+	defer srv.Close()
+
+	_, stderr, err := runCompaniesCmd([]string{"companies", "search", "--format", "table", "Apple"}, srv)
+	var exitErr *ExitError
+	if !isExitCode(err, ExitAuthError, &exitErr) {
+		t.Fatalf("expected exit 4, got %T %v", err, err)
+	}
+	if !strings.Contains(stderr, "https://mosaic-finance.com/en/pricing/") {
+		t.Errorf("stderr missing account URL:\n%s", stderr)
+	}
 }
 
 func TestCompaniesGetFound(t *testing.T) {
@@ -260,10 +347,7 @@ func TestCompaniesGetFound(t *testing.T) {
 
 func TestCompaniesGetNotFound(t *testing.T) {
 	// Pass 1 returns empty; pass 2 via /companies also returns empty.
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode([]mockCompanyResult{})
-	}))
+	srv := serveCompanies([]mockCompanyResult{})
 	defer srv.Close()
 
 	_, stderr, err := runCompaniesCmd([]string{"companies", "get", "nonexistent_us"}, srv)
@@ -318,7 +402,7 @@ func TestCompaniesGetDryRun(t *testing.T) {
 }
 
 func TestCompaniesGetPassTwoFallback(t *testing.T) {
-	// Pass 1 (/companies/search) returns a result with a different key;
+	// Pass 1 (/research/companies) returns a result with a different key;
 	// pass 2 (/companies) contains the target key.
 	target := mockCompanyResult{
 		CompanyName: "TD Bank", Exchange: "TSX", FilingCount: 3000, IssuerKey: strPtrCmd("td_ca"),
@@ -333,8 +417,8 @@ func TestCompaniesGetPassTwoFallback(t *testing.T) {
 			_ = json.NewEncoder(w).Encode([]mockCompanyResult{decoy, target})
 			return
 		}
-		// /companies/search returns decoy (no exact key match for "td_ca")
-		_ = json.NewEncoder(w).Encode([]mockCompanyResult{decoy})
+		// /research/companies returns decoy (no exact key match for "td_ca")
+		_ = json.NewEncoder(w).Encode(researchCompaniesBody([]mockCompanyResult{decoy}))
 	}))
 	defer srv.Close()
 

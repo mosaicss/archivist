@@ -18,10 +18,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
@@ -34,7 +34,7 @@ jobs:
 
       - name: Upload coverage
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage
           path: coverage.out
@@ -43,7 +43,7 @@ jobs:
       - name: Install golangci-lint v2
         run: |
           curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh \
-            | sh -s -- -b $(go env GOPATH)/bin v2.12.2
+            | sh -s -- -b $(go env GOPATH)/bin v2.14.0
           golangci-lint --version
 
       - name: golangci-lint
@@ -57,7 +57,7 @@ jobs:
       # registered in Claude Code from any install channel). Snapshot-build
       # the archives and assert the bundle ships a discoverable skill.
       - name: Snapshot build (skill bundle gate)
-        uses: goreleaser/goreleaser-action@v6
+        uses: goreleaser/goreleaser-action@v7
         with:
           distribution: goreleaser
           version: "~> v2"

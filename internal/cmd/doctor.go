@@ -7,6 +7,7 @@ import (
 	"runtime"
 
 	"github.com/mosaicss/archivist/internal/auth"
+	"github.com/mosaicss/archivist/internal/client"
 	"github.com/mosaicss/archivist/internal/doctor"
 	"github.com/spf13/cobra"
 )
@@ -25,12 +26,13 @@ Checks run in order and independently; a single failure does not abort the rest.
 
 Exit codes:
   0 = all checks passed (WARNs are not failures)
-  4 = auth failure (missing credential, invalid token, revoked, no CLI scope)
+  4 = auth failure (missing credential, invalid token, revoked, no Pro account)
   5 = server unreachable or version block
   1 = other failure`,
 		Annotations: map[string]string{
 			"pp:typed-exit-codes": "0,1,4,5",
 			"mcp:read-only":       "true",
+			"mcp:title":           "Health check",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runDoctor(cmd, version, commit, date, formatFlag, quietFlag, noNetworkFlag)
@@ -64,7 +66,7 @@ func runDoctor(cmd *cobra.Command, version, commit, date, formatFlag string, qui
 	token, source, _ := auth.Resolve(tokenFlag)
 	credsPath, _ := auth.CredentialsPath()
 
-	baseURL := os.Getenv("ARCHIVIST_BASE_URL")
+	baseURL := client.ResolveBaseURL()
 
 	cfg := &doctor.RunConfig{
 		Token:           token,

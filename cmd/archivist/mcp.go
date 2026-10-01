@@ -4,9 +4,8 @@
 // same code path a shell user exercises. The 1:1 verb↔tool mapping is the
 // architecture (E39 §2.2): compound tools mean new Cobra verbs first.
 //
-// This file lives in package main because only package main can assemble the
-// full command tree — `table` (cmd/archivist/table.go) registers here, not in
-// internal/cmd.
+// The mcp command lives in package main: it needs the root factory, and the
+// dispatch roots it builds must not contain mcp itself.
 package main
 
 import (
@@ -45,22 +44,20 @@ var mcpSkipCommands = map[string]bool{
 }
 
 // toolSpec carries everything the MCP layer needs for one tool: registration
-// metadata (Name/Description/ReadOnly/Schema) plus dispatch wiring (Path,
-// Positionals, FlagFor, StdinProp).
+// metadata (Name/Title/Description/ReadOnly/Schema) plus dispatch wiring
+// (Path, Positionals, FlagFor).
 type toolSpec struct {
 	Name        string
+	Title       string
 	Description string
 	ReadOnly    bool
 	// Path is the argv prefix, e.g. ["companies", "search"].
 	Path []string
 	// Positionals are required string property names, in Use-string order.
 	Positionals []string
-	// FlagFor maps schema property names to pflag names (filing_type -> filing-type).
+	// FlagFor maps schema property names to pflag names (date_from -> date-from).
 	FlagFor map[string]string
-	// StdinProp names the property whose value feeds the command's stdin via
-	// SetIn (+ implicit --stdin argv). Empty for all tools except table_run.
-	StdinProp string
-	Schema    *jsonschema.Schema
+	Schema  *jsonschema.Schema
 }
 
 // collectTools walks the Cobra tree depth-first and returns one toolSpec per
@@ -93,9 +90,9 @@ func collectTools(root *cobra.Command) []toolSpec {
 // buildToolSpec derives the MCP tool definition for one Cobra command.
 func buildToolSpec(c *cobra.Command, path []string) toolSpec {
 	spec := toolSpec{
-		Name: strings.Join(path, "_"),
-		// Literal comparison on purpose: table carries mcp:read-only "false",
-		// which must NOT read as true.
+		Name:  strings.Join(path, "_"),
+		Title: c.Annotations["mcp:title"],
+		// Literal comparison on purpose: only the string "true" reads as true.
 		ReadOnly: c.Annotations["mcp:read-only"] == "true",
 		Path:     path,
 		FlagFor:  map[string]string{},
@@ -105,31 +102,19 @@ func buildToolSpec(c *cobra.Command, path []string) toolSpec {
 	props := map[string]*jsonschema.Schema{}
 	var required []string
 
-	// Positionals first (Use-string order). Special case table run: the
-	// <spec.yaml|spec.json> positional is replaced by a required spec_yaml
-	// string fed via stdin at dispatch (architecture E39 §2.2).
-	if spec.Name == "table_run" {
-		spec.StdinProp = "spec_yaml"
-		props["spec_yaml"] = &jsonschema.Schema{
-			Type: "string",
-			Description: "Table spec as YAML — the contents of the file you would pass to " +
-				"'archivist table run'. Top-level keys: top_n, rows, columns.",
+	// Positionals first (Use-string order).
+	for _, pos := range positionalNames(c.Use) {
+		props[pos] = &jsonschema.Schema{
+			Type:        "string",
+			Description: "Required positional argument <" + pos + ">.",
 		}
-		required = append(required, "spec_yaml")
-	} else {
-		for _, pos := range positionalNames(c.Use) {
-			props[pos] = &jsonschema.Schema{
-				Type:        "string",
-				Description: "Required positional argument <" + pos + ">.",
-			}
-			required = append(required, pos)
-			spec.Positionals = append(spec.Positionals, pos)
-		}
+		required = append(required, pos)
+		spec.Positionals = append(spec.Positionals, pos)
 	}
 
 	// Local flags only — VisitAll on Flags() (NOT InheritedFlags) keeps the
-	// root --token out naturally; the denylist catches locals like chat's
-	// --token as belt-and-braces.
+	// root --token out naturally; the denylist catches a local --token as
+	// belt-and-braces.
 	c.Flags().VisitAll(func(f *pflag.Flag) {
 		if mcpFlagDenylist[f.Name] || f.Hidden {
 			return
@@ -219,12 +204,15 @@ func sanitizeIdent(s string) string {
 // ─── mcp serve command ───────────────────────────────────────────────────────
 
 // mcpInstructions is sent to hosts in the initialize result (T4.5).
-const mcpInstructions = "Tools mirror the archivist CLI verbs 1:1 and return the same JSON " +
-	"envelopes the CLI emits when piped. Results carry [cite:N] citations and watch URLs " +
-	"that resolve on mosaic-finance.com (the audit surface for every call). Use " +
-	"companies_search to resolve free-text company names to issuer keys before filtering; " +
-	"explain_cascade and explain_defaults document the filter rules the server enforces. " +
-	"Long table runs can exceed host tool timeouts: pass async=true and poll with table_watch."
+const mcpInstructions = "Research SEC and SEDAR filings. Start with search to find passages, " +
+	"then read around them with read_passage (a passage and its neighbours), read_section " +
+	"(a whole section) or toc (a filing's section headers). Every passage carries a " +
+	"permalink url that opens it in Mosaic's filing viewer: cite that url for each claim. " +
+	"Use companies_search to resolve a company name to the symbol that search takes. " +
+	"Tools mirror the archivist CLI verbs 1:1 and return the same JSON the CLI prints when " +
+	"piped; a truncated result carries next_cursor, which the cursor argument takes. " +
+	"Agent access needs a Mosaic Pro account (exit code 4 otherwise) and counts toward a " +
+	"monthly fair use limit (exit code 7 when reached)."
 
 // exitCodeNames mirrors internal/cmd/exitcodes.go (architecture E36 §11.4).
 // Dispatch stamps these on MCP error results so agents can self-correct.
@@ -242,9 +230,9 @@ var exitCodeNames = map[int]string{
 }
 
 // newMCPCmd returns the hidden `mcp` parent with its `serve` subcommand.
-// newRoot builds a PRISTINE full command tree (including table, excluding
-// mcp itself — the factory closure predates mcp registration in main.go, so
-// recursion is structurally impossible). The walker reads one fresh tree at
+// newRoot builds a PRISTINE full command tree (excluding mcp itself — the
+// factory closure predates mcp registration in main.go, so recursion is
+// structurally impossible). The walker reads one fresh tree at
 // startup; every dispatch executes another. Fresh-root-per-call is
 // non-negotiable: Cobra flag values live in closures captured at
 // construction, so a reused root bleeds flag state across concurrent calls.
@@ -322,24 +310,31 @@ func buildMCPServer(newRoot func() *cobra.Command, version, tokenOverride string
 		// the generic mcp.AddTool[In,Out] infers schemas from Go structs.
 		server.AddTool(&mcp.Tool{
 			Name:        spec.Name,
+			Title:       spec.Title,
 			Description: spec.Description,
 			InputSchema: spec.Schema,
-			Annotations: &mcp.ToolAnnotations{ReadOnlyHint: spec.ReadOnly},
+			Annotations: &mcp.ToolAnnotations{
+				Title:           spec.Title,
+				ReadOnlyHint:    spec.ReadOnly,
+				DestructiveHint: boolPtr(false),
+				OpenWorldHint:   boolPtr(false),
+			},
 		}, newToolHandler(newRoot, spec, tokenOverride))
 	}
 	return server, len(specs)
 }
 
+func boolPtr(b bool) *bool { return &b }
+
 // newToolHandler returns the dispatch handler for one tool. Each call decodes
 // the raw arguments, builds argv, and executes a FRESH root command with
 // buffered stdout/stderr — concurrency-safe, no flag-state bleed (AC9).
 //
-// Accepted v1 limit: verbs build context.Background() internally, so MCP-side
-// cancellation does not abort in-flight HTTP calls. Long table fan-outs may
-// exceed host tool timeouts — agents should use async + table_watch.
+// The dispatched root runs under the request context (ExecuteContext), so a
+// host cancellation reaches the verb's Client.Do and aborts its HTTP call.
 func newToolHandler(newRoot func() *cobra.Command, spec toolSpec, tokenOverride string) mcp.ToolHandler {
 	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		argv, stdinPayload, usageErr := buildArgv(spec, req.Params.Arguments, tokenOverride)
+		argv, usageErr := buildArgv(spec, req.Params.Arguments, tokenOverride)
 		if usageErr != "" {
 			return errorResult(cmd.ExitUsageError, usageErr, ""), nil
 		}
@@ -348,12 +343,10 @@ func newToolHandler(newRoot func() *cobra.Command, spec toolSpec, tokenOverride 
 		var stdout, stderr bytes.Buffer
 		r.SetOut(&stdout)
 		r.SetErr(&stderr)
-		if stdinPayload != "" {
-			r.SetIn(strings.NewReader(stdinPayload))
-		}
+		r.SetIn(strings.NewReader(""))
 		r.SetArgs(argv)
 
-		if err := r.Execute(); err != nil {
+		if err := r.ExecuteContext(ctx); err != nil {
 			code := cmd.ExitUsageError // non-ExitError errors map to usage semantics (main.go parity)
 			var exitErr *cmd.ExitError
 			if errors.As(err, &exitErr) {
@@ -375,49 +368,37 @@ func newToolHandler(newRoot func() *cobra.Command, spec toolSpec, tokenOverride 
 }
 
 // buildArgv translates decoded tool arguments into a CLI argv. Returns the
-// argv, the stdin payload (table_run's spec_yaml), and a usage-error message
-// ("" when valid). The untyped AddTool path does NOT schema-validate inputs,
-// so required/unknown/type checks happen here.
-func buildArgv(spec toolSpec, rawArgs json.RawMessage, tokenOverride string) (argv []string, stdinPayload, usageErr string) {
+// argv and a usage-error message ("" when valid). The untyped AddTool path
+// does NOT schema-validate inputs, so required/unknown/type checks happen
+// here.
+func buildArgv(spec toolSpec, rawArgs json.RawMessage, tokenOverride string) (argv []string, usageErr string) {
 	args := map[string]any{}
 	if len(rawArgs) > 0 {
 		dec := json.NewDecoder(bytes.NewReader(rawArgs))
 		dec.UseNumber()
 		if err := dec.Decode(&args); err != nil {
-			return nil, "", fmt.Sprintf("invalid tool arguments JSON: %v", err)
+			return nil, fmt.Sprintf("invalid tool arguments JSON: %v", err)
 		}
 	}
 
 	argv = append(argv, spec.Path...)
 	consumed := map[string]bool{}
 
-	// Positionals in Use-string order.
+	// Positionals in Use-string order. They are appended after a "--"
+	// terminator below, so a value such as "-10% revenue" or "--stdin" stays
+	// an argument and is never parsed as a flag.
+	var positionals []string
 	for _, pos := range spec.Positionals {
 		v, ok := args[pos]
 		if !ok {
-			return nil, "", fmt.Sprintf("missing required argument %q", pos)
+			return nil, fmt.Sprintf("missing required argument %q", pos)
 		}
 		s, ok := v.(string)
 		if !ok {
-			return nil, "", fmt.Sprintf("argument %q must be a string", pos)
+			return nil, fmt.Sprintf("argument %q must be a string", pos)
 		}
-		argv = append(argv, s)
+		positionals = append(positionals, s)
 		consumed[pos] = true
-	}
-
-	// table_run: spec_yaml feeds stdin; the verb reads it via InOrStdin (T2).
-	if spec.StdinProp != "" {
-		v, ok := args[spec.StdinProp]
-		if !ok {
-			return nil, "", fmt.Sprintf("missing required argument %q", spec.StdinProp)
-		}
-		s, ok := v.(string)
-		if !ok {
-			return nil, "", fmt.Sprintf("argument %q must be a string", spec.StdinProp)
-		}
-		stdinPayload = s
-		argv = append(argv, "--stdin")
-		consumed[spec.StdinProp] = true
 	}
 
 	// Flags in sorted property order for deterministic argv.
@@ -431,21 +412,21 @@ func buildArgv(spec toolSpec, rawArgs json.RawMessage, tokenOverride string) (ar
 	for _, k := range keys {
 		flagName, ok := spec.FlagFor[k]
 		if !ok {
-			return nil, "", fmt.Sprintf("unknown argument %q for tool %s", k, spec.Name)
+			return nil, fmt.Sprintf("unknown argument %q for tool %s", k, spec.Name)
 		}
 		switch v := args[k].(type) {
 		case []any:
 			for _, elem := range v {
 				s, ok := jsonScalarString(elem)
 				if !ok {
-					return nil, "", fmt.Sprintf("argument %q: array elements must be scalars", k)
+					return nil, fmt.Sprintf("argument %q: array elements must be scalars", k)
 				}
 				argv = append(argv, "--"+flagName+"="+s)
 			}
 		default:
 			s, ok := jsonScalarString(v)
 			if !ok {
-				return nil, "", fmt.Sprintf("argument %q must be a scalar or array of scalars", k)
+				return nil, fmt.Sprintf("argument %q must be a scalar or array of scalars", k)
 			}
 			argv = append(argv, "--"+flagName+"="+s)
 		}
@@ -454,7 +435,11 @@ func buildArgv(spec toolSpec, rawArgs json.RawMessage, tokenOverride string) (ar
 	if tokenOverride != "" {
 		argv = append(argv, "--token", tokenOverride)
 	}
-	return argv, stdinPayload, ""
+	if len(positionals) > 0 {
+		argv = append(argv, "--")
+		argv = append(argv, positionals...)
+	}
+	return argv, ""
 }
 
 // jsonScalarString renders a decoded JSON scalar as a flag value. Numbers
@@ -477,7 +462,8 @@ func jsonScalarString(v any) (string, bool) {
 
 // errorResult shapes a typed CLI failure as an MCP tool error (AC6): the text
 // names the exit code, then carries captured stderr and stdout sections —
-// stdout matters because exit-6 ambiguous-company JSON lands there.
+// stdout matters because the JSON error envelope and a zero-result search
+// body land there.
 func errorResult(code int, stderrText, stdoutText string) *mcp.CallToolResult {
 	name := exitCodeNames[code]
 	if name == "" {

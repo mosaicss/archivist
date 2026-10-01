@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,10 +16,9 @@ import (
 )
 
 // Tokens are issued from Clerk's UserProfile popup, reached via the user
-// avatar on any signed-in page on mosaic-finance.com. The 36.2 cleanup
-// removed the standalone /account/cli-tokens page; this URL points to a
-// stable signed-in landing so users can open the avatar menu from there.
-const dashboardURL = "https://mosaic-finance.com/chat"
+// avatar on any signed-in Mosaic page. The binary prints one Mosaic page of
+// its own, client.AccountURL; from there the avatar menu opens the key list.
+const dashboardURL = client.AccountURL
 
 // newAuthCmd returns the `archivist auth` command with real subcommands.
 func newAuthCmd(version string) *cobra.Command {
@@ -79,7 +77,7 @@ For CI or scripting, the environment variable override still works:
 
 			// Interactive terminals get an echo off paste prompt. Agents and
 			// pipes (stdin not a TTY) get instructions only and must never
-			// block waiting for input. Check stdin's fd, not stdout: chat.go's
+			// block waiting for input. Check stdin's fd, not stdout: output_helpers.go's
 			// isTerminal inspects an io.Writer and cannot answer this.
 			if !term.IsTerminal(int(os.Stdin.Fd())) {
 				return nil
@@ -114,6 +112,7 @@ func loginWithToken(cmd *cobra.Command, version, token string) error {
 	}
 
 	c := client.New(token, version)
+	c.SetStderr(cmd.ErrOrStderr())
 	resp, err := c.GetCLITokens(cmd.Context())
 	if err != nil {
 		if errors.Is(err, client.ErrUnauthorized) {
@@ -122,10 +121,12 @@ func loginWithToken(cmd *cobra.Command, version, token string) error {
 				dashboardURL)
 			return &ExitError{Code: ExitAuthError}
 		}
-		_, _ = fmt.Fprintf(cmd.ErrOrStderr(),
-			"Could not verify token against the server: %v\nNothing was saved. If the server is down, export ARCHIVIST_TOKEN=ak_... as a temporary workaround.\n",
-			err)
-		return &ExitError{Code: ExitServerError}
+		// The exit code comes from the status and code (apierror.go); a
+		// min-version block the client already printed is not repeated.
+		failErr := failFromDo(cmd, err, "")
+		_, _ = fmt.Fprintln(cmd.ErrOrStderr(),
+			"Nothing was saved. If the server is down, export ARCHIVIST_TOKEN=ak_... as a temporary workaround.")
+		return failErr
 	}
 
 	path, err := auth.SaveToken(token)
@@ -154,6 +155,7 @@ func newAuthStatusCmd(version string) *cobra.Command {
 		Annotations: map[string]string{
 			"pp:typed-exit-codes": "0,4,5",
 			"mcp:read-only":       "true",
+			"mcp:title":           "Credential status",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runAuthStatus(cmd, version, formatJSON)
@@ -176,6 +178,7 @@ func newAuthWhoamiCmd(version string) *cobra.Command {
 		Annotations: map[string]string{
 			"pp:typed-exit-codes": "0,4,5",
 			"mcp:read-only":       "true",
+			"mcp:title":           "Who am I",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runAuthStatus(cmd, version, false)
@@ -229,19 +232,20 @@ func runAuthStatus(cmd *cobra.Command, version string, _ bool) error {
 		return &ExitError{Code: ExitAuthError}
 	}
 
+	formatFlag, _ := cmd.Flags().GetString("format")
+
 	c := client.New(token, version)
-	resp, err := c.GetCLITokens(context.Background())
+	c.SetStderr(cmd.ErrOrStderr())
+	resp, err := c.GetCLITokens(cmd.Context())
 	if err != nil {
 		if errors.Is(err, client.ErrUnauthorized) {
 			_, _ = fmt.Fprintf(cmd.ErrOrStderr(),
 				"Token invalid or revoked. Create a new key via your avatar menu (Manage account → API keys) at %s\n", dashboardURL)
 			return &ExitError{Code: ExitAuthError}
 		}
-		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Server error: %v\n", err)
-		return &ExitError{Code: ExitServerError}
+		return failFromDo(cmd, err, formatFlag)
 	}
 
-	formatFlag, _ := cmd.Flags().GetString("format")
 	if formatFlag == "json" {
 		var keyID, issued string
 		if len(resp.Tokens) > 0 {

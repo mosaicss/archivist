@@ -27,6 +27,7 @@ func NewVersionCmd(version, commit, date string) *cobra.Command {
 		Annotations: map[string]string{
 			"pp:typed-exit-codes": "0",
 			"mcp:read-only":       "true",
+			"mcp:title":           "Version",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(),

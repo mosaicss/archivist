@@ -2,6 +2,9 @@ package cmd
 
 import (
 	"bytes"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -60,16 +63,11 @@ func TestRenderBar_HalfFilledContent(t *testing.T) {
 	}
 }
 
-func TestFormatUsageHuman_ProWithBundle(t *testing.T) {
+func TestFormatUsageHuman_Pro(t *testing.T) {
 	limit := (*int)(nil) // unlimited for pro
 	u := &UsageResponse{
 		Tier:      "pro",
 		TierLabel: "Pro ($30/mo, active)",
-		Bundle: &UsageBundle{
-			Name:       "Archivist CLI",
-			PriceLabel: "$15/mo bolt-on, active",
-			Active:     true,
-		},
 		Usage: UsageStats{
 			ThisMonth:    47,
 			WebThisMonth: 30,
@@ -94,8 +92,8 @@ func TestFormatUsageHuman_ProWithBundle(t *testing.T) {
 	if !strings.Contains(out, "Pro ($30/mo, active)") {
 		t.Errorf("missing tier label in output:\n%s", out)
 	}
-	if !strings.Contains(out, "Archivist CLI") {
-		t.Errorf("missing bundle name in output:\n%s", out)
+	if strings.Contains(out, "Bundle") {
+		t.Errorf("the Bundle line is gone since 73.7:\n%s", out)
 	}
 	if !strings.Contains(out, "47 / unlimited") {
 		t.Errorf("missing monthly count in output:\n%s", out)
@@ -116,7 +114,6 @@ func TestFormatUsageHuman_FreeTier(t *testing.T) {
 	u := &UsageResponse{
 		Tier:      "free",
 		TierLabel: "Free",
-		Bundle:    nil,
 		Usage: UsageStats{
 			ThisMonth:    12,
 			WebThisMonth: 12,
@@ -141,10 +138,48 @@ func TestFormatUsageHuman_FreeTier(t *testing.T) {
 	if !strings.Contains(out, "Free") {
 		t.Errorf("missing tier in output:\n%s", out)
 	}
-	if !strings.Contains(out, "Bundle:      none") {
-		t.Errorf("missing bundle:none in output:\n%s", out)
-	}
 	if !strings.Contains(out, "12 / 25") {
 		t.Errorf("missing monthly count in output:\n%s", out)
+	}
+}
+
+// TestUsageMapsHTTPFailures routes non-2xx /account/usage answers through the
+// shared mapper: a free account's 403 PRO_REQUIRED is exit 4 with the
+// account URL, a 401 is exit 4.
+func TestUsageMapsHTTPFailures(t *testing.T) {
+	cases := []struct {
+		status   int
+		body     string
+		wantExit int
+		wantErr  string
+	}{
+		{http.StatusForbidden, `{"error":"This requires a Mosaic Pro account.","code":"PRO_REQUIRED","account_url":"https://mosaic-finance.com/en/pricing/"}`, ExitAuthError, "https://mosaic-finance.com/en/pricing/"},
+		{http.StatusUnauthorized, ``, ExitAuthError, "authentication failed. Run 'archivist auth status'"},
+		{http.StatusPaymentRequired, `{"error":"Upgrade needed","code":"PAYMENT_REQUIRED"}`, ExitAuthError, "Upgrade needed"},
+	}
+	for _, tc := range cases {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(tc.status)
+			_, _ = w.Write([]byte(tc.body))
+		}))
+		t.Setenv("ARCHIVIST_BASE_URL", srv.URL)
+		t.Setenv("ARCHIVIST_TOKEN", "mc_pat_testtoken")
+		root := NewRootCmd("0.2.22", "abc", "today")
+		var stdout, stderr bytes.Buffer
+		root.SetOut(&stdout)
+		root.SetErr(&stderr)
+		root.SetArgs([]string{"usage"})
+		err := root.Execute()
+		srv.Close()
+		var exitErr *ExitError
+		if !errors.As(err, &exitErr) || exitErr.Code != tc.wantExit {
+			t.Errorf("status %d: want exit %d, got %v", tc.status, tc.wantExit, err)
+		}
+		if !strings.Contains(stderr.String(), tc.wantErr) {
+			t.Errorf("status %d: stderr missing %q:\n%s", tc.status, tc.wantErr, stderr.String())
+		}
+		if strings.Contains(stderr.String(), "quota exceeded") {
+			t.Errorf("status %d: must never print 'quota exceeded'", tc.status)
+		}
 	}
 }

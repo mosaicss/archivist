@@ -8,41 +8,34 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/mosaicss/archivist/internal/auth"
-	"github.com/mosaicss/archivist/internal/client"
 	"github.com/spf13/cobra"
 )
 
-// UsageResponse mirrors the GET /account/usage JSON shape.
+// UsageResponse mirrors the GET /account/usage JSON shape. The server still
+// sends `bundle: null` (agent access is part of the plan since 73.1); it is
+// not decoded.
 type UsageResponse struct {
-	Tier      string          `json:"tier"`
-	TierLabel string          `json:"tier_label"`
-	Bundle    *UsageBundle    `json:"bundle"`
-	Usage     UsageStats      `json:"usage"`
-	FreeTrial interface{}     `json:"free_trial"`
-	RateLimit UsageRateLimit  `json:"rate_limit"`
-	Last7Days []int           `json:"last_7_days"`
-}
-
-type UsageBundle struct {
-	Name       string `json:"name"`
-	PriceLabel string `json:"price_label"`
-	Active     bool   `json:"active"`
+	Tier      string         `json:"tier"`
+	TierLabel string         `json:"tier_label"`
+	Usage     UsageStats     `json:"usage"`
+	FreeTrial interface{}    `json:"free_trial"`
+	RateLimit UsageRateLimit `json:"rate_limit"`
+	Last7Days []int          `json:"last_7_days"`
 }
 
 type UsageStats struct {
-	ThisMonth    int     `json:"this_month"`
-	WebThisMonth int     `json:"web_this_month"`
-	CLIThisMonth int     `json:"cli_this_month"`
-	Limit        *int    `json:"limit"`
-	ResetDate    string  `json:"reset_date"`
+	ThisMonth    int    `json:"this_month"`
+	WebThisMonth int    `json:"web_this_month"`
+	CLIThisMonth int    `json:"cli_this_month"`
+	Limit        *int   `json:"limit"`
+	ResetDate    string `json:"reset_date"`
 }
 
 type UsageRateLimit struct {
-	WindowSeconds int `json:"window_seconds"`
-	Limit         int `json:"limit"`
-	Used          int `json:"used"`
-	Remaining     int `json:"remaining"`
+	WindowSeconds  int `json:"window_seconds"`
+	Limit          int `json:"limit"`
+	Used           int `json:"used"`
+	Remaining      int `json:"remaining"`
 	ResetInSeconds int `json:"reset_in_seconds"`
 }
 
@@ -68,13 +61,6 @@ func RenderBar(used, total, width int) string {
 func formatUsageHuman(out io.Writer, u *UsageResponse) {
 	// Tier line
 	_, _ = fmt.Fprintf(out, "Tier:        %s\n", u.TierLabel)
-
-	// Bundle line
-	if u.Bundle != nil && u.Bundle.Active {
-		_, _ = fmt.Fprintf(out, "Bundle:      + %s (%s)\n", u.Bundle.Name, u.Bundle.PriceLabel)
-	} else {
-		_, _ = fmt.Fprintf(out, "Bundle:      none\n")
-	}
 
 	// Monthly usage line
 	limitStr := "unlimited"
@@ -122,41 +108,30 @@ func NewUsageCmd(version string) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "usage",
-		Short: "Report quota and rate limit consumption",
+		Short: "Report monthly fair use and rate limit consumption",
 		Args:  cobra.NoArgs,
 		Annotations: map[string]string{
-			"pp:typed-exit-codes": "0,4,5",
+			"pp:typed-exit-codes": "0,1,4,5,7",
 			"mcp:read-only":       "true",
+			"mcp:title":           "Usage and fair use",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			tokenFlag, _ := cmd.Root().PersistentFlags().GetString("token")
-			token, err := auth.ResolveToken(tokenFlag)
-			if err != nil {
-				_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "archivist: not authenticated -- run 'archivist auth status' to verify your token")
-				return &ExitError{Code: ExitAuthError}
-			}
-
-			c := client.New(token, version)
-
 			// Auto-JSON when not a TTY.
-			if !isTerminal(cmd.OutOrStdout()) && formatFlag == "" {
-				formatFlag = "json"
+			format := resolveFormat(formatFlag, cmd.OutOrStdout(), "human")
+
+			c, err := newResearchClient(cmd, version, format)
+			if err != nil {
+				return err
 			}
 
 			resp, err := c.Do(cmd.Context(), http.MethodGet, "/account/usage", nil)
 			if err != nil {
-				_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "archivist: server error: %v\n", err)
-				return &ExitError{Code: ExitServerError}
+				return failFromDo(cmd, err, format)
 			}
 			defer func() { _ = resp.Body.Close() }()
 
-			if resp.StatusCode == http.StatusUnauthorized {
-				_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "archivist: not authenticated -- run 'archivist auth status' to verify your token")
-				return &ExitError{Code: ExitAuthError}
-			}
-			if resp.StatusCode >= 500 {
-				_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "archivist: server error (HTTP %d)\n", resp.StatusCode)
-				return &ExitError{Code: ExitServerError}
+			if resp.StatusCode < 200 || resp.StatusCode > 299 {
+				return failFromResponse(cmd, resp, format)
 			}
 
 			bodyBytes, err := io.ReadAll(resp.Body)
@@ -165,9 +140,8 @@ func NewUsageCmd(version string) *cobra.Command {
 				return &ExitError{Code: ExitServerError}
 			}
 
-			if formatFlag == "json" {
-				_, _ = fmt.Fprintln(cmd.OutOrStdout(), string(bodyBytes))
-				return nil
+			if format == "json" {
+				return emitJSON(cmd, bodyBytes, format)
 			}
 
 			var usageResp UsageResponse
