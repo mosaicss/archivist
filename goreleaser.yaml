@@ -113,9 +113,10 @@ notarize:
         key_id: "{{.Env.APPLE_API_KEY_ID}}"
         key: "{{.Env.APPLE_API_KEY_P8}}"
 
-# Homebrew cask publishing (migrated from `brews:`, which goreleaser fully
-# deprecated in v2.16 — release.yml floats `~> v2`, so the deprecated block
-# would fail the next release). Casks land in the tap's Casks/ directory
+# Homebrew cask publishing (migrated from `brews:`, which goreleaser
+# deprecated in v2.16; deprecated, not removed: it still runs with a warning,
+# and casks are the supported path for prebuilt binaries). Casks land in the
+# tap's Casks/ directory
 # (the goreleaser default — no `directory:` override). The cask DSL has no
 # `test do` block, so the old formula-only test was dropped here.
 # Publishing requires the mosaic-finance-inc/homebrew-tap repo and the

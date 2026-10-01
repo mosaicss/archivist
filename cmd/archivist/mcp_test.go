@@ -1,9 +1,12 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -12,9 +15,11 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/mosaicss/archivist/internal/cmd"
 	"github.com/spf13/cobra"
 )
 
@@ -23,19 +28,20 @@ import (
 var expectedToolNames = []string{
 	"auth_status",
 	"auth_whoami",
-	"chat",
 	"companies_get",
 	"companies_search",
 	"doctor",
-	"explain_cascade",
-	"explain_defaults",
-	"table",
-	"table_list",
-	"table_rerun",
-	"table_run",
-	"table_watch",
+	"read_passage",
+	"read_section",
+	"search",
+	"toc",
 	"usage",
 	"version",
+}
+
+// buildRootForTest mirrors main() setup for use in tests.
+func buildRootForTest(version string) *cobra.Command {
+	return cmd.NewRootCmd(version, "test", "test")
 }
 
 func collectToolsForTest(t *testing.T) []toolSpec {
@@ -43,7 +49,7 @@ func collectToolsForTest(t *testing.T) []toolSpec {
 	return collectTools(buildRootForTest("dev"))
 }
 
-// TestCollectTools_ExactSet asserts the 15-tool set as an exact match (AC2),
+// TestCollectTools_ExactSet asserts the 11-tool set as an exact match (AC2),
 // which doubles as the hidden-verb assertion (AC3): auth_login, auth_logout,
 // update, and any mcp* self-entry would break set equality.
 func TestCollectTools_ExactSet(t *testing.T) {
@@ -93,70 +99,36 @@ func TestCollectTools_DenylistAbsent(t *testing.T) {
 	}
 }
 
-// TestCollectTools_ChatSchema asserts chat carries a required positional
-// question plus the flag-derived properties, with attach_filing as
-// array-of-string (AC2).
-func TestCollectTools_ChatSchema(t *testing.T) {
-	s := findSpec(t, "chat")
-	if len(s.Positionals) != 1 || s.Positionals[0] != "question" {
-		t.Fatalf("chat positionals: want [question], got %v", s.Positionals)
-	}
-	if !contains(s.Schema.Required, "question") {
-		t.Errorf("chat schema: question not required: %v", s.Schema.Required)
-	}
-	q, ok := s.Schema.Properties["question"]
-	if !ok || q.Type != "string" {
-		t.Errorf("chat schema: question must be a string property, got %+v", q)
-	}
-	af, ok := s.Schema.Properties["attach_filing"]
-	if !ok {
-		t.Fatalf("chat schema: attach_filing missing; props: %v", propNames(s))
-	}
-	if af.Type != "array" || af.Items == nil || af.Items.Type != "string" {
-		t.Errorf("chat schema: attach_filing must be array-of-string, got %+v", af)
-	}
-	for _, want := range []string{"company", "filing_type", "date_from", "date_to", "model", "conversation", "format", "compact", "dry_run"} {
-		if _, ok := s.Schema.Properties[want]; !ok {
-			t.Errorf("chat schema: property %q missing; props: %v", want, propNames(s))
+// TestCollectTools_TitlesAndReadOnly asserts every tool carries a non-empty
+// title from mcp:title and ReadOnly from mcp:read-only "true".
+func TestCollectTools_TitlesAndReadOnly(t *testing.T) {
+	for _, s := range collectToolsForTest(t) {
+		if strings.TrimSpace(s.Title) == "" {
+			t.Errorf("tool %s: empty title", s.Name)
+		}
+		if !s.ReadOnly {
+			t.Errorf("tool %s: want ReadOnly=true", s.Name)
 		}
 	}
 }
 
-// TestCollectTools_TableRunSpecYAML asserts the table_run positional is
-// replaced by a required spec_yaml string wired to stdin dispatch (AC7).
-func TestCollectTools_TableRunSpecYAML(t *testing.T) {
-	s := findSpec(t, "table_run")
-	if s.StdinProp != "spec_yaml" {
-		t.Errorf("table_run StdinProp: want spec_yaml, got %q", s.StdinProp)
+// TestCollectTools_SearchSchema asserts search carries a required query
+// positional and its filter flags, with limit as an integer.
+func TestCollectTools_SearchSchema(t *testing.T) {
+	s := findSpec(t, "search")
+	if len(s.Positionals) != 1 || s.Positionals[0] != "query" {
+		t.Fatalf("search positionals: want [query], got %v", s.Positionals)
 	}
-	if len(s.Positionals) != 0 {
-		t.Errorf("table_run positionals must be empty (spec_yaml replaces them), got %v", s.Positionals)
-	}
-	if !contains(s.Schema.Required, "spec_yaml") {
-		t.Errorf("table_run schema: spec_yaml not required: %v", s.Schema.Required)
-	}
-	sy, ok := s.Schema.Properties["spec_yaml"]
-	if !ok || sy.Type != "string" {
-		t.Errorf("table_run schema: spec_yaml must be a string property, got %+v", sy)
-	}
-	for _, want := range []string{"async", "watch", "format", "compact", "dry_run"} {
+	for _, want := range []string{"symbol", "formtype", "date_from", "date_to", "mode", "limit", "cursor", "format", "dry_run"} {
 		if _, ok := s.Schema.Properties[want]; !ok {
-			t.Errorf("table_run schema: property %q missing; props: %v", want, propNames(s))
+			t.Errorf("search schema: property %q missing; props: %v", want, propNames(s))
 		}
 	}
-}
-
-// TestCollectTools_ReadOnlyHint asserts mcp:read-only "true" maps to
-// ReadOnly=true and the literal "false" string does NOT read as true (AC2).
-func TestCollectTools_ReadOnlyHint(t *testing.T) {
-	if s := findSpec(t, "companies_search"); !s.ReadOnly {
-		t.Error("companies_search: want ReadOnly=true")
+	if s.Schema.Properties["limit"].Type != "integer" {
+		t.Errorf("search limit: want integer, got %q", s.Schema.Properties["limit"].Type)
 	}
-	if s := findSpec(t, "table"); s.ReadOnly {
-		t.Error("table: annotation is the literal string \"false\" — must not read as true")
-	}
-	if s := findSpec(t, "table_run"); s.ReadOnly {
-		t.Error("table_run: want ReadOnly=false")
+	if s.FlagFor["date_from"] != "date-from" {
+		t.Errorf("date_from must map to --date-from, got %q", s.FlagFor["date_from"])
 	}
 }
 
@@ -199,11 +171,12 @@ func TestCollectTools_Descriptions(t *testing.T) {
 // parse for every positional-bearing verb (T3.3).
 func TestCollectTools_PositionalSanitization(t *testing.T) {
 	cases := map[string][]string{
-		"table_rerun":      {"session_id"},
-		"table_watch":      {"session_id"},
+		"search":           {"query"},
+		"read_passage":     {"chunk_id"},
+		"read_section":     {"filing_id", "section_header"},
+		"toc":              {"filing_id"},
 		"companies_search": {"query"},
 		"companies_get":    {"issuer_key"},
-		"chat":             {"question"},
 	}
 	for name, want := range cases {
 		s := findSpec(t, name)
@@ -221,8 +194,7 @@ func TestCollectTools_PositionalSanitization(t *testing.T) {
 
 // TestPackageMainCommandsHaveAnnotations mirrors internal/cmd's
 // TestAllCommandsHaveAnnotations for commands registered in package main —
-// root_test.go walks NewRootCmd only and cannot see table, mcp, or mcp serve
-// (T4.6). Also asserts mcp + serve are annotated mcp:hidden so the walker
+// root_test.go walks NewRootCmd only and cannot see mcp or mcp serve (T4.6). Also asserts mcp + serve are annotated mcp:hidden so the walker
 // never maps a self-entry (AC3).
 func TestPackageMainCommandsHaveAnnotations(t *testing.T) {
 	newRoot := func() *cobra.Command { return buildRootForTest("dev") }
@@ -311,8 +283,8 @@ func callToolText(t *testing.T, cs *mcp.ClientSession, name string, args map[str
 	return text, res.IsError
 }
 
-// TestMCPServer_ToolsList covers AC2 + AC3 over the wire: exact 15-tool set,
-// hidden verbs absent, ReadOnlyHint surfaces correctly.
+// TestMCPServer_ToolsList covers AC2 + AC3 over the wire: exact 11-tool set,
+// hidden verbs absent, title and all three hints surface on every tool.
 func TestMCPServer_ToolsList(t *testing.T) {
 	cs := newMCPSession(t, "")
 	res, err := cs.ListTools(context.Background(), nil)
@@ -337,16 +309,14 @@ func TestMCPServer_ToolsList(t *testing.T) {
 			t.Errorf("hidden verb %q leaked into tools/list", hidden)
 		}
 	}
-	if tool := got["companies_search"]; tool.Annotations == nil || !tool.Annotations.ReadOnlyHint {
-		t.Error("companies_search: want ReadOnlyHint=true over the wire")
-	}
-	if tool := got["table"]; tool.Annotations != nil && tool.Annotations.ReadOnlyHint {
-		t.Error("table: ReadOnlyHint must be false/absent over the wire")
-	}
 	for _, tool := range res.Tools {
 		if strings.TrimSpace(tool.Description) == "" {
 			t.Errorf("tool %s: empty description over the wire", tool.Name)
 		}
+		assertToolTitleAndHints(t, tool)
+	}
+	if got["search"].Title != "Search filings" {
+		t.Errorf("search title: got %q", got["search"].Title)
 	}
 }
 
@@ -413,67 +383,116 @@ func TestMCPServer_ServerErrorSurfacesExitCode5(t *testing.T) {
 	}
 }
 
-// TestMCPServer_AmbiguousCompanyPreservesEnvelope covers AC6's exit-6 leg:
-// the AMBIGUOUS_COMPANY JSON the verb prints to stdout must survive into the
-// error text's stdout section.
-func TestMCPServer_AmbiguousCompanyPreservesEnvelope(t *testing.T) {
-	results := []mockMCPCompanyResult{
-		{CompanyName: "Apple Canada Ltd.", Symbol: "APL:TSX", Exchange: "TSX", FilingCount: 5, IssuerKey: strPtr("apple_ca")},
-		{CompanyName: "Apple Inc.", Symbol: "AAPL:US", Exchange: "NGS", FilingCount: 8, IssuerKey: strPtr("aapl_us")},
-	}
-	srv := serveMCPCompanies(t, results)
+// TestMCPServer_SearchRoundTrip: the search tool result text equals what the
+// CLI prints for the same invocation when piped (the server body
+// re-indented), byte for byte, and carries the permalink.
+func TestMCPServer_SearchRoundTrip(t *testing.T) {
+	const permalink = "https://mosaic-finance.com/filings/aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee/?c=11111111-2222-4333-8444-555555555555&t=k1.mac"
+	body := `{"results":[{"id":"11111111-2222-4333-8444-555555555555","filing_id":"aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",` +
+		`"company_name":"Apple Inc.","symbol":"AAPL:US","exchange":"NGS","formtype":"10-K","formdescription":"Annual Report",` +
+		`"datefiled":"2025-11-01","section_header":"Risk Factors","chunk_index":4,"snippet":"Supply chain risk.",` +
+		`"url":"` + permalink + `","source_url":null}],"entity_resolution":null,"truncated":false,"next_cursor":null}`
+	var gotQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/research/search" {
+			http.NotFound(w, r)
+			return
+		}
+		gotQuery = r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(srv.Close)
 
 	cs := newMCPSession(t, srv.URL)
-	text, isError := callToolText(t, cs, "chat", map[string]any{
-		"question": "What was revenue?",
-		"company":  "Apple",
+	toolText, isError := callToolText(t, cs, "search", map[string]any{
+		"query":     "supply chain",
+		"symbol":    "AAPL:US",
+		"date_from": "2024-01-01",
+		"limit":     5,
 	})
-	if !isError {
-		t.Fatalf("want IsError=true for ambiguous company, got success:\n%s", text)
+	if isError {
+		t.Fatalf("search returned IsError, text:\n%s", toolText)
 	}
-	if !strings.Contains(text, "exit code 6 (ambiguous match)") {
-		t.Errorf("error text missing 'exit code 6 (ambiguous match)':\n%s", text)
+	for _, want := range []string{"q=supply+chain", "symbol=AAPL%3AUS", "date_from=2024-01-01", "limit=5"} {
+		if !strings.Contains(gotQuery, want) {
+			t.Errorf("request query %q missing %q", gotQuery, want)
+		}
 	}
-	if !strings.Contains(text, "AMBIGUOUS_COMPANY") {
-		t.Errorf("error text lost the AMBIGUOUS_COMPANY stdout JSON:\n%s", text)
+
+	root := buildRootForTest("dev")
+	var stdout, stderr bytes.Buffer
+	root.SetOut(&stdout)
+	root.SetErr(&stderr)
+	root.SetArgs([]string{"search", "supply chain", "--symbol=AAPL:US", "--date-from=2024-01-01", "--limit=5"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("CLI invocation: %v\nstderr: %s", err, stderr.String())
 	}
-	if !strings.Contains(text, "--- stdout ---") {
-		t.Errorf("error text missing stdout section:\n%s", text)
+	if toolText != stdout.String() {
+		t.Errorf("round-trip parity broken\nMCP tool text:\n%s\nCLI stdout:\n%s", toolText, stdout.String())
+	}
+	if !strings.Contains(toolText, permalink) {
+		t.Errorf("tool text lost the permalink:\n%s", toolText)
 	}
 }
 
-// TestMCPServer_TableRunSpecYAMLDryRun covers AC7's dispatch leg: spec_yaml
-// feeds the verb's stdin via SetIn + --stdin, dry_run echoes the wire payload
-// — proving stdin injection + spec parse with zero network.
-func TestMCPServer_TableRunSpecYAMLDryRun(t *testing.T) {
-	const specYAML = `top_n: 3
-rows:
-  - company: aapl_us
-    filing-type: 10-K
-    date-from: 2025-08-01
-columns:
-  - name: Revenue
-    source: filings
-    mode: rrf
-    query: total net sales revenue annual
-`
-	cs := newMCPSession(t, "")
-	text, isError := callToolText(t, cs, "table_run", map[string]any{
-		"spec_yaml": specYAML,
-		"dry_run":   true,
-	})
-	if isError {
-		t.Fatalf("table_run dry_run returned IsError:\n%s", text)
+// TestMCPServer_DashPositionalIsNotAFlag: positionals follow a "--"
+// terminator, so a query that starts with "-" reaches the verb as the query
+// instead of being parsed as a flag.
+func TestMCPServer_DashPositionalIsNotAFlag(t *testing.T) {
+	var gotQ []string
+	var mu sync.Mutex
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		gotQ = append(gotQ, r.URL.Query().Get("q"))
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"results":[{"id":"c1"}],"entity_resolution":null,"truncated":false,"next_cursor":null}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	cs := newMCPSession(t, srv.URL)
+	for _, q := range []string{"-10% revenue", "--stdin"} {
+		text, isError := callToolText(t, cs, "search", map[string]any{"query": q, "limit": 3})
+		if isError {
+			t.Errorf("query %q: IsError:\n%s", q, text)
+		}
 	}
-	var payload map[string]interface{}
-	if err := json.Unmarshal([]byte(text), &payload); err != nil {
-		t.Fatalf("dry-run payload is not JSON: %v\n%s", err, text)
+	mu.Lock()
+	defer mu.Unlock()
+	if strings.Join(gotQ, "|") != "-10% revenue|--stdin" {
+		t.Errorf("queries reaching the server: %q", gotQ)
 	}
-	if _, ok := payload["rows"]; !ok {
-		t.Error("dry-run payload missing 'rows'")
+
+	argv, usageErr := buildArgv(findSpec(t, "search"), json.RawMessage(`{"query":"-x","limit":3}`), "ak_tok")
+	if usageErr != "" {
+		t.Fatal(usageErr)
 	}
-	if _, ok := payload["columns"]; !ok {
-		t.Error("dry-run payload missing 'columns'")
+	if got := strings.Join(argv, " "); got != "search --limit=3 --token ak_tok -- -x" {
+		t.Errorf("argv: %q", got)
+	}
+}
+
+// TestMCPServer_FairUseSurfacesExitCode7: a CLI_QUOTA refusal is an IsError
+// result naming exit code 7 with the JSON envelope in its stdout section.
+func TestMCPServer_FairUseSurfacesExitCode7(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Queries-Remaining", "0")
+		w.Header().Set("Retry-After", "2592000")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error":"Monthly fair use limit reached.","code":"CLI_QUOTA","reset_date":"2026-11-01"}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	cs := newMCPSession(t, srv.URL)
+	text, isError := callToolText(t, cs, "search", map[string]any{"query": "x"})
+	if !isError {
+		t.Fatalf("want IsError, got success:\n%s", text)
+	}
+	for _, want := range []string{"exit code 7 (rate limit)", "--- stdout ---", `"CLI_QUOTA"`, "2026-11-01"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("error text missing %q:\n%s", want, text)
+		}
 	}
 }
 
@@ -495,24 +514,64 @@ func TestMCPServer_MissingRequiredArgIsUsageError(t *testing.T) {
 
 // ─── T6: stdio subprocess truth test ─────────────────────────────────────────
 
+// buildTestBinary builds the real binary once per test run; TestMain removes
+// its temp directory afterwards.
+var (
+	testBinOnce sync.Once
+	testBinDir  string
+	testBinPath string
+	testBinErr  error
+)
+
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if testBinDir != "" {
+		_ = os.RemoveAll(testBinDir)
+	}
+	os.Exit(code)
+}
+
+func buildTestBinary(t *testing.T) string {
+	t.Helper()
+	testBinOnce.Do(func() {
+		dir, err := os.MkdirTemp("", "archivist-test-bin-")
+		if err != nil {
+			testBinErr = err
+			return
+		}
+		testBinDir = dir
+		testBinPath = filepath.Join(dir, "archivist-test-bin")
+		build := exec.Command("go", "build", "-o", testBinPath, ".")
+		build.Dir = "."
+		if out, err := build.CombinedOutput(); err != nil {
+			testBinErr = fmt.Errorf("go build: %v\n%s", err, out)
+		}
+	})
+	if testBinErr != nil {
+		t.Fatal(testBinErr)
+	}
+	return testBinPath
+}
+
 // TestMCPServe_StdioSubprocess covers AC9 + AC10: build the real binary,
-// spawn it via mcp.CommandTransport, and complete initialize + tools/list
-// over actual stdio. Completing the handshake proves nothing but the SDK
-// transport writes to process stdout (a stray print would corrupt JSON-RPC
-// framing). Network-free: tools/list only. No build tag; budget ~10s.
+// spawn it via mcp.CommandTransport, and complete initialize, tools/list and
+// a tools/call search over actual stdio. Completing the handshake proves
+// nothing but the SDK transport writes to process stdout (a stray print would
+// corrupt JSON-RPC framing).
 func TestMCPServe_StdioSubprocess(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping subprocess build in -short mode")
 	}
-	bin := filepath.Join(t.TempDir(), "archivist-test-bin")
-	build := exec.Command("go", "build", "-o", bin, ".")
-	build.Dir = "."
-	if out, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("go build: %v\n%s", err, out)
-	}
+	bin := buildTestBinary(t)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"results":[{"id":"c1","url":"https://mosaic-finance.com/filings/f1/?c=c1&t=k.m"}],"entity_resolution":null,"truncated":false,"next_cursor":null}`))
+	}))
+	t.Cleanup(srv.Close)
 
 	cmdServe := exec.Command(bin, "mcp", "serve")
-	cmdServe.Env = append(os.Environ(), "ARCHIVIST_TOKEN=mc_pat_testtoken")
+	cmdServe.Env = append(os.Environ(), "ARCHIVIST_TOKEN=mc_pat_testtoken", "ARCHIVIST_BASE_URL="+srv.URL, "HOME="+t.TempDir())
 
 	client := mcp.NewClient(&mcp.Implementation{Name: "mcp-stdio-test", Version: "0.0.0"}, nil)
 	cs, err := client.Connect(context.Background(), &mcp.CommandTransport{Command: cmdServe}, nil)
@@ -528,6 +587,7 @@ func TestMCPServe_StdioSubprocess(t *testing.T) {
 	var names []string
 	for _, tool := range res.Tools {
 		names = append(names, tool.Name)
+		assertToolTitleAndHints(t, tool)
 	}
 	sort.Strings(names)
 	want := append([]string{}, expectedToolNames...)
@@ -535,9 +595,102 @@ func TestMCPServe_StdioSubprocess(t *testing.T) {
 	if strings.Join(names, ",") != strings.Join(want, ",") {
 		t.Errorf("stdio tools/list mismatch\nwant: %v\ngot:  %v", want, names)
 	}
+
+	text, isError := callToolText(t, cs, "search", map[string]any{"query": "risk"})
+	if isError || !strings.Contains(text, "https://mosaic-finance.com/filings/f1/?c=c1") {
+		t.Errorf("tools/call search over stdio: isError=%v text:\n%s", isError, text)
+	}
 }
 
-// mockMCPCompanyResult mirrors the /companies/search response shape
+// TestMCPServe_StdioRawToolsListJSON reads the raw tools/list response off
+// the binary's stdout and asserts the serialized shape: every tool has a
+// title and annotations {title, readOnlyHint: true, destructiveHint: false,
+// openWorldHint: false} with each hint key present.
+func TestMCPServe_StdioRawToolsListJSON(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping subprocess build in -short mode")
+	}
+	bin := buildTestBinary(t)
+
+	proc := exec.Command(bin, "mcp", "serve")
+	proc.Env = append(os.Environ(), "ARCHIVIST_TOKEN=mc_pat_testtoken", "HOME="+t.TempDir())
+	stdin, err := proc.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout, err := proc.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := proc.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = stdin.Close()
+		_ = proc.Wait()
+	})
+
+	msgs := []string{
+		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"raw","version":"0"}}}`,
+		`{"jsonrpc":"2.0","method":"notifications/initialized"}`,
+		`{"jsonrpc":"2.0","id":2,"method":"tools/list"}`,
+	}
+	for _, m := range msgs {
+		if _, err := io.WriteString(stdin, m+"\n"); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	scanner := bufio.NewScanner(stdout)
+	scanner.Buffer(make([]byte, 0, 1<<20), 1<<22)
+	var raw json.RawMessage
+	for scanner.Scan() {
+		var frame struct {
+			ID     int             `json:"id"`
+			Result json.RawMessage `json:"result"`
+		}
+		if json.Unmarshal(scanner.Bytes(), &frame) == nil && frame.ID == 2 {
+			raw = frame.Result
+			break
+		}
+	}
+	if raw == nil {
+		t.Fatalf("no tools/list response (scan err: %v)", scanner.Err())
+	}
+
+	var result struct {
+		Tools []map[string]json.RawMessage `json:"tools"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		t.Fatalf("decode tools/list: %v", err)
+	}
+	if len(result.Tools) != len(expectedToolNames) {
+		t.Errorf("tool count: got %d, want %d", len(result.Tools), len(expectedToolNames))
+	}
+	for _, tool := range result.Tools {
+		name := string(tool["name"])
+		var title string
+		if err := json.Unmarshal(tool["title"], &title); err != nil || title == "" {
+			t.Errorf("%s: missing title in raw JSON", name)
+		}
+		var ann map[string]json.RawMessage
+		if err := json.Unmarshal(tool["annotations"], &ann); err != nil {
+			t.Errorf("%s: annotations: %v", name, err)
+			continue
+		}
+		wantRaw := map[string]string{"readOnlyHint": "true", "destructiveHint": "false", "openWorldHint": "false"}
+		for k, v := range wantRaw {
+			if string(ann[k]) != v {
+				t.Errorf("%s: annotations.%s = %q, want %s", name, k, ann[k], v)
+			}
+		}
+		if string(ann["title"]) != string(tool["title"]) {
+			t.Errorf("%s: annotations.title %s != title %s", name, ann["title"], tool["title"])
+		}
+	}
+}
+
+// mockMCPCompanyResult mirrors one /research/companies result
 // (pattern: internal/cmd/companies_test.go).
 type mockMCPCompanyResult struct {
 	CompanyName    string  `json:"company_name"`
@@ -553,10 +706,37 @@ func serveMCPCompanies(t *testing.T, results []mockMCPCompanyResult) *httptest.S
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(results)
+		_ = json.NewEncoder(w).Encode(map[string]any{"results": results, "truncated": false, "next_cursor": nil})
 	}))
 	t.Cleanup(srv.Close)
 	return srv
+}
+
+// assertToolTitleAndHints checks a listed tool's title and the read-only
+// annotation set: title, readOnlyHint true, destructiveHint false,
+// openWorldHint false, all present on the wire.
+func assertToolTitleAndHints(t *testing.T, tool *mcp.Tool) {
+	t.Helper()
+	if strings.TrimSpace(tool.Title) == "" {
+		t.Errorf("tool %s: empty title", tool.Name)
+	}
+	a := tool.Annotations
+	if a == nil {
+		t.Errorf("tool %s: no annotations", tool.Name)
+		return
+	}
+	if a.Title != tool.Title {
+		t.Errorf("tool %s: annotations.title %q != title %q", tool.Name, a.Title, tool.Title)
+	}
+	if !a.ReadOnlyHint {
+		t.Errorf("tool %s: readOnlyHint must be true", tool.Name)
+	}
+	if a.DestructiveHint == nil || *a.DestructiveHint {
+		t.Errorf("tool %s: destructiveHint must be present and false", tool.Name)
+	}
+	if a.OpenWorldHint == nil || *a.OpenWorldHint {
+		t.Errorf("tool %s: openWorldHint must be present and false", tool.Name)
+	}
 }
 
 func strPtr(s string) *string { return &s }
@@ -570,15 +750,6 @@ func findSpec(t *testing.T, name string) toolSpec {
 	}
 	t.Fatalf("tool %q not found", name)
 	return toolSpec{}
-}
-
-func contains(ss []string, want string) bool {
-	for _, s := range ss {
-		if s == want {
-			return true
-		}
-	}
-	return false
 }
 
 func propNames(s toolSpec) []string {

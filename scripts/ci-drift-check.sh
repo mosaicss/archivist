@@ -1,6 +1,8 @@
 #!/usr/bin/env sh
 # CI drift check: verify that the marketing page install commands match the
-# canonical strings defined here.
+# canonical strings defined here. Only the live channels are checked:
+# Homebrew, GitHub Releases and go install (npm and install.mosaic-finance.com
+# were never published).
 #
 # Usage: scripts/ci-drift-check.sh <path-to-marketing-page-source>
 # The marketing page source is typically apps/web/components/marketing/archivist-page.tsx
@@ -45,15 +47,7 @@ echo "Marketing file: $MARKETING_FILE"
 echo ""
 
 check_command \
-  'curl -fsSL https://install.mosaic-finance.com | sh' \
-  "curl|sh (primary channel)"
-
-check_command \
-  'npx -y @mosaic-finance/archivist install' \
-  "npm orchestrator"
-
-check_command \
-  'brew install mosaic-finance/tap/archivist' \
+  'brew install mosaic-finance-inc/tap/archivist' \
   "Homebrew tap"
 
 check_command \

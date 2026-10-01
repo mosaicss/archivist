@@ -68,7 +68,7 @@ func TestAuthLoginPrintsURL(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if !strings.Contains(output, "https://mosaic-finance.com/chat") {
+	if !strings.Contains(output, "https://mosaic-finance.com/en/pricing/") {
 		t.Errorf("expected dashboard URL in output, got:\n%s", output)
 	}
 	if !strings.Contains(output, "ARCHIVIST_TOKEN") {
@@ -202,9 +202,9 @@ func TestAuthStatusWithValidToken(t *testing.T) {
 			"tier":       "pro",
 			"tokens": []map[string]interface{}{
 				{
-					"key_id":      "key_abc123",
-					"name":        "My Token",
-					"created_at":  "2026-05-20T00:00:00Z",
+					"key_id":       "key_abc123",
+					"name":         "My Token",
+					"created_at":   "2026-05-20T00:00:00Z",
 					"last_used_at": nil,
 				},
 			},
@@ -440,7 +440,7 @@ func TestAuthLogoutDeletesCredentialsFile(t *testing.T) {
 		t.Errorf("expected deleted path in output, got:\n%s", output)
 	}
 	// Dashboard revocation note survives the stub replacement.
-	if !strings.Contains(output, "https://mosaic-finance.com/chat") {
+	if !strings.Contains(output, "https://mosaic-finance.com/en/pricing/") {
 		t.Errorf("expected dashboard revocation note, got:\n%s", output)
 	}
 	// No env var set: the env note must NOT appear.
@@ -493,5 +493,55 @@ func TestAuthLogoutDeleteFailureExitsOne(t *testing.T) {
 	output, err := runAuthCmd(t, "auth", "logout")
 	if exitCodeFrom(err) != 1 {
 		t.Errorf("expected exit code 1 on delete failure, got %d; output:\n%s", exitCodeFrom(err), output)
+	}
+}
+
+// TestAuthStatusBurst429Exit7: a non-quota 429 on GET /account/cli-tokens
+// keeps the retry policy and exits 7 (rate limit), not 5.
+func TestAuthStatusBurst429Exit7(t *testing.T) {
+	if testing.Short() {
+		t.Skip("waits on Retry-After")
+	}
+	sandboxAuthHome(t)
+	t.Setenv("ARCHIVIST_TOKEN", "ak_validformat12345")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Retry-After", "1")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error":"Rate limit exceeded","code":"rate_limit_exceeded"}`))
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv("ARCHIVIST_BASE_URL", srv.URL)
+
+	output, err := runAuthCmd(t, "auth", "status")
+	if exitCodeFrom(err) != 7 {
+		t.Errorf("expected exit code 7, got %d; output:\n%s", exitCodeFrom(err), output)
+	}
+	if strings.Contains(output, "Server error") {
+		t.Errorf("a 429 must not be reported as a server error:\n%s", output)
+	}
+}
+
+// TestAuthStatusMinVersionPrintedOnce: the client already prints the
+// min-version block; auth status must not repeat it, and exits 5.
+func TestAuthStatusMinVersionPrintedOnce(t *testing.T) {
+	sandboxAuthHome(t)
+	t.Setenv("ARCHIVIST_TOKEN", "ak_validformat12345")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Archivist-Min-CLI-Version", "9.0.0")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv("ARCHIVIST_BASE_URL", srv.URL)
+
+	output, err := runAuthCmd(t, "auth", "status")
+	if exitCodeFrom(err) != 5 {
+		t.Errorf("expected exit code 5, got %d; output:\n%s", exitCodeFrom(err), output)
+	}
+	if n := strings.Count(output, "Server requires archivist-cli >= 9.0.0"); n != 1 {
+		t.Errorf("min-version message printed %d times, want 1:\n%s", n, output)
+	}
+	if strings.Contains(output, "server requires newer CLI version") {
+		t.Errorf("the min-version block was reported twice:\n%s", output)
 	}
 }

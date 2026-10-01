@@ -6,19 +6,21 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/mosaicss/archivist/internal/client"
 )
 
 // Accepted token prefixes:
 //   - "ak_"     — Clerk's native UserProfile API key format (what real users get)
 //   - "mc_pat_" — historical placeholder from early 36.x design; kept for
-//                 test fixtures and backwards-compat with any docs in the wild.
+//     test fixtures and backwards-compat with any docs in the wild.
 var tokenPrefixes = []string{"ak_", "mc_pat_"}
 
 // ErrNoToken is returned when no credential is found on any rung.
 var ErrNoToken = errors.New("no CLI token found. Run 'archivist auth login --token ak_...' to save a credential, or set ARCHIVIST_TOKEN")
 
 // ErrInvalidFormat is returned when a token is present but malformed.
-var ErrInvalidFormat = errors.New("token format invalid. Expected ak_... — create one in the 'API keys' section of Clerk's UserProfile popup at https://mosaic-finance.com")
+var ErrInvalidFormat = errors.New("token format invalid. Expected ak_... — create one in the 'API keys' section of your account (avatar menu → Manage account → API keys) at " + client.AccountURL)
 
 // Source identifies which rung of the resolution ladder produced the token.
 type Source int

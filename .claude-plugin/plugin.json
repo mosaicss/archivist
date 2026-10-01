@@ -6,9 +6,7 @@
     { "name": "archivist", "path": "skill/SKILL.md", "command": "/archivist" }
   ],
   "futureSkills": [
-    "archivist-table",
     "archivist-investigate-issuer",
-    "archivist-doctor",
-    "archivist-watch"
+    "archivist-doctor"
   ]
 }

@@ -96,8 +96,8 @@ func Check2Skill(cfg *RunConfig) CheckResult {
 			Name:       "Skill",
 			Status:     StatusWarn,
 			Detail:     path,
-			Message:    "skill not installed; run installer to get /archivist skill",
-			Suggestion: "Re-run the archivist skill installer from the dashboard",
+			Message:    "skill not installed; run `archivist update --skill` to get the /archivist skill",
+			Suggestion: "Run `archivist update --skill`",
 		}
 	}
 	defer func() { _ = f.Close() }()
@@ -208,7 +208,7 @@ func Check4Token(cfg *RunConfig) CheckResult {
 			Name:       "Token",
 			Status:     StatusFail,
 			Message:    "token format unrecognized; expected ak_... prefix",
-			Suggestion: "Create a new key via the avatar menu → Manage account → API keys on https://mosaic-finance.com",
+			Suggestion: "Create a new key via the avatar menu → Manage account → API keys at " + client.AccountURL,
 		}
 	}
 	return CheckResult{
@@ -363,16 +363,16 @@ func Check7User(ctx context.Context, cfg *RunConfig, probe *ServerProbeResult) (
 		return CheckResult{
 			Name:       "User",
 			Status:     StatusFail,
-			Message:    "token invalid or revoked; create a new key via the avatar menu (Manage account → API keys) on https://mosaic-finance.com",
-			Suggestion: "Create a new key via the avatar menu (Manage account → API keys) on https://mosaic-finance.com, then run 'archivist auth login --token ak_...'",
+			Message:    "token invalid or revoked; create a new key via the avatar menu (Manage account → API keys) at " + client.AccountURL,
+			Suggestion: "Create a new key via the avatar menu (Manage account → API keys) at " + client.AccountURL + ", then run 'archivist auth login --token ak_...'",
 		}, nil
 	}
 	if resp.StatusCode == http.StatusForbidden {
 		return CheckResult{
 			Name:       "User",
 			Status:     StatusFail,
-			Message:    "token lacks CLI scope; this account does not have an active Archivist CLI subscription",
-			Suggestion: "Subscribe to Archivist CLI at https://mosaic-finance.com/account",
+			Message:    "This requires a Mosaic Pro account. " + client.AccountURL,
+			Suggestion: "See plans at " + client.AccountURL,
 		}, nil
 	}
 	if resp.StatusCode != http.StatusOK {
@@ -404,7 +404,7 @@ func Check7User(ctx context.Context, cfg *RunConfig, probe *ServerProbeResult) (
 	if body.Tier == "free" {
 		statusResult = StatusWarn
 		cliScope = "none"
-		warnMsg = "tier is free; CLI scope requires an Archivist CLI subscription"
+		warnMsg = "tier is free; agent access requires a Mosaic Pro account (" + client.AccountURL + ")"
 	}
 
 	info := &CLITokensInfo{
@@ -422,7 +422,9 @@ func Check7User(ctx context.Context, cfg *RunConfig, probe *ServerProbeResult) (
 	}, info
 }
 
-// Check8Quota reads X-Queries-Remaining from the user check's response or probe headers.
+// Check8Quota reads X-Queries-Remaining from the probe headers. chat-api sends
+// the header only on a fair use refusal, so its absence is the normal case:
+// the check passes and points at `archivist usage` for the monthly count.
 func Check8Quota(cfg *RunConfig, userResp *CLITokensInfo, probe *ServerProbeResult) CheckResult {
 	if probe != nil && !probe.Reachable {
 		return CheckResult{Name: "Quota", Status: StatusSkip, Detail: "skipped: server unreachable"}
@@ -431,7 +433,6 @@ func Check8Quota(cfg *RunConfig, userResp *CLITokensInfo, probe *ServerProbeResu
 		return CheckResult{Name: "Quota", Status: StatusSkip, Detail: "skipped: no credential"}
 	}
 
-	// Read from probe headers (check 5's /health response) or user check headers
 	var remaining string
 	if probe != nil && probe.RespHeader != nil {
 		remaining = probe.RespHeader.Get("X-Queries-Remaining")
@@ -439,10 +440,9 @@ func Check8Quota(cfg *RunConfig, userResp *CLITokensInfo, probe *ServerProbeResu
 
 	if remaining == "" {
 		return CheckResult{
-			Name:    "Quota",
-			Status:  StatusWarn,
-			Detail:  "quota header not returned",
-			Message: "quota header not returned; cannot determine remaining quota",
+			Name:   "Quota",
+			Status: StatusPass,
+			Detail: "not reported here; run 'archivist usage' for this month's fair use count",
 		}
 	}
 
@@ -458,10 +458,11 @@ func Check8Quota(cfg *RunConfig, userResp *CLITokensInfo, probe *ServerProbeResu
 
 	if n == 0 {
 		return CheckResult{
-			Name:    "Quota",
-			Status:  StatusWarn,
-			Detail:  "0 queries remaining",
-			Message: "quota exhausted; table/chat queries will be blocked until next billing cycle",
+			Name:       "Quota",
+			Status:     StatusWarn,
+			Detail:     "0 queries remaining",
+			Message:    "monthly fair use limit reached; calls exit 7 until the limit resets",
+			Suggestion: "Run 'archivist usage' for the reset date",
 		}
 	}
 	if n <= 5 {
@@ -469,7 +470,7 @@ func Check8Quota(cfg *RunConfig, userResp *CLITokensInfo, probe *ServerProbeResu
 			Name:    "Quota",
 			Status:  StatusWarn,
 			Detail:  fmt.Sprintf("%d queries remaining", n),
-			Message: fmt.Sprintf("quota low: %d queries remaining", n),
+			Message: fmt.Sprintf("monthly fair use limit nearly reached: %d queries remaining", n),
 		}
 	}
 	return CheckResult{
