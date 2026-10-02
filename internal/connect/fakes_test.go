@@ -93,6 +93,11 @@ type fakeChatAPI struct {
 	off     bool
 	// ticketTTL shortens relay tickets (socket rotation tests); default 5 min.
 	ticketTTL time.Duration
+	// tokenTTL shortens task tokens (refresh tests); default: the requested TTL.
+	tokenTTL time.Duration
+	// failMints makes the next N task token mints answer 503.
+	failMints int
+	failed    int
 }
 
 func newFakeChatAPI(t *testing.T, key []byte) *fakeChatAPI {
@@ -140,6 +145,26 @@ func (f *fakeChatAPI) liveTokens() []string {
 		}
 	}
 	return out
+}
+
+// tokenState returns minted count, injected failures, and live/revoked token values.
+func (f *fakeChatAPI) tokenState() (mints, failed int, live, revoked []string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, tk := range f.tokens {
+		if tk.revoked {
+			revoked = append(revoked, tk.token)
+		} else {
+			live = append(live, tk.token)
+		}
+	}
+	return f.mints, f.failed, live, revoked
+}
+
+func (f *fakeChatAPI) setFailMints(n int) {
+	f.mu.Lock()
+	f.failMints = n
+	f.mu.Unlock()
 }
 
 func (f *fakeChatAPI) researchBearers() []string {
@@ -228,13 +253,23 @@ func (f *fakeChatAPI) serve(w http.ResponseWriter, r *http.Request) {
 			reply(400, map[string]any{"error": "Invalid request fields.", "code": "BAD_REQUEST"})
 			return
 		}
+		if f.failMints > 0 {
+			f.failMints--
+			f.failed++
+			reply(503, map[string]any{"error": "Temporarily unavailable.", "code": "UNAVAILABLE"})
+			return
+		}
 		f.mints++
 		secret := make([]byte, 32)
 		_, _ = rand.Read(secret)
 		id := randomUUID()
 		tok := "mst_" + id + "." + base64.RawURLEncoding.EncodeToString(secret)
 		f.tokens[id] = &fakeToken{id: id, token: tok, session: in.SessionID}
-		reply(201, map[string]any{"token": tok, "tokenId": id, "expiresAt": time.Now().Add(time.Duration(in.TTL) * time.Second).UnixMilli(), "scopes": in.Scopes})
+		ttl := time.Duration(in.TTL) * time.Second
+		if f.tokenTTL > 0 {
+			ttl = f.tokenTTL
+		}
+		reply(201, map[string]any{"token": tok, "tokenId": id, "expiresAt": time.Now().Add(ttl).UnixMilli(), "scopes": in.Scopes})
 	case r.Method == "DELETE" && strings.HasPrefix(r.URL.Path, "/task-tokens/"):
 		tk := f.tokens[strings.TrimPrefix(r.URL.Path, "/task-tokens/")]
 		if tk == nil {

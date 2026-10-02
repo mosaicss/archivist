@@ -18,11 +18,18 @@ import (
 const (
 	taskTokenTTL     = 900
 	tokenRefreshLead = 2 * time.Minute
-	interruptTimeout = 10 * time.Second
 	stopGrace        = 5 * time.Second
 	coalesceWindow   = 250 * time.Millisecond
 	drainTimeout     = 5 * time.Second
 	revokeTimeout    = 5 * time.Second
+)
+
+// Timings tests shorten; production values never change at runtime.
+var (
+	// interruptTimeout bounds the wait for a result after a control interrupt.
+	interruptTimeout = 10 * time.Second
+	// tokenRetryBase is the first task token refresh retry delay (doubling to 1 min).
+	tokenRetryBase = 5 * time.Second
 )
 
 // sessionCmd is one relay command with the socket that delivered it (acks go
@@ -708,7 +715,7 @@ func (s *session) refreshToken(ctx context.Context) {
 	}
 	if err != nil {
 		if s.tokenRetry == 0 {
-			s.tokenRetry = 5 * time.Second
+			s.tokenRetry = tokenRetryBase
 		} else if s.tokenRetry < time.Minute {
 			s.tokenRetry *= 2
 		}

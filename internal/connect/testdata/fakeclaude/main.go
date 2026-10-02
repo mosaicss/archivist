@@ -9,8 +9,10 @@
 //
 //	echo <text>     stream <text> back
 //	bash <cmd>      ask can_use_tool for Bash and report the decision
+//	write <path>    ask can_use_tool for Write and report the decision
 //	mcp             list the archivist MCP tools and call search
 //	slow            stream numbers until interrupted (60 s cap)
+//	stuck           stream numbers and ignore interrupts (60 s cap)
 //	remember <w>    store a codeword for this Claude session
 //	recall          reply with the stored codeword
 //	spawn           start a detached `sleep 300` in its own process group
@@ -228,7 +230,9 @@ func (r *runner) turn(text string) bool {
 			r.say(0, string(b))
 		}
 	case "bash":
-		return r.bash(arg)
+		return r.ask("Bash", map[string]any{"command": arg})
+	case "write":
+		return r.ask("Write", map[string]any{"file_path": arg, "content": "x"})
 	case "mcp":
 		r.callMCP()
 	case "spawn":
@@ -238,7 +242,9 @@ func (r *runner) turn(text string) bool {
 		_ = os.WriteFile(filepath.Join(base, "spawned.pid"), []byte(fmt.Sprint(c.Process.Pid)), 0o600)
 		r.say(0, "spawned")
 	case "slow":
-		return r.slow()
+		return r.slow(true)
+	case "stuck":
+		return r.slow(false)
 	default:
 		r.say(0, "unknown scenario: "+text)
 	}
@@ -283,13 +289,13 @@ func (r *runner) result(isErr bool, reason, text string) {
 			"cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}, "modelUsage": map[string]any{"fake-model": map[string]any{}}})
 }
 
-func (r *runner) bash(command string) bool {
+func (r *runner) ask(tool string, input map[string]any) bool {
 	toolID := "toolu_" + strings.ReplaceAll(uuid(), "-", "")[:20]
-	r.toolUse(0, toolID, "Bash", map[string]any{"command": command})
+	r.toolUse(0, toolID, tool, input)
 	reqID := uuid()
 	emit(map[string]any{"type": "control_request", "request_id": reqID, "request": map[string]any{
-		"subtype": "can_use_tool", "tool_name": "Bash", "display_name": "Bash", "input": map[string]any{"command": command},
-		"description": command, "tool_use_id": toolID}})
+		"subtype": "can_use_tool", "tool_name": tool, "display_name": tool, "input": input,
+		"description": tool, "tool_use_id": toolID}})
 	for f := range r.frames {
 		if f["type"] != "control_response" {
 			continue
@@ -301,7 +307,11 @@ func (r *runner) bash(command string) bool {
 		body, _ := resp["response"].(map[string]any)
 		if body["behavior"] == "allow" {
 			in, _ := body["updatedInput"].(map[string]any)
-			r.toolResult(toolID, fmt.Sprintf("ran: %v", in["command"]), false)
+			arg := in["command"]
+			if tool != "Bash" {
+				arg = in["file_path"]
+			}
+			r.toolResult(toolID, fmt.Sprintf("ran: %v", arg), false)
 			r.say(1, "allowed")
 		} else {
 			r.toolResult(toolID, fmt.Sprint(body["message"]), true)
@@ -314,7 +324,8 @@ func (r *runner) bash(command string) bool {
 	return false
 }
 
-func (r *runner) slow() bool {
+// slow streams numbers; honour=false ignores interrupt requests (a hung harness).
+func (r *runner) slow(honour bool) bool {
 	emit(stream(map[string]any{"type": "content_block_start", "index": 0, "content_block": map[string]any{"type": "text", "text": ""}}))
 	tick := time.NewTicker(100 * time.Millisecond)
 	defer tick.Stop()
@@ -327,7 +338,7 @@ func (r *runner) slow() bool {
 				return false
 			}
 			req, _ := f["request"].(map[string]any)
-			if f["type"] == "control_request" && req["subtype"] == "interrupt" {
+			if honour && f["type"] == "control_request" && req["subtype"] == "interrupt" {
 				emit(map[string]any{"type": "control_response", "response": map[string]any{"subtype": "success",
 					"request_id": f["request_id"], "response": map[string]any{"still_queued": []any{}}}})
 				emit(map[string]any{"type": "user", "session_id": session, "message": map[string]any{"role": "user",
