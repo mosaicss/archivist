@@ -1,0 +1,2115 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://mosaic-finance.com/schemas/mosaic-event/1/envelope.json",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "event"
+        },
+        "schemaVersion": {
+          "const": "mosaic-event/1"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "ts": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "correlationId": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "^resolved:"
+          }
+        },
+        "origin": {
+          "enum": [
+            "daemon",
+            "chat-api"
+          ]
+        },
+        "type": {
+          "const": "text-start"
+        },
+        "payload": {
+          "$ref": "chunk.json#/definitions/text-start"
+        }
+      },
+      "required": [
+        "kind",
+        "schemaVersion",
+        "seq",
+        "ts",
+        "correlationId",
+        "origin",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "event"
+        },
+        "schemaVersion": {
+          "const": "mosaic-event/1"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "ts": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "correlationId": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "^resolved:"
+          }
+        },
+        "origin": {
+          "enum": [
+            "daemon",
+            "chat-api"
+          ]
+        },
+        "type": {
+          "const": "text-delta"
+        },
+        "payload": {
+          "$ref": "chunk.json#/definitions/text-delta"
+        }
+      },
+      "required": [
+        "kind",
+        "schemaVersion",
+        "seq",
+        "ts",
+        "correlationId",
+        "origin",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "event"
+        },
+        "schemaVersion": {
+          "const": "mosaic-event/1"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "ts": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "correlationId": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "^resolved:"
+          }
+        },
+        "origin": {
+          "enum": [
+            "daemon",
+            "chat-api"
+          ]
+        },
+        "type": {
+          "const": "text-end"
+        },
+        "payload": {
+          "$ref": "chunk.json#/definitions/text-end"
+        }
+      },
+      "required": [
+        "kind",
+        "schemaVersion",
+        "seq",
+        "ts",
+        "correlationId",
+        "origin",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "event"
+        },
+        "schemaVersion": {
+          "const": "mosaic-event/1"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "ts": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "correlationId": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "^resolved:"
+          }
+        },
+        "origin": {
+          "enum": [
+            "daemon",
+            "chat-api"
+          ]
+        },
+        "type": {
+          "const": "reasoning-start"
+        },
+        "payload": {
+          "$ref": "chunk.json#/definitions/reasoning-start"
+        }
+      },
+      "required": [
+        "kind",
+        "schemaVersion",
+        "seq",
+        "ts",
+        "correlationId",
+        "origin",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "event"
+        },
+        "schemaVersion": {
+          "const": "mosaic-event/1"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "ts": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "correlationId": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "^resolved:"
+          }
+        },
+        "origin": {
+          "enum": [
+            "daemon",
+            "chat-api"
+          ]
+        },
+        "type": {
+          "const": "reasoning-delta"
+        },
+        "payload": {
+          "$ref": "chunk.json#/definitions/reasoning-delta"
+        }
+      },
+      "required": [
+        "kind",
+        "schemaVersion",
+        "seq",
+        "ts",
+        "correlationId",
+        "origin",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "event"
+        },
+        "schemaVersion": {
+          "const": "mosaic-event/1"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "ts": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "correlationId": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "^resolved:"
+          }
+        },
+        "origin": {
+          "enum": [
+            "daemon",
+            "chat-api"
+          ]
+        },
+        "type": {
+          "const": "reasoning-end"
+        },
+        "payload": {
+          "$ref": "chunk.json#/definitions/reasoning-end"
+        }
+      },
+      "required": [
+        "kind",
+        "schemaVersion",
+        "seq",
+        "ts",
+        "correlationId",
+        "origin",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "event"
+        },
+        "schemaVersion": {
+          "const": "mosaic-event/1"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "ts": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "correlationId": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "^resolved:"
+          }
+        },
+        "origin": {
+          "enum": [
+            "daemon",
+            "chat-api"
+          ]
+        },
+        "type": {
+          "const": "tool-input-start"
+        },
+        "payload": {
+          "$ref": "chunk.json#/definitions/tool-input-start"
+        }
+      },
+      "required": [
+        "kind",
+        "schemaVersion",
+        "seq",
+        "ts",
+        "correlationId",
+        "origin",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "event"
+        },
+        "schemaVersion": {
+          "const": "mosaic-event/1"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "ts": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "correlationId": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "^resolved:"
+          }
+        },
+        "origin": {
+          "enum": [
+            "daemon",
+            "chat-api"
+          ]
+        },
+        "type": {
+          "const": "tool-input-available"
+        },
+        "payload": {
+          "$ref": "chunk.json#/definitions/tool-input-available"
+        }
+      },
+      "required": [
+        "kind",
+        "schemaVersion",
+        "seq",
+        "ts",
+        "correlationId",
+        "origin",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "event"
+        },
+        "schemaVersion": {
+          "const": "mosaic-event/1"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "ts": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "correlationId": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "^resolved:"
+          }
+        },
+        "origin": {
+          "enum": [
+            "daemon",
+            "chat-api"
+          ]
+        },
+        "type": {
+          "const": "tool-input-error"
+        },
+        "payload": {
+          "$ref": "chunk.json#/definitions/tool-input-error"
+        }
+      },
+      "required": [
+        "kind",
+        "schemaVersion",
+        "seq",
+        "ts",
+        "correlationId",
+        "origin",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "event"
+        },
+        "schemaVersion": {
+          "const": "mosaic-event/1"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "ts": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "correlationId": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "^resolved:"
+          }
+        },
+        "origin": {
+          "enum": [
+            "daemon",
+            "chat-api"
+          ]
+        },
+        "type": {
+          "const": "tool-input-delta"
+        },
+        "payload": {
+          "$ref": "chunk.json#/definitions/tool-input-delta"
+        }
+      },
+      "required": [
+        "kind",
+        "schemaVersion",
+        "seq",
+        "ts",
+        "correlationId",
+        "origin",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "event"
+        },
+        "schemaVersion": {
+          "const": "mosaic-event/1"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "ts": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "correlationId": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "^resolved:"
+          }
+        },
+        "origin": {
+          "enum": [
+            "daemon",
+            "chat-api"
+          ]
+        },
+        "type": {
+          "const": "tool-approval-request"
+        },
+        "payload": {
+          "$ref": "chunk.json#/definitions/tool-approval-request"
+        }
+      },
+      "required": [
+        "kind",
+        "schemaVersion",
+        "seq",
+        "ts",
+        "correlationId",
+        "origin",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "event"
+        },
+        "schemaVersion": {
+          "const": "mosaic-event/1"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "ts": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "correlationId": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "^resolved:"
+          }
+        },
+        "origin": {
+          "enum": [
+            "daemon",
+            "chat-api"
+          ]
+        },
+        "type": {
+          "const": "tool-approval-response"
+        },
+        "payload": {
+          "$ref": "chunk.json#/definitions/tool-approval-response"
+        }
+      },
+      "required": [
+        "kind",
+        "schemaVersion",
+        "seq",
+        "ts",
+        "correlationId",
+        "origin",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "event"
+        },
+        "schemaVersion": {
+          "const": "mosaic-event/1"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "ts": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "correlationId": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "^resolved:"
+          }
+        },
+        "origin": {
+          "enum": [
+            "daemon",
+            "chat-api"
+          ]
+        },
+        "type": {
+          "const": "tool-output-available"
+        },
+        "payload": {
+          "$ref": "chunk.json#/definitions/tool-output-available"
+        }
+      },
+      "required": [
+        "kind",
+        "schemaVersion",
+        "seq",
+        "ts",
+        "correlationId",
+        "origin",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "event"
+        },
+        "schemaVersion": {
+          "const": "mosaic-event/1"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "ts": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "correlationId": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "^resolved:"
+          }
+        },
+        "origin": {
+          "enum": [
+            "daemon",
+            "chat-api"
+          ]
+        },
+        "type": {
+          "const": "tool-output-error"
+        },
+        "payload": {
+          "$ref": "chunk.json#/definitions/tool-output-error"
+        }
+      },
+      "required": [
+        "kind",
+        "schemaVersion",
+        "seq",
+        "ts",
+        "correlationId",
+        "origin",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "event"
+        },
+        "schemaVersion": {
+          "const": "mosaic-event/1"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "ts": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "correlationId": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "^resolved:"
+          }
+        },
+        "origin": {
+          "enum": [
+            "daemon",
+            "chat-api"
+          ]
+        },
+        "type": {
+          "const": "tool-output-denied"
+        },
+        "payload": {
+          "$ref": "chunk.json#/definitions/tool-output-denied"
+        }
+      },
+      "required": [
+        "kind",
+        "schemaVersion",
+        "seq",
+        "ts",
+        "correlationId",
+        "origin",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "event"
+        },
+        "schemaVersion": {
+          "const": "mosaic-event/1"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "ts": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "correlationId": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "^resolved:"
+          }
+        },
+        "origin": {
+          "enum": [
+            "daemon",
+            "chat-api"
+          ]
+        },
+        "type": {
+          "const": "source-url"
+        },
+        "payload": {
+          "$ref": "chunk.json#/definitions/source-url"
+        }
+      },
+      "required": [
+        "kind",
+        "schemaVersion",
+        "seq",
+        "ts",
+        "correlationId",
+        "origin",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "event"
+        },
+        "schemaVersion": {
+          "const": "mosaic-event/1"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "ts": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "correlationId": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "^resolved:"
+          }
+        },
+        "origin": {
+          "enum": [
+            "daemon",
+            "chat-api"
+          ]
+        },
+        "type": {
+          "const": "source-document"
+        },
+        "payload": {
+          "$ref": "chunk.json#/definitions/source-document"
+        }
+      },
+      "required": [
+        "kind",
+        "schemaVersion",
+        "seq",
+        "ts",
+        "correlationId",
+        "origin",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "event"
+        },
+        "schemaVersion": {
+          "const": "mosaic-event/1"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "ts": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "correlationId": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "^resolved:"
+          }
+        },
+        "origin": {
+          "enum": [
+            "daemon",
+            "chat-api"
+          ]
+        },
+        "type": {
+          "const": "file"
+        },
+        "payload": {
+          "$ref": "chunk.json#/definitions/file"
+        }
+      },
+      "required": [
+        "kind",
+        "schemaVersion",
+        "seq",
+        "ts",
+        "correlationId",
+        "origin",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "event"
+        },
+        "schemaVersion": {
+          "const": "mosaic-event/1"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "ts": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "correlationId": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "^resolved:"
+          }
+        },
+        "origin": {
+          "enum": [
+            "daemon",
+            "chat-api"
+          ]
+        },
+        "type": {
+          "const": "reasoning-file"
+        },
+        "payload": {
+          "$ref": "chunk.json#/definitions/reasoning-file"
+        }
+      },
+      "required": [
+        "kind",
+        "schemaVersion",
+        "seq",
+        "ts",
+        "correlationId",
+        "origin",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "event"
+        },
+        "schemaVersion": {
+          "const": "mosaic-event/1"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "ts": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "correlationId": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "^resolved:"
+          }
+        },
+        "origin": {
+          "enum": [
+            "daemon",
+            "chat-api"
+          ]
+        },
+        "type": {
+          "const": "start"
+        },
+        "payload": {
+          "$ref": "chunk.json#/definitions/start"
+        }
+      },
+      "required": [
+        "kind",
+        "schemaVersion",
+        "seq",
+        "ts",
+        "correlationId",
+        "origin",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "event"
+        },
+        "schemaVersion": {
+          "const": "mosaic-event/1"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "ts": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "correlationId": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "^resolved:"
+          }
+        },
+        "origin": {
+          "enum": [
+            "daemon",
+            "chat-api"
+          ]
+        },
+        "type": {
+          "const": "finish"
+        },
+        "payload": {
+          "$ref": "chunk.json#/definitions/finish"
+        }
+      },
+      "required": [
+        "kind",
+        "schemaVersion",
+        "seq",
+        "ts",
+        "correlationId",
+        "origin",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "event"
+        },
+        "schemaVersion": {
+          "const": "mosaic-event/1"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "ts": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "correlationId": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "^resolved:"
+          }
+        },
+        "origin": {
+          "enum": [
+            "daemon",
+            "chat-api"
+          ]
+        },
+        "type": {
+          "const": "abort"
+        },
+        "payload": {
+          "$ref": "chunk.json#/definitions/abort"
+        }
+      },
+      "required": [
+        "kind",
+        "schemaVersion",
+        "seq",
+        "ts",
+        "correlationId",
+        "origin",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "event"
+        },
+        "schemaVersion": {
+          "const": "mosaic-event/1"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "ts": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "correlationId": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "^resolved:"
+          }
+        },
+        "origin": {
+          "enum": [
+            "daemon",
+            "chat-api"
+          ]
+        },
+        "type": {
+          "const": "error"
+        },
+        "payload": {
+          "$ref": "chunk.json#/definitions/error"
+        }
+      },
+      "required": [
+        "kind",
+        "schemaVersion",
+        "seq",
+        "ts",
+        "correlationId",
+        "origin",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "event"
+        },
+        "schemaVersion": {
+          "const": "mosaic-event/1"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "ts": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "correlationId": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "^resolved:"
+          }
+        },
+        "origin": {
+          "enum": [
+            "daemon",
+            "chat-api"
+          ]
+        },
+        "type": {
+          "const": "message-metadata"
+        },
+        "payload": {
+          "$ref": "chunk.json#/definitions/message-metadata"
+        }
+      },
+      "required": [
+        "kind",
+        "schemaVersion",
+        "seq",
+        "ts",
+        "correlationId",
+        "origin",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "event"
+        },
+        "schemaVersion": {
+          "const": "mosaic-event/1"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "ts": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "correlationId": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "^resolved:"
+          }
+        },
+        "origin": {
+          "enum": [
+            "daemon",
+            "chat-api"
+          ]
+        },
+        "type": {
+          "const": "start-step"
+        },
+        "payload": {
+          "$ref": "chunk.json#/definitions/start-step"
+        }
+      },
+      "required": [
+        "kind",
+        "schemaVersion",
+        "seq",
+        "ts",
+        "correlationId",
+        "origin",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "event"
+        },
+        "schemaVersion": {
+          "const": "mosaic-event/1"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "ts": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "correlationId": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "^resolved:"
+          }
+        },
+        "origin": {
+          "enum": [
+            "daemon",
+            "chat-api"
+          ]
+        },
+        "type": {
+          "const": "finish-step"
+        },
+        "payload": {
+          "$ref": "chunk.json#/definitions/finish-step"
+        }
+      },
+      "required": [
+        "kind",
+        "schemaVersion",
+        "seq",
+        "ts",
+        "correlationId",
+        "origin",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "event"
+        },
+        "schemaVersion": {
+          "const": "mosaic-event/1"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "ts": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "correlationId": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "^resolved:"
+          }
+        },
+        "origin": {
+          "enum": [
+            "daemon",
+            "chat-api"
+          ]
+        },
+        "type": {
+          "const": "data-plan"
+        },
+        "payload": {
+          "$ref": "chunk.json#/definitions/data-plan"
+        }
+      },
+      "required": [
+        "kind",
+        "schemaVersion",
+        "seq",
+        "ts",
+        "correlationId",
+        "origin",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "event"
+        },
+        "schemaVersion": {
+          "const": "mosaic-event/1"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "ts": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "correlationId": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "^resolved:"
+          }
+        },
+        "origin": {
+          "enum": [
+            "daemon",
+            "chat-api"
+          ]
+        },
+        "type": {
+          "const": "data-permission-scope"
+        },
+        "payload": {
+          "$ref": "chunk.json#/definitions/data-permission-scope"
+        }
+      },
+      "required": [
+        "kind",
+        "schemaVersion",
+        "seq",
+        "ts",
+        "correlationId",
+        "origin",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "event"
+        },
+        "schemaVersion": {
+          "const": "mosaic-event/1"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "ts": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "correlationId": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "^resolved:"
+          }
+        },
+        "origin": {
+          "enum": [
+            "daemon",
+            "chat-api"
+          ]
+        },
+        "type": {
+          "const": "data-exec-output"
+        },
+        "payload": {
+          "$ref": "chunk.json#/definitions/data-exec-output"
+        }
+      },
+      "required": [
+        "kind",
+        "schemaVersion",
+        "seq",
+        "ts",
+        "correlationId",
+        "origin",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "event"
+        },
+        "schemaVersion": {
+          "const": "mosaic-event/1"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "ts": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "correlationId": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "^resolved:"
+          }
+        },
+        "origin": {
+          "enum": [
+            "daemon",
+            "chat-api"
+          ]
+        },
+        "type": {
+          "const": "data-patch"
+        },
+        "payload": {
+          "$ref": "chunk.json#/definitions/data-patch"
+        }
+      },
+      "required": [
+        "kind",
+        "schemaVersion",
+        "seq",
+        "ts",
+        "correlationId",
+        "origin",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "event"
+        },
+        "schemaVersion": {
+          "const": "mosaic-event/1"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "ts": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "correlationId": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "^resolved:"
+          }
+        },
+        "origin": {
+          "enum": [
+            "daemon",
+            "chat-api"
+          ]
+        },
+        "type": {
+          "const": "data-task"
+        },
+        "payload": {
+          "$ref": "chunk.json#/definitions/data-task"
+        }
+      },
+      "required": [
+        "kind",
+        "schemaVersion",
+        "seq",
+        "ts",
+        "correlationId",
+        "origin",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "event"
+        },
+        "schemaVersion": {
+          "const": "mosaic-event/1"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "ts": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "correlationId": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "^resolved:"
+          }
+        },
+        "origin": {
+          "enum": [
+            "daemon",
+            "chat-api"
+          ]
+        },
+        "type": {
+          "const": "data-usage"
+        },
+        "payload": {
+          "$ref": "chunk.json#/definitions/data-usage"
+        }
+      },
+      "required": [
+        "kind",
+        "schemaVersion",
+        "seq",
+        "ts",
+        "correlationId",
+        "origin",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "event"
+        },
+        "schemaVersion": {
+          "const": "mosaic-event/1"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "ts": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "correlationId": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "^resolved:"
+          }
+        },
+        "origin": {
+          "enum": [
+            "daemon",
+            "chat-api"
+          ]
+        },
+        "type": {
+          "const": "data-auth-prompt"
+        },
+        "payload": {
+          "$ref": "chunk.json#/definitions/data-auth-prompt"
+        }
+      },
+      "required": [
+        "kind",
+        "schemaVersion",
+        "seq",
+        "ts",
+        "correlationId",
+        "origin",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "event"
+        },
+        "schemaVersion": {
+          "const": "mosaic-event/1"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "ts": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "correlationId": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "^resolved:"
+          }
+        },
+        "origin": {
+          "enum": [
+            "daemon",
+            "chat-api"
+          ]
+        },
+        "type": {
+          "const": "data-session-status"
+        },
+        "payload": {
+          "$ref": "chunk.json#/definitions/data-session-status"
+        }
+      },
+      "required": [
+        "kind",
+        "schemaVersion",
+        "seq",
+        "ts",
+        "correlationId",
+        "origin",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "event"
+        },
+        "schemaVersion": {
+          "const": "mosaic-event/1"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "ts": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "correlationId": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "^resolved:"
+          }
+        },
+        "origin": {
+          "enum": [
+            "daemon",
+            "chat-api"
+          ]
+        },
+        "type": {
+          "const": "data-artifact"
+        },
+        "payload": {
+          "$ref": "chunk.json#/definitions/data-artifact"
+        }
+      },
+      "required": [
+        "kind",
+        "schemaVersion",
+        "seq",
+        "ts",
+        "correlationId",
+        "origin",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "event"
+        },
+        "schemaVersion": {
+          "const": "mosaic-event/1"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "ts": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "correlationId": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "^resolved:"
+          }
+        },
+        "origin": {
+          "enum": [
+            "daemon",
+            "chat-api"
+          ]
+        },
+        "type": {
+          "const": "data-status"
+        },
+        "payload": {
+          "$ref": "chunk.json#/definitions/data-status"
+        }
+      },
+      "required": [
+        "kind",
+        "schemaVersion",
+        "seq",
+        "ts",
+        "correlationId",
+        "origin",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "event"
+        },
+        "schemaVersion": {
+          "const": "mosaic-event/1"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "ts": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "correlationId": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "^resolved:"
+          }
+        },
+        "origin": {
+          "enum": [
+            "daemon",
+            "chat-api"
+          ]
+        },
+        "type": {
+          "const": "data-conversation-id"
+        },
+        "payload": {
+          "$ref": "chunk.json#/definitions/data-conversation-id"
+        }
+      },
+      "required": [
+        "kind",
+        "schemaVersion",
+        "seq",
+        "ts",
+        "correlationId",
+        "origin",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "event"
+        },
+        "schemaVersion": {
+          "const": "mosaic-event/1"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "ts": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "correlationId": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "^resolved:"
+          }
+        },
+        "origin": {
+          "enum": [
+            "daemon",
+            "chat-api"
+          ]
+        },
+        "type": {
+          "const": "data-teaser-tail"
+        },
+        "payload": {
+          "$ref": "chunk.json#/definitions/data-teaser-tail"
+        }
+      },
+      "required": [
+        "kind",
+        "schemaVersion",
+        "seq",
+        "ts",
+        "correlationId",
+        "origin",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "event"
+        },
+        "schemaVersion": {
+          "const": "mosaic-event/1"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "ts": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "correlationId": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "^resolved:"
+          }
+        },
+        "origin": {
+          "enum": [
+            "daemon",
+            "chat-api"
+          ]
+        },
+        "type": {
+          "const": "data-teaser-gate"
+        },
+        "payload": {
+          "$ref": "chunk.json#/definitions/data-teaser-gate"
+        }
+      },
+      "required": [
+        "kind",
+        "schemaVersion",
+        "seq",
+        "ts",
+        "correlationId",
+        "origin",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "event"
+        },
+        "schemaVersion": {
+          "const": "mosaic-event/1"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "ts": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "correlationId": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "^resolved:"
+          }
+        },
+        "origin": {
+          "enum": [
+            "daemon",
+            "chat-api"
+          ]
+        },
+        "type": {
+          "const": "data-anon-turn"
+        },
+        "payload": {
+          "$ref": "chunk.json#/definitions/data-anon-turn"
+        }
+      },
+      "required": [
+        "kind",
+        "schemaVersion",
+        "seq",
+        "ts",
+        "correlationId",
+        "origin",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "event"
+        },
+        "schemaVersion": {
+          "const": "mosaic-event/1"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "ts": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "correlationId": {
+          "type": "string",
+          "pattern": "^resolved:.+"
+        },
+        "origin": {
+          "const": "relay"
+        },
+        "type": {
+          "const": "approval_resolved"
+        },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "correlationId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "decision": {
+              "enum": [
+                "allow",
+                "deny"
+              ]
+            },
+            "reason": {
+              "enum": [
+                "user",
+                "timeout"
+              ]
+            }
+          },
+          "required": [
+            "correlationId",
+            "decision",
+            "reason"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "kind",
+        "schemaVersion",
+        "seq",
+        "ts",
+        "correlationId",
+        "origin",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": false
+    }
+  ]
+}

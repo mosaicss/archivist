@@ -29,6 +29,14 @@ jobs:
       - name: go vet
         run: go vet ./...
 
+      - name: Set up Node for versioned Mosaic contract
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      - name: Mosaic event contracts (TypeScript and Go)
+        run: bash scripts/check-mosaic-event.sh
+
       - name: go test (with race + coverage)
         run: go test ./... -race -coverprofile=coverage.out
 
@@ -83,6 +91,9 @@ jobs:
 
       - name: shellcheck ci-drift-check.sh
         run: shellcheck scripts/ci-drift-check.sh
+
+      - name: shellcheck Mosaic contract and hook scripts
+        run: shellcheck scripts/check-mosaic-event.sh scripts/pre-commit-go.sh
 
       - name: Install drift-check deps
         run: sudo apt-get install -y grep

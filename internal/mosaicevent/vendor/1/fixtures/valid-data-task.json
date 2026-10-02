@@ -1,0 +1,9 @@
+[
+  {
+    "type": "data-task",
+    "data": {
+      "taskId": "fixture",
+      "status": "pending"
+    }
+  }
+]

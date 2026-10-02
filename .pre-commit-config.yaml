@@ -1,0 +1,30 @@
+# Local commits enforce the existing source lint/test/build checks; source CI retains its gates.
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-added-large-files
+        args: [--maxkb=1000]
+      - id: check-merge-conflict
+      - id: detect-private-key
+  - repo: local
+    hooks:
+      - id: go-source-checks
+        name: Go format, vet, race tests, lint and build
+        entry: bash scripts/pre-commit-go.sh
+        language: system
+        pass_filenames: false
+        files: '(^.*\.go$|^go\.(mod|sum)$|^\.golangci\.yml$|^internal/mosaicevent/|^scripts/.*mosaic.*|^scripts/pre-commit-go\.sh$)'
+        require_serial: true
+      - id: shellcheck
+        name: shellcheck
+        entry: shellcheck
+        language: system
+        types: [shell]

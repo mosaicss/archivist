@@ -1,0 +1,10 @@
+[
+  {
+    "type": "data-usage",
+    "data": {
+      "inputTokens": 9007199254740992,
+      "outputTokens": 1,
+      "model": "x"
+    }
+  }
+]

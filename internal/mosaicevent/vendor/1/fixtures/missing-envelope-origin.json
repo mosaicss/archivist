@@ -1,0 +1,15 @@
+[
+  {
+    "kind": "event",
+    "schemaVersion": "mosaic-event/1",
+    "seq": 1,
+    "ts": 0,
+    "correlationId": "event-1",
+    "type": "text-delta",
+    "payload": {
+      "type": "text-delta",
+      "id": "t",
+      "delta": "fixture"
+    }
+  }
+]

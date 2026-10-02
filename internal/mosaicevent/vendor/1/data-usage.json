@@ -1,0 +1,37 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://mosaic-finance.com/schemas/mosaic-event/1/data-usage.json",
+  "type": "object",
+  "properties": {
+    "inputTokens": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "outputTokens": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "reasoningTokens": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "cachedInputTokens": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "model": {
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "required": [
+    "inputTokens",
+    "outputTokens",
+    "model"
+  ],
+  "additionalProperties": false
+}

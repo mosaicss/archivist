@@ -1,0 +1,9 @@
+[
+  {
+    "type": "data-status",
+    "data": {
+      "event": "failed",
+      "summary": "bad"
+    }
+  }
+]

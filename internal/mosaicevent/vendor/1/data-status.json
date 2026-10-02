@@ -1,0 +1,25 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://mosaic-finance.com/schemas/mosaic-event/1/data-status.json",
+  "type": "object",
+  "properties": {
+    "event": {
+      "enum": [
+        "tool_start",
+        "tool_complete",
+        "thinking"
+      ]
+    },
+    "tool": {
+      "type": "string"
+    },
+    "summary": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "event",
+    "summary"
+  ],
+  "additionalProperties": false
+}

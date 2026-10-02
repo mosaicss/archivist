@@ -31,5 +31,5 @@ coverage.html
 !.env*.example
 .envrc
 
-# JS deps (defense — no JS in this repo today, but blocks accidental adds)
+# Locked contract package dependencies are preparation artifacts, never vendored source.
 node_modules/

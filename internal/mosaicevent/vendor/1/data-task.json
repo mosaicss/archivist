@@ -1,0 +1,32 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://mosaic-finance.com/schemas/mosaic-event/1/data-task.json",
+  "type": "object",
+  "properties": {
+    "taskId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "enum": [
+        "pending",
+        "running",
+        "completed",
+        "failed",
+        "cancelled"
+      ]
+    },
+    "title": {
+      "type": "string"
+    },
+    "parentTaskId": {
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "required": [
+    "taskId",
+    "status"
+  ],
+  "additionalProperties": false
+}

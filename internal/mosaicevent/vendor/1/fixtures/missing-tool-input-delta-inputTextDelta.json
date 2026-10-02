@@ -1,0 +1,6 @@
+[
+  {
+    "type": "tool-input-delta",
+    "toolCallId": "fixture"
+  }
+]

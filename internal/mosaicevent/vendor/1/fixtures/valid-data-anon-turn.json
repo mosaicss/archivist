@@ -1,0 +1,9 @@
+[
+  {
+    "type": "data-anon-turn",
+    "data": {
+      "conversationId": "fixture",
+      "turnsLeft": 0
+    }
+  }
+]

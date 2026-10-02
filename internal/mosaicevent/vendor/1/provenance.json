@@ -1,0 +1,223 @@
+{
+  "schemaVersion": "mosaic-event/1",
+  "sourceHarnessCommit": "5cbd6a3552f5db53b607c239135ef6668542ed4a",
+  "normalization": "Retained extracts only; replace UUIDs, absolute home paths, emails and opaque signatures. Frame direction in means harness received agent stdout; out means harness stdin. Drop only inventoried non-contract notices. Inject versioned starts and explicit lifecycle closes at normalization boundaries. Expected normalized outputs are checked, never regenerated in CI. Text/tool/approval/error payloads preserved; assistant snapshots do not repeat partial deltas. Current chat-api capture uses mocked providers/auth/storage and forbids external fetches. Synthetic cases are identified separately.",
+  "captures": [
+    {
+      "id": "02-claude-allow",
+      "protocol": "claude",
+      "version": "2.1.280",
+      "source": "78.3/evidence/runs/02-claude-allow/frames.jsonl",
+      "originalSha256": "e9f80a7fdaf6bb48363e16297debef8efc3b6bbe770e7543c07cc2806938578a",
+      "originalFrames": 35,
+      "retainedFrames": 29,
+      "ignoredNonContractFrames": {
+        "in:system:": 5,
+        "in:rate_limit_event:": 1
+      },
+      "input": "fixtures/raw/02-claude-allow.json",
+      "normalized": "fixtures/02-claude-allow.json"
+    },
+    {
+      "id": "03-claude-deny",
+      "protocol": "claude",
+      "version": "2.1.280",
+      "source": "78.3/evidence/runs/03-claude-deny/frames.jsonl",
+      "originalSha256": "4ee19f17e0d95f5fff7b000743cf43cbc379f6c36d3cbee3cbbcf2bedea9da0e",
+      "originalFrames": 34,
+      "retainedFrames": 28,
+      "ignoredNonContractFrames": {
+        "in:system:": 5,
+        "in:rate_limit_event:": 1
+      },
+      "input": "fixtures/raw/03-claude-deny.json",
+      "normalized": "fixtures/03-claude-deny.json"
+    },
+    {
+      "id": "04-claude-interrupt",
+      "protocol": "claude",
+      "version": "2.1.280",
+      "source": "78.3/evidence/runs/04-claude-interrupt/frames.jsonl",
+      "originalSha256": "37d6c0b11dc9db0e86e7feb9e6e3793f6f3b5658f883272ecca385de437fdf41",
+      "originalFrames": 38,
+      "retainedFrames": 31,
+      "ignoredNonContractFrames": {
+        "in:system:": 6,
+        "in:rate_limit_event:": 1
+      },
+      "input": "fixtures/raw/04-claude-interrupt.json",
+      "normalized": "fixtures/04-claude-interrupt.json"
+    },
+    {
+      "id": "06-claude-mcp",
+      "protocol": "claude",
+      "version": "2.1.280",
+      "source": "78.3/evidence/runs/06-claude-mcp/frames.jsonl",
+      "originalSha256": "8ca6c1266a06c4e22bb0e0c155f15f46699a0b2df7a848eb0252b60a7e9225a9",
+      "originalFrames": 24,
+      "retainedFrames": 18,
+      "ignoredNonContractFrames": {
+        "in:system:": 5,
+        "in:rate_limit_event:": 1
+      },
+      "input": "fixtures/raw/06-claude-mcp.json",
+      "normalized": "fixtures/06-claude-mcp.json"
+    },
+    {
+      "id": "07-codex-accept",
+      "protocol": "codex",
+      "version": "0.159.2",
+      "source": "78.3/evidence/runs/07-codex-accept/frames.jsonl",
+      "originalSha256": "4f205490773b52a2ac0a07cd3c4018b5933cdd9c217f092e7d0c7a155763ed13",
+      "originalFrames": 44,
+      "retainedFrames": 18,
+      "ignoredNonContractFrames": {
+        "out::initialize": 1,
+        "in::": 4,
+        "in::remoteControl/status/changed": 1,
+        "out::initialized": 1,
+        "out::model/list": 1,
+        "in::account/updated": 1,
+        "out::thread/start": 1,
+        "in::mcpServer/startupStatus/updated": 5,
+        "in::thread/started": 1,
+        "out::turn/start": 1,
+        "in::thread/status/changed": 4,
+        "in::hook/started": 1,
+        "in::hook/completed": 1,
+        "in::serverRequest/resolved": 1,
+        "in::account/rateLimits/updated": 2
+      },
+      "input": "fixtures/raw/07-codex-accept.json",
+      "normalized": "fixtures/07-codex-accept.json"
+    },
+    {
+      "id": "08-codex-decline",
+      "protocol": "codex",
+      "version": "0.159.2",
+      "source": "78.3/evidence/runs/08-codex-decline/frames.jsonl",
+      "originalSha256": "272b31b3a1d643293a88a2510fdcaca1a009059404aa8a316e1c9afb7707ad75",
+      "originalFrames": 56,
+      "retainedFrames": 30,
+      "ignoredNonContractFrames": {
+        "out::initialize": 1,
+        "in::": 4,
+        "in::remoteControl/status/changed": 1,
+        "out::initialized": 1,
+        "out::model/list": 1,
+        "out::thread/start": 1,
+        "in::thread/started": 1,
+        "out::turn/start": 1,
+        "in::mcpServer/startupStatus/updated": 5,
+        "in::thread/status/changed": 4,
+        "in::account/updated": 1,
+        "in::hook/started": 1,
+        "in::hook/completed": 1,
+        "in::serverRequest/resolved": 1,
+        "in::account/rateLimits/updated": 2
+      },
+      "input": "fixtures/raw/08-codex-decline.json",
+      "normalized": "fixtures/08-codex-decline.json"
+    },
+    {
+      "id": "09-codex-mcp",
+      "protocol": "codex",
+      "version": "0.159.2",
+      "source": "78.3/evidence/runs/09-codex-mcp/frames.jsonl",
+      "originalSha256": "a83d159fde535edce10a1d72cbd1dfb800070c71ba7ab8ac6559f40268963ac3",
+      "originalFrames": 38,
+      "retainedFrames": 14,
+      "ignoredNonContractFrames": {
+        "out::initialize": 1,
+        "in::": 4,
+        "out::initialized": 1,
+        "out::model/list": 1,
+        "in::remoteControl/status/changed": 1,
+        "out::thread/start": 1,
+        "in::thread/started": 1,
+        "in::mcpServer/startupStatus/updated": 5,
+        "out::turn/start": 1,
+        "in::thread/status/changed": 2,
+        "in::account/updated": 1,
+        "in::hook/started": 1,
+        "in::hook/completed": 1,
+        "in::account/rateLimits/updated": 3
+      },
+      "input": "fixtures/raw/09-codex-mcp.json",
+      "normalized": "fixtures/09-codex-mcp.json"
+    },
+    {
+      "id": "10-codex-interrupt",
+      "protocol": "codex",
+      "version": "0.159.2",
+      "source": "78.3/evidence/runs/10-codex-interrupt/frames.jsonl",
+      "originalSha256": "dd121f87f56d9ad0b5e71380e124e713ad6f9e203097214ce48cd51e8a8783cb",
+      "originalFrames": 27,
+      "retainedFrames": 4,
+      "ignoredNonContractFrames": {
+        "out::initialize": 1,
+        "in::": 5,
+        "out::initialized": 1,
+        "out::model/list": 1,
+        "in::remoteControl/status/changed": 1,
+        "out::thread/start": 1,
+        "in::mcpServer/startupStatus/updated": 5,
+        "out::turn/start": 1,
+        "in::thread/started": 1,
+        "in::thread/status/changed": 2,
+        "in::account/updated": 1,
+        "in::hook/started": 1,
+        "in::hook/completed": 1,
+        "out::turn/interrupt": 1
+      },
+      "input": "fixtures/raw/10-codex-interrupt.json",
+      "normalized": "fixtures/10-codex-interrupt.json"
+    },
+    {
+      "id": "chat-api-78-2",
+      "protocol": "sse",
+      "version": "ai@7.0.118",
+      "source": "78.2/evidence/chat-api-capture.sse",
+      "originalSha256": "e7337cc812b33f1da806b81e6e6e41b61609eb413b951f44a6111f5ffbdf7918",
+      "input": "fixtures/raw/chat-api-78-2.sse.json",
+      "normalized": "fixtures/chat-api-78-2.json",
+      "inputEncoding": "json-string"
+    },
+    {
+      "id": "chat-api-current-anon-gate",
+      "protocol": "sse",
+      "version": "ai@7.0.122",
+      "source": "Story 78.13 current hermetic anon-chat.test.ts: runs uncited turns 1 and 2 whole",
+      "sourceRevision": "6b493d1b763121c18c7e7dc47174f0ebd04b4bcd",
+      "originalSha256": "f46405412b4abe4cae22f0b46c56721b72b11e503921207f89d31affaf69c06a",
+      "sanitization": "Replace generated conversation UUID with fixture-conversation; retain wire ordering and content. Upstreams/auth/storage mocked. No live provider calls.",
+      "input": "fixtures/raw/chat-api-current-anon-gate.sse.json",
+      "normalized": "fixtures/chat-api-current-anon-gate.json",
+      "inputEncoding": "json-string"
+    },
+    {
+      "id": "chat-api-current-anon-turn",
+      "protocol": "sse",
+      "version": "ai@7.0.122",
+      "source": "Story 78.13 current hermetic anon-chat.test.ts: runs uncited turns 1 and 2 whole",
+      "sourceRevision": "6b493d1b763121c18c7e7dc47174f0ebd04b4bcd",
+      "originalSha256": "bf579265ce785fae91eb4e0425b8b7f5bb62789f8fbb2580ae4eaf00236d339e",
+      "sanitization": "Replace generated conversation UUID with fixture-conversation; retain wire ordering and content. Upstreams/auth/storage mocked. No live provider calls.",
+      "input": "fixtures/raw/chat-api-current-anon-turn.sse.json",
+      "normalized": "fixtures/chat-api-current-anon-turn.json",
+      "inputEncoding": "json-string"
+    },
+    {
+      "id": "chat-api-current-workspace",
+      "protocol": "sse",
+      "version": "ai@7.0.122",
+      "source": "Story 78.13 current hermetic workspace-oauth.test.ts: ends the workspace wire",
+      "sourceRevision": "6b493d1b763121c18c7e7dc47174f0ebd04b4bcd",
+      "originalSha256": "1358896e26f5f1f0d2dbb0fc1788765af4ad46b19ad76d3cf9ef3009529f6495",
+      "sanitization": "Replace generated conversation UUID with fixture-conversation; retain wire ordering and content. Upstreams/auth/storage mocked. No live provider calls.",
+      "input": "fixtures/raw/chat-api-current-workspace.sse.json",
+      "normalized": "fixtures/chat-api-current-workspace.json",
+      "inputEncoding": "json-string"
+    }
+  ]
+}

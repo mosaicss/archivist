@@ -1,0 +1,595 @@
+[
+  {
+    "sourceIndex": 15,
+    "direction": "in",
+    "frame": {
+      "method": "turn/started",
+      "params": {
+        "threadId": "fixture-id-1",
+        "turn": {
+          "id": "fixture-id-2",
+          "items": [],
+          "itemsView": "notLoaded",
+          "status": "inProgress",
+          "error": null,
+          "startedAt": 1790834276,
+          "completedAt": null,
+          "durationMs": null
+        }
+      },
+      "emittedAtMs": 1790834276177
+    }
+  },
+  {
+    "sourceIndex": 19,
+    "direction": "in",
+    "frame": {
+      "method": "item/started",
+      "params": {
+        "item": {
+          "type": "userMessage",
+          "id": "fixture-id-3",
+          "clientId": null,
+          "content": [
+            {
+              "type": "text",
+              "text": "Run exactly this shell command in the current directory: touch spike-78-3.txt && echo spike-78-3 . Do not run any other command. Then reply with the command output, or say it was declined.",
+              "text_elements": []
+            }
+          ]
+        },
+        "threadId": "fixture-id-1",
+        "turnId": "fixture-id-2",
+        "startedAtMs": 1790834277068
+      },
+      "emittedAtMs": 1790834277068
+    }
+  },
+  {
+    "sourceIndex": 20,
+    "direction": "in",
+    "frame": {
+      "method": "item/completed",
+      "params": {
+        "item": {
+          "type": "userMessage",
+          "id": "fixture-id-3",
+          "clientId": null,
+          "content": [
+            {
+              "type": "text",
+              "text": "Run exactly this shell command in the current directory: touch spike-78-3.txt && echo spike-78-3 . Do not run any other command. Then reply with the command output, or say it was declined.",
+              "text_elements": []
+            }
+          ]
+        },
+        "threadId": "fixture-id-1",
+        "turnId": "fixture-id-2",
+        "completedAtMs": 1790834277068
+      },
+      "emittedAtMs": 1790834277071
+    }
+  },
+  {
+    "sourceIndex": 23,
+    "direction": "in",
+    "frame": {
+      "method": "item/started",
+      "params": {
+        "item": {
+          "type": "agentMessage",
+          "id": "msg_0d2e50b3b7b07bdb016abdf665f4e887d19f7474fa669d5386",
+          "text": "",
+          "phase": "commentary",
+          "memoryCitation": null,
+          "delivery": null,
+          "questions": null
+        },
+        "threadId": "fixture-id-1",
+        "turnId": "fixture-id-2",
+        "startedAtMs": 1790834277970
+      },
+      "emittedAtMs": 1790834277970
+    }
+  },
+  {
+    "sourceIndex": 24,
+    "direction": "in",
+    "frame": {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "fixture-id-1",
+        "turnId": "fixture-id-2",
+        "itemId": "msg_0d2e50b3b7b07bdb016abdf665f4e887d19f7474fa669d5386",
+        "delta": "I"
+      },
+      "emittedAtMs": 1790834277970
+    }
+  },
+  {
+    "sourceIndex": 25,
+    "direction": "in",
+    "frame": {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "fixture-id-1",
+        "turnId": "fixture-id-2",
+        "itemId": "msg_0d2e50b3b7b07bdb016abdf665f4e887d19f7474fa669d5386",
+        "delta": "’ll"
+      },
+      "emittedAtMs": 1790834277971
+    }
+  },
+  {
+    "sourceIndex": 26,
+    "direction": "in",
+    "frame": {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "fixture-id-1",
+        "turnId": "fixture-id-2",
+        "itemId": "msg_0d2e50b3b7b07bdb016abdf665f4e887d19f7474fa669d5386",
+        "delta": " run"
+      },
+      "emittedAtMs": 1790834278013
+    }
+  },
+  {
+    "sourceIndex": 27,
+    "direction": "in",
+    "frame": {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "fixture-id-1",
+        "turnId": "fixture-id-2",
+        "itemId": "msg_0d2e50b3b7b07bdb016abdf665f4e887d19f7474fa669d5386",
+        "delta": " only"
+      },
+      "emittedAtMs": 1790834278013
+    }
+  },
+  {
+    "sourceIndex": 28,
+    "direction": "in",
+    "frame": {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "fixture-id-1",
+        "turnId": "fixture-id-2",
+        "itemId": "msg_0d2e50b3b7b07bdb016abdf665f4e887d19f7474fa669d5386",
+        "delta": " the"
+      },
+      "emittedAtMs": 1790834278078
+    }
+  },
+  {
+    "sourceIndex": 29,
+    "direction": "in",
+    "frame": {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "fixture-id-1",
+        "turnId": "fixture-id-2",
+        "itemId": "msg_0d2e50b3b7b07bdb016abdf665f4e887d19f7474fa669d5386",
+        "delta": " requested"
+      },
+      "emittedAtMs": 1790834278079
+    }
+  },
+  {
+    "sourceIndex": 30,
+    "direction": "in",
+    "frame": {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "fixture-id-1",
+        "turnId": "fixture-id-2",
+        "itemId": "msg_0d2e50b3b7b07bdb016abdf665f4e887d19f7474fa669d5386",
+        "delta": " shell"
+      },
+      "emittedAtMs": 1790834278151
+    }
+  },
+  {
+    "sourceIndex": 31,
+    "direction": "in",
+    "frame": {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "fixture-id-1",
+        "turnId": "fixture-id-2",
+        "itemId": "msg_0d2e50b3b7b07bdb016abdf665f4e887d19f7474fa669d5386",
+        "delta": " command"
+      },
+      "emittedAtMs": 1790834278151
+    }
+  },
+  {
+    "sourceIndex": 32,
+    "direction": "in",
+    "frame": {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "fixture-id-1",
+        "turnId": "fixture-id-2",
+        "itemId": "msg_0d2e50b3b7b07bdb016abdf665f4e887d19f7474fa669d5386",
+        "delta": " in"
+      },
+      "emittedAtMs": 1790834278151
+    }
+  },
+  {
+    "sourceIndex": 33,
+    "direction": "in",
+    "frame": {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "fixture-id-1",
+        "turnId": "fixture-id-2",
+        "itemId": "msg_0d2e50b3b7b07bdb016abdf665f4e887d19f7474fa669d5386",
+        "delta": " the"
+      },
+      "emittedAtMs": 1790834278151
+    }
+  },
+  {
+    "sourceIndex": 34,
+    "direction": "in",
+    "frame": {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "fixture-id-1",
+        "turnId": "fixture-id-2",
+        "itemId": "msg_0d2e50b3b7b07bdb016abdf665f4e887d19f7474fa669d5386",
+        "delta": " current"
+      },
+      "emittedAtMs": 1790834278152
+    }
+  },
+  {
+    "sourceIndex": 35,
+    "direction": "in",
+    "frame": {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "fixture-id-1",
+        "turnId": "fixture-id-2",
+        "itemId": "msg_0d2e50b3b7b07bdb016abdf665f4e887d19f7474fa669d5386",
+        "delta": " directory"
+      },
+      "emittedAtMs": 1790834278211
+    }
+  },
+  {
+    "sourceIndex": 36,
+    "direction": "in",
+    "frame": {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "fixture-id-1",
+        "turnId": "fixture-id-2",
+        "itemId": "msg_0d2e50b3b7b07bdb016abdf665f4e887d19f7474fa669d5386",
+        "delta": "."
+      },
+      "emittedAtMs": 1790834278217
+    }
+  },
+  {
+    "sourceIndex": 37,
+    "direction": "in",
+    "frame": {
+      "method": "item/completed",
+      "params": {
+        "item": {
+          "type": "agentMessage",
+          "id": "msg_0d2e50b3b7b07bdb016abdf665f4e887d19f7474fa669d5386",
+          "text": "I’ll run only the requested shell command in the current directory.",
+          "phase": "commentary",
+          "memoryCitation": null,
+          "delivery": null,
+          "questions": null
+        },
+        "threadId": "fixture-id-1",
+        "turnId": "fixture-id-2",
+        "completedAtMs": 1790834278487
+      },
+      "emittedAtMs": 1790834278490
+    }
+  },
+  {
+    "sourceIndex": 39,
+    "direction": "in",
+    "frame": {
+      "method": "item/started",
+      "params": {
+        "item": {
+          "type": "commandExecution",
+          "id": "exec-fixture-id-4",
+          "pluginId": null,
+          "scriptPath": null,
+          "command": "/bin/bash -lc 'touch spike-78-3.txt && echo spike-78-3'",
+          "cwd": "/fixture/workdir",
+          "processId": null,
+          "source": "agent",
+          "status": "inProgress",
+          "commandActions": [
+            {
+              "type": "unknown",
+              "command": "touch spike-78-3.txt && echo spike-78-3"
+            }
+          ],
+          "aggregatedOutput": null,
+          "exitCode": null,
+          "durationMs": null
+        },
+        "threadId": "fixture-id-1",
+        "turnId": "fixture-id-2",
+        "startedAtMs": 1790834279984
+      },
+      "emittedAtMs": 1790834279984
+    }
+  },
+  {
+    "sourceIndex": 40,
+    "direction": "in",
+    "frame": {
+      "method": "item/commandExecution/requestApproval",
+      "id": 0,
+      "params": {
+        "kind": "command",
+        "threadId": "fixture-id-1",
+        "turnId": "fixture-id-2",
+        "itemId": "exec-fixture-id-4",
+        "startedAtMs": 1790834279983,
+        "environmentId": "local",
+        "command": "/bin/bash -lc 'touch spike-78-3.txt && echo spike-78-3'",
+        "cwd": "/fixture/workdir",
+        "commandActions": [
+          {
+            "type": "unknown",
+            "command": "touch spike-78-3.txt && echo spike-78-3"
+          }
+        ],
+        "proposedExecpolicyAmendment": [
+          "touch",
+          "spike-78-3.txt"
+        ],
+        "availableDecisions": [
+          "accept",
+          {
+            "acceptWithExecpolicyAmendment": {
+              "execpolicy_amendment": [
+                "touch",
+                "spike-78-3.txt"
+              ]
+            }
+          },
+          "cancel"
+        ]
+      }
+    }
+  },
+  {
+    "sourceIndex": 41,
+    "direction": "out",
+    "frame": {
+      "id": 0,
+      "result": {
+        "decision": "decline"
+      },
+      "jsonrpc": "2.0"
+    }
+  },
+  {
+    "sourceIndex": 43,
+    "direction": "in",
+    "frame": {
+      "method": "item/completed",
+      "params": {
+        "item": {
+          "type": "commandExecution",
+          "id": "exec-fixture-id-4",
+          "pluginId": null,
+          "scriptPath": null,
+          "command": "/bin/bash -lc 'touch spike-78-3.txt && echo spike-78-3'",
+          "cwd": "/fixture/workdir",
+          "processId": null,
+          "source": "agent",
+          "status": "declined",
+          "commandActions": [
+            {
+              "type": "unknown",
+              "command": "touch spike-78-3.txt && echo spike-78-3"
+            }
+          ],
+          "aggregatedOutput": null,
+          "exitCode": null,
+          "durationMs": null
+        },
+        "threadId": "fixture-id-1",
+        "turnId": "fixture-id-2",
+        "completedAtMs": 1790834279988
+      },
+      "emittedAtMs": 1790834279988
+    }
+  },
+  {
+    "sourceIndex": 45,
+    "direction": "in",
+    "frame": {
+      "method": "thread/tokenUsage/updated",
+      "params": {
+        "threadId": "fixture-id-1",
+        "turnId": "fixture-id-2",
+        "tokenUsage": {
+          "total": {
+            "totalTokens": 15179,
+            "inputTokens": 15066,
+            "cachedInputTokens": 11008,
+            "cacheWriteInputTokens": 0,
+            "outputTokens": 113,
+            "reasoningOutputTokens": 0
+          },
+          "last": {
+            "totalTokens": 15179,
+            "inputTokens": 15066,
+            "cachedInputTokens": 11008,
+            "cacheWriteInputTokens": 0,
+            "outputTokens": 113,
+            "reasoningOutputTokens": 0
+          },
+          "modelContextWindow": 258400
+        }
+      },
+      "emittedAtMs": 1790834280015
+    }
+  },
+  {
+    "sourceIndex": 47,
+    "direction": "in",
+    "frame": {
+      "method": "item/started",
+      "params": {
+        "item": {
+          "type": "agentMessage",
+          "id": "msg_0d2e50b3b7b07bdb016abdf668ce4487d1b4d2a0882c53c342",
+          "text": "",
+          "phase": "final_answer",
+          "memoryCitation": null,
+          "delivery": null,
+          "questions": null
+        },
+        "threadId": "fixture-id-1",
+        "turnId": "fixture-id-2",
+        "startedAtMs": 1790834280833
+      },
+      "emittedAtMs": 1790834280833
+    }
+  },
+  {
+    "sourceIndex": 48,
+    "direction": "in",
+    "frame": {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "fixture-id-1",
+        "turnId": "fixture-id-2",
+        "itemId": "msg_0d2e50b3b7b07bdb016abdf668ce4487d1b4d2a0882c53c342",
+        "delta": "Decl"
+      },
+      "emittedAtMs": 1790834280833
+    }
+  },
+  {
+    "sourceIndex": 49,
+    "direction": "in",
+    "frame": {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "fixture-id-1",
+        "turnId": "fixture-id-2",
+        "itemId": "msg_0d2e50b3b7b07bdb016abdf668ce4487d1b4d2a0882c53c342",
+        "delta": "ined"
+      },
+      "emittedAtMs": 1790834280879
+    }
+  },
+  {
+    "sourceIndex": 50,
+    "direction": "in",
+    "frame": {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "fixture-id-1",
+        "turnId": "fixture-id-2",
+        "itemId": "msg_0d2e50b3b7b07bdb016abdf668ce4487d1b4d2a0882c53c342",
+        "delta": "."
+      },
+      "emittedAtMs": 1790834280880
+    }
+  },
+  {
+    "sourceIndex": 51,
+    "direction": "in",
+    "frame": {
+      "method": "item/completed",
+      "params": {
+        "item": {
+          "type": "agentMessage",
+          "id": "msg_0d2e50b3b7b07bdb016abdf668ce4487d1b4d2a0882c53c342",
+          "text": "Declined.",
+          "phase": "final_answer",
+          "memoryCitation": null,
+          "delivery": null,
+          "questions": null
+        },
+        "threadId": "fixture-id-1",
+        "turnId": "fixture-id-2",
+        "completedAtMs": 1790834280942
+      },
+      "emittedAtMs": 1790834280945
+    }
+  },
+  {
+    "sourceIndex": 52,
+    "direction": "in",
+    "frame": {
+      "method": "thread/tokenUsage/updated",
+      "params": {
+        "threadId": "fixture-id-1",
+        "turnId": "fixture-id-2",
+        "tokenUsage": {
+          "total": {
+            "totalTokens": 30410,
+            "inputTokens": 30290,
+            "cachedInputTokens": 25088,
+            "cacheWriteInputTokens": 0,
+            "outputTokens": 120,
+            "reasoningOutputTokens": 0
+          },
+          "last": {
+            "totalTokens": 15231,
+            "inputTokens": 15224,
+            "cachedInputTokens": 14080,
+            "cacheWriteInputTokens": 0,
+            "outputTokens": 7,
+            "reasoningOutputTokens": 0
+          },
+          "modelContextWindow": 258400
+        }
+      },
+      "emittedAtMs": 1790834280968
+    }
+  },
+  {
+    "sourceIndex": 55,
+    "direction": "in",
+    "frame": {
+      "method": "turn/completed",
+      "params": {
+        "threadId": "fixture-id-1",
+        "turn": {
+          "id": "fixture-id-2",
+          "items": [
+            {
+              "type": "agentMessage",
+              "id": "msg_0d2e50b3b7b07bdb016abdf668ce4487d1b4d2a0882c53c342",
+              "text": "Declined.",
+              "phase": "final_answer",
+              "memoryCitation": null,
+              "delivery": null,
+              "questions": null
+            }
+          ],
+          "itemsView": "summary",
+          "status": "completed",
+          "error": null,
+          "startedAt": 1790834276,
+          "completedAt": 1790834280,
+          "durationMs": 4818
+        }
+      },
+      "emittedAtMs": 1790834280971
+    }
+  }
+]

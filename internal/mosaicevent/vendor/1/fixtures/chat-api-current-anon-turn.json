@@ -1,0 +1,1565 @@
+[
+  {
+    "type": "start",
+    "messageId": "chat-api-current-anon-turn",
+    "messageMetadata": {
+      "schemaVersion": "mosaic-event/1"
+    }
+  },
+  {
+    "type": "data-conversation-id",
+    "data": {
+      "conversationId": "fixture-conversation"
+    },
+    "transient": true
+  },
+  {
+    "type": "text-start",
+    "id": "anon-answer-1"
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "Public "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "answer "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "[cite:1] "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "HIDDEN "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "FINAL "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-1",
+    "delta": "ANSWER"
+  },
+  {
+    "type": "text-end",
+    "id": "anon-answer-1"
+  },
+  {
+    "type": "data-anon-turn",
+    "transient": true,
+    "data": {
+      "conversationId": "fixture-conversation",
+      "turnsLeft": 2
+    }
+  },
+  {
+    "type": "finish"
+  }
+]

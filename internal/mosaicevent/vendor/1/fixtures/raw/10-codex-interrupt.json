@@ -1,0 +1,94 @@
+[
+  {
+    "sourceIndex": 15,
+    "direction": "in",
+    "frame": {
+      "method": "turn/started",
+      "params": {
+        "threadId": "fixture-id-1",
+        "turn": {
+          "id": "fixture-id-2",
+          "items": [],
+          "itemsView": "notLoaded",
+          "status": "inProgress",
+          "error": null,
+          "startedAt": 1790834297,
+          "completedAt": null,
+          "durationMs": null
+        }
+      },
+      "emittedAtMs": 1790834298002
+    }
+  },
+  {
+    "sourceIndex": 21,
+    "direction": "in",
+    "frame": {
+      "method": "item/started",
+      "params": {
+        "item": {
+          "type": "userMessage",
+          "id": "fixture-id-3",
+          "clientId": null,
+          "content": [
+            {
+              "type": "text",
+              "text": "Run exactly this shell command in the current directory: sleep 60 && touch spike-78-3.txt && echo spike-78-3 . Then reply with its output.",
+              "text_elements": []
+            }
+          ]
+        },
+        "threadId": "fixture-id-1",
+        "turnId": "fixture-id-2",
+        "startedAtMs": 1790834299031
+      },
+      "emittedAtMs": 1790834299031
+    }
+  },
+  {
+    "sourceIndex": 23,
+    "direction": "in",
+    "frame": {
+      "method": "item/completed",
+      "params": {
+        "item": {
+          "type": "userMessage",
+          "id": "fixture-id-3",
+          "clientId": null,
+          "content": [
+            {
+              "type": "text",
+              "text": "Run exactly this shell command in the current directory: sleep 60 && touch spike-78-3.txt && echo spike-78-3 . Then reply with its output.",
+              "text_elements": []
+            }
+          ]
+        },
+        "threadId": "fixture-id-1",
+        "turnId": "fixture-id-2",
+        "completedAtMs": 1790834299031
+      },
+      "emittedAtMs": 1790834299033
+    }
+  },
+  {
+    "sourceIndex": 26,
+    "direction": "in",
+    "frame": {
+      "method": "turn/completed",
+      "params": {
+        "threadId": "fixture-id-1",
+        "turn": {
+          "id": "fixture-id-2",
+          "items": [],
+          "itemsView": "notLoaded",
+          "status": "interrupted",
+          "error": null,
+          "startedAt": 1790834297,
+          "completedAt": 1790834299,
+          "durationMs": 1069
+        }
+      },
+      "emittedAtMs": 1790834299043
+    }
+  }
+]
