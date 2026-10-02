@@ -77,7 +77,7 @@ release age of already locked versions.
 Renovate excludes `reference/schemas/mosaic-event/**` before package extraction for every version.
 This prevents partial bot changes from ordinary updates, lock maintenance or OSV security force;
 an ordinary package hold can be overridden by that force. The contract lock remains in the
-blocking nightly, PR and delivery security scans, with the existing malicious/critical thresholds
+nightly scans and blocking PR and delivery security scans, with the existing malicious/critical thresholds
 and reviewed acceptance rules. A detected vulnerability requires explicit reviewed canonical
 dependency/lock changes and the digest/vendor/source-pin reconciliation below, or a new version.
 
