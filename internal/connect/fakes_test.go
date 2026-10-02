@@ -102,6 +102,8 @@ type fakeChatAPI struct {
 	badTokens int
 	// failRevokes makes the next N revocations answer 503.
 	failRevokes int
+	// failRevokesFor refuses every revocation of this token id with 503.
+	failRevokesFor string
 	// sessionTicketStatus, when set, refuses session-scoped tickets with it.
 	sessionTicketStatus int
 }
@@ -318,6 +320,10 @@ func (f *fakeChatAPI) serve(w http.ResponseWriter, r *http.Request) {
 		reply(201, map[string]any{"token": tok, "tokenId": id, "expiresAt": time.Now().Add(ttl).UnixMilli(), "scopes": in.Scopes})
 	case r.Method == "DELETE" && strings.HasPrefix(r.URL.Path, "/task-tokens/"):
 		tk := f.tokens[strings.TrimPrefix(r.URL.Path, "/task-tokens/")]
+		if f.failRevokesFor != "" && strings.TrimPrefix(r.URL.Path, "/task-tokens/") == f.failRevokesFor {
+			reply(503, map[string]any{"error": "Temporarily unavailable.", "code": "UNAVAILABLE"})
+			return
+		}
 		if f.failRevokes > 0 {
 			f.failRevokes--
 			reply(503, map[string]any{"error": "Temporarily unavailable.", "code": "UNAVAILABLE"})

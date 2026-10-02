@@ -133,3 +133,14 @@ func TestConnectRefusesCleartextRemoteRelay(t *testing.T) {
 		t.Fatalf("exit %d, hits %d\n%s", exitCodeFrom(err), hits.Load(), out)
 	}
 }
+
+// The relay URL is validated first, --check included (exit 2, nothing run).
+func TestConnectCheckRejectsBadRelayURL(t *testing.T) {
+	stubClaude(t)
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("ARCHIVIST_RELAY_URL", "wss://relay.example.test/?q=1")
+	out, err := runAuthCmd(t, "connect", "--check")
+	if exitCodeFrom(err) != cmd.ExitUsageError || !strings.Contains(out, "ARCHIVIST_RELAY_URL") || strings.Contains(out, "path:") {
+		t.Fatalf("exit %d\n%s", exitCodeFrom(err), out)
+	}
+}

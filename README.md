@@ -217,9 +217,10 @@ For each "My Claude Code" session the daemon:
   the Mosaic search and read tools (`archivist mcp serve` in task mode, under
   a 15 minute task token it rotates and revokes); every tool call that needs
   permission becomes an approval card in the workspace (allow once, allow for
-  the session, deny; no answer within 60 seconds denies). "Allow for the
-  session" and "reject for the session" apply to every later call of that tool
-  in the session, whatever its input, without another card;
+  session, deny once, deny for session; no answer within 60 seconds denies).
+  "Allow for session" and "deny for session" apply to every later call of that
+  tool in the session, whatever its input, without another card; they live in
+  the daemon's memory, so restarting `archivist connect` clears them;
 - streams the session as `mosaic-event/1` events, each validated before it is
   sent.
 
@@ -238,7 +239,7 @@ sessions come later (`--check` reports Codex as not supported yet).
 
 Exit codes: 0 stopped by Ctrl-C (or `--check` found a usable Claude Code); 1
 refused or stopped (feature not enabled, another `archivist connect` took
-over, Claude Code too old); 2 bad flag; 3 Claude Code not found; 4 credential
+over, Claude Code too old); 2 bad flag or relay URL; 3 Claude Code not found; 4 credential
 or Claude login problem.
 
 ## Claude Code skill

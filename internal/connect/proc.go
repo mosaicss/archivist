@@ -112,7 +112,13 @@ func StartProc(spec ProcSpec) (*Proc, error) {
 			// would otherwise run on unread, so end its group and let the exit
 			// path settle the session.
 			p.log.Printf("harness stdout reader stopped: %v; terminating claude", err)
+			// Snapshot first: descendants in other groups could keep the pipe
+			// open (Done would never close) and are reparented after the kill.
+			tracked := descendants(p.PID())
 			signalGroup(p.PID(), sigKill)
+			for _, id := range tracked {
+				killPID(id)
+			}
 		}
 		_, _ = io.Copy(io.Discard, stdout)
 	}()

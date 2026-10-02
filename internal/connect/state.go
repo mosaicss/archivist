@@ -11,6 +11,9 @@ import (
 	"sync"
 )
 
+// errCorruptRecord marks a session record that exists but cannot be used.
+var errCorruptRecord = errors.New("corrupt session record")
+
 // maxHandled bounds the remembered command ids per session.
 const maxHandled = 512
 
@@ -105,10 +108,10 @@ func (s *Store) Load(id string) (*SessionRecord, error) {
 	}
 	var rec SessionRecord
 	if err := json.Unmarshal(data, &rec); err != nil {
-		return nil, fmt.Errorf("session record %s: %w", path, err)
+		return nil, fmt.Errorf("session record %s: %w: %v", path, errCorruptRecord, err)
 	}
 	if rec.SessionID != id {
-		return nil, fmt.Errorf("session record %s names another session", path)
+		return nil, fmt.Errorf("session record %s names another session: %w", path, errCorruptRecord)
 	}
 	return &rec, nil
 }
@@ -171,6 +174,26 @@ func (s *Store) RemoveRunDir(id string) {
 	if uuidRe.MatchString(id) {
 		_ = os.RemoveAll(filepath.Join(s.dir, "run", id))
 	}
+}
+
+// cwdPrefix is the makeCwd temp directory prefix.
+const cwdPrefix = "archivist-connect-"
+
+// removeSessionCwd deletes a session working directory read from a record,
+// but only one makeCwd could have created: base name with cwdPrefix, never
+// the home directory or a filesystem root.
+func removeSessionCwd(dir string) bool {
+	if dir == "" || !filepath.IsAbs(dir) {
+		return false
+	}
+	clean := filepath.Clean(dir)
+	if !strings.HasPrefix(filepath.Base(clean), cwdPrefix) || filepath.Dir(clean) == clean {
+		return false
+	}
+	if home, err := os.UserHomeDir(); err == nil && filepath.Clean(home) == clean {
+		return false
+	}
+	return os.RemoveAll(clean) == nil
 }
 
 // writeFileAtomic writes data to path through a 0600 temp file and rename,

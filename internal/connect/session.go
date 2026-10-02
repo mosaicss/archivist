@@ -261,6 +261,11 @@ func (s *session) spawn(ctx context.Context, resumeID string) (err error) {
 // errCapacity means every live-process slot is taken.
 var errCapacity = errors.New("too many live sessions")
 
+// emitCapacity reports a full daemon (no error chunk: nothing ran).
+func (s *session) emitCapacity() {
+	s.emitStatus("failed", fmt.Sprintf("archivist connect already runs %d live sessions.", s.d.maxSessions))
+}
+
 // releaseSlot returns this session's live-process slot, once.
 func (s *session) releaseSlot() {
 	if s.slot {
@@ -280,6 +285,7 @@ func (s *session) failSession(msg string) {
 	s.save()
 	s.revokeToken()
 	s.d.store.RemoveRunDir(s.id)
+	removeSessionCwd(s.rec.Cwd)
 }
 
 // proofError is a failed subscription proof: fatal for the session.
@@ -291,15 +297,18 @@ func (s *session) failStart(err error) {
 	var proof *proofError
 	msg := Scrub("Could not start Claude Code: " + err.Error())
 	s.log.Printf("%s", msg)
+	if errors.Is(err, errCapacity) {
+		s.emitCapacity()
+		return
+	}
 	s.emitError(msg)
 	switch {
 	case errors.As(err, &proof):
 		s.failSession(proof.msg)
 		s.emitStatus("failed", msg)
-	case errors.Is(err, errCapacity):
-		s.emitStatus("failed", fmt.Sprintf("archivist connect already runs %d live sessions.", s.d.maxSessions))
 	case s.resumable():
 		s.revokeToken()
+		s.d.store.RemoveRunDir(s.id) // ensureToken recreates it on resume
 		s.emitStatus("failed", msg+" The next message tries to resume the session.")
 	default:
 		s.failSession(msg)
@@ -393,6 +402,7 @@ func (s *session) processExited() {
 func (s *session) processGone(what string) {
 	if s.resumable() {
 		s.revokeToken()
+		s.d.store.RemoveRunDir(s.id) // ensureToken recreates it on resume
 		s.emitStatus("failed", what+"; the next message resumes the session.")
 		return
 	}
@@ -471,10 +481,7 @@ func (s *session) failProof(msg string) {
 		_ = s.proc.WriteJSON(interruptFrame("archivist-proof-" + s.outbox.RunID()))
 	}
 	s.stopProcess(true)
-	s.revokeToken()
-	s.fatal = msg
-	s.rec.Status = "failed"
-	s.save()
+	s.failSession(msg)
 	s.emitError(msg)
 	s.emitStatus("failed", msg)
 }
@@ -558,6 +565,14 @@ func (s *session) userMessage(ctx context.Context, text string) {
 			s.emitStatus("failed", "There is no Claude Code session to resume.")
 			return
 		}
+		// Reserve the slot first: a full daemon refuses without "starting".
+		if !s.slot {
+			if !s.d.reserveSlot() {
+				s.emitCapacity()
+				return
+			}
+			s.slot = true
+		}
 		s.emitStatus("starting", "Resuming the Claude Code session.")
 		if err := s.spawn(ctx, s.rec.ClaudeSessionID); err != nil {
 			s.failStart(err)
@@ -638,9 +653,7 @@ func (s *session) stop(emitCompleted bool) {
 	s.rec.Status = "ended"
 	s.save()
 	s.d.store.RemoveRunDir(s.id)
-	if s.rec.Cwd != "" {
-		_ = os.RemoveAll(s.rec.Cwd)
-	}
+	removeSessionCwd(s.rec.Cwd)
 	ctx, cancel := context.WithTimeout(context.Background(), drainTimeout)
 	defer cancel()
 	s.outbox.WaitDrained(ctx)
@@ -681,6 +694,7 @@ func (s *session) linkEnded(err error) {
 			s.log.Printf("session socket stopped: %v", err)
 			s.rec.Status = "failed"
 			s.save()
+			removeSessionCwd(s.rec.Cwd)
 		}
 		s.stopping = true
 		s.stopProcess(false)

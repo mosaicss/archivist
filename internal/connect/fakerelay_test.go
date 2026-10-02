@@ -41,6 +41,11 @@ type fakeRelay struct {
 	// frames records every raw event frame received, by correlation id.
 	frames map[string][]string
 	pings  int
+	// unavailable answers the next event on a session with error UNAVAILABLE
+	// (one shot) and ignores that connection's later events, as a relay that
+	// failed to ingest would until the daemon reconnects.
+	unavailable map[string]bool
+	refused     map[string]string
 }
 
 func newFakeRelay(t *testing.T) *fakeRelay {
@@ -50,7 +55,7 @@ func newFakeRelay(t *testing.T) *fakeRelay {
 	}
 	r := &fakeRelay{t: t, parser: p, sessions: map[string]*websocket.Conn{}, events: map[string][]map[string]any{},
 		seen: map[string]bool{}, queued: map[string][]map[string]any{}, dials: map[string]int{},
-		withhold: map[string]bool{}, frames: map[string][]string{}}
+		withhold: map[string]bool{}, frames: map[string][]string{}, unavailable: map[string]bool{}, refused: map[string]string{}}
 	r.srv = httptest.NewServer(http.HandlerFunc(r.serve))
 	t.Cleanup(r.srv.Close)
 	return r
@@ -91,6 +96,7 @@ func (r *fakeRelay) serve(w http.ResponseWriter, req *http.Request) {
 		_ = old.Close(closeSuperseed, "superseded")
 	}
 	ctx := context.Background()
+	poisoned := false
 	for _, cmd := range pending {
 		b, _ := json.Marshal(cmd)
 		_ = c.Write(ctx, websocket.MessageText, b)
@@ -147,6 +153,18 @@ func (r *fakeRelay) serve(w http.ResponseWriter, req *http.Request) {
 			}
 			r.mu.Lock()
 			r.frames[cid] = append(r.frames[cid], string(data))
+			if poisoned {
+				r.mu.Unlock()
+				continue
+			}
+			if r.unavailable[sid] {
+				r.unavailable[sid] = false
+				r.refused[sid] = cid
+				poisoned = true
+				r.mu.Unlock()
+				_ = c.Write(ctx, websocket.MessageText, []byte(`{"kind":"error","code":"UNAVAILABLE"}`))
+				continue
+			}
 			dup := r.seen[cid]
 			if !dup {
 				r.seen[cid] = true
@@ -220,7 +238,7 @@ func (r *fakeRelay) eventsOf(sid, typ string) []map[string]any {
 	defer r.mu.Unlock()
 	var out []map[string]any
 	for _, e := range r.events[sid] {
-		if e["type"] == typ {
+		if typ == "" || e["type"] == typ {
 			out = append(out, e)
 		}
 	}
@@ -289,6 +307,12 @@ func (r *fakeRelay) framesOf(cid string) []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return append([]string(nil), r.frames[cid]...)
+}
+
+func (r *fakeRelay) refusedCID(sid string) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.refused[sid]
 }
 
 func (r *fakeRelay) pingCount() int {

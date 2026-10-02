@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -105,20 +107,20 @@ func (d *Daemon) Run(ctx context.Context) error {
 
 	// Reattach sessions that were active when an earlier run stopped; their
 	// next user_message resumes Claude from the stored session id. Leftovers
-	// of a crashed run are removed: the run dir (task token, MCP config) of
-	// every inactive record, and the cwd too once a record expires.
+	// of a crashed run are cleaned: every run dir's task token is revoked and
+	// the dir removed (no process exists yet; a resume mints a new token),
+	// and inactive or expired records lose their cwd.
 	if recs, err := d.store.List(); err == nil {
 		now := time.Now().UnixMilli()
 		for _, rec := range recs {
 			if rec.Status == "active" && rec.ExpiresAt <= now {
 				rec.Status = "ended"
 				_ = d.store.Save(rec)
-				if rec.Cwd != "" {
-					_ = os.RemoveAll(rec.Cwd)
-				}
 			}
+			d.revokeLeftoverToken(rec.SessionID)
+			d.store.RemoveRunDir(rec.SessionID)
 			if rec.Status != "active" {
-				d.store.RemoveRunDir(rec.SessionID)
+				removeSessionCwd(rec.Cwd)
 				continue
 			}
 			d.attach(sessCtx, rec, "", false)
@@ -230,10 +232,13 @@ func (d *Daemon) handleStart(ctx context.Context, l *live, in *Inbound) {
 		d.log.Printf("start_session %s redelivered for known session %s (%s); acknowledged only", in.CorrelationID, sid, rec.Status)
 		ack()
 		return
+	} else if errors.Is(err, errCorruptRecord) {
+		// Refused without execution and reported, so the relay stops redelivering.
+		d.refuseStart(ctx, l, in, "The local session record is unreadable; start a new session.", true)
+		return
 	} else if !isNotExist(err) {
-		// Refused without execution; acked so the relay stops redelivering.
-		d.log.Printf("start_session %s refused: session record unreadable: %v", in.CorrelationID, err)
-		ack()
+		// Transient read failure: no ack, the relay redelivers.
+		d.log.Printf("start_session %s: session record unreadable, awaiting redelivery: %v", in.CorrelationID, err)
 		return
 	}
 	if in.Agent != "claude" {
@@ -320,7 +325,7 @@ func (d *Daemon) refuseStart(ctx context.Context, l *live, in *Inbound, reason s
 // makeCwd creates a private temp working directory, resolved through
 // symlinks so the path Claude sees equals the one passed to --add-dir.
 func (d *Daemon) makeCwd() (string, error) {
-	dir, err := os.MkdirTemp(d.tempDir, "archivist-connect-")
+	dir, err := os.MkdirTemp(d.tempDir, cwdPrefix+"*")
 	if err != nil {
 		return "", err
 	}
@@ -365,6 +370,33 @@ func (d *Daemon) trackToken(id string, live bool) {
 	} else {
 		delete(d.tokens, id)
 	}
+}
+
+// taskTokenIDRe takes the token id from a task token file (mst_<uuid>.<secret>).
+var taskTokenIDRe = regexp.MustCompile(`^mst_([0-9a-f-]{36})\.`)
+
+// revokeLeftoverToken revokes the task token a crashed run left in a
+// session's run dir. A failed revoke is tracked so exit retries it.
+func (d *Daemon) revokeLeftoverToken(sessionID string) {
+	if !uuidRe.MatchString(sessionID) {
+		return
+	}
+	data, err := os.ReadFile(filepath.Join(d.store.Dir(), "run", sessionID, "task-token"))
+	if err != nil {
+		return
+	}
+	m := taskTokenIDRe.FindStringSubmatch(strings.TrimSpace(string(data)))
+	if m == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), revokeTimeout)
+	defer cancel()
+	if err := d.api.RevokeTaskToken(ctx, m[1]); err != nil {
+		d.trackToken(m[1], true)
+		d.log.Printf("leftover task token %s not revoked yet: %v", m[1], err)
+		return
+	}
+	d.log.Printf("leftover task token %s revoked", m[1])
 }
 
 // revokeLeftovers retries revocation of any task token a session could not

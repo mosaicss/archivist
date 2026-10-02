@@ -111,7 +111,9 @@ func TestRelayURLFromEnv(t *testing.T) {
 			t.Errorf("%q: %q %v", in, got, err)
 		}
 	}
-	for _, in := range []string{"ws://relay.example.test", "http://10.0.0.5:8787", "ws://localhost.example.test", "ftp://x", "relay.example.test", "ws://"} {
+	for _, in := range []string{"ws://relay.example.test", "http://10.0.0.5:8787", "ws://localhost.example.test", "ftp://x", "relay.example.test", "ws://",
+		"wss://relay.example.test?x=1", "wss://relay.example.test?", "wss://relay.example.test#frag", "wss://relay.example.test#",
+		"wss://user:pass@relay.example.test", "wss://user@relay.example.test", "wss://:443", "ws://:8787"} {
 		if _, err := relayURLFromEnv(in); err == nil {
 			t.Errorf("%q accepted", in)
 		}

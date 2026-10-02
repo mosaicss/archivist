@@ -273,14 +273,15 @@ func TestReviewStartupSweepAndCorruptRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 	expired, ended := randomUUID(), randomUUID()
-	expiredCwd := filepath.Join(h.tmp, "expired-cwd")
-	for _, d := range []string{expiredCwd} {
+	expiredCwd := filepath.Join(h.tmp, cwdPrefix+"expired")
+	endedCwd := filepath.Join(h.tmp, cwdPrefix+"ended")
+	for _, d := range []string{expiredCwd, endedCwd} {
 		if err := os.MkdirAll(d, 0o700); err != nil {
 			t.Fatal(err)
 		}
 	}
 	_ = st.Save(&SessionRecord{SessionID: expired, Agent: "claude", Cwd: expiredCwd, ExpiresAt: 1, Status: "active", CreatedAt: 1})
-	_ = st.Save(&SessionRecord{SessionID: ended, Agent: "claude", Status: "ended", CreatedAt: 2})
+	_ = st.Save(&SessionRecord{SessionID: ended, Agent: "claude", Cwd: endedCwd, Status: "ended", CreatedAt: 2})
 	for _, id := range []string{expired, ended} {
 		dir, _ := st.RunDir(id)
 		_ = os.WriteFile(filepath.Join(dir, "task-token"), []byte("stale"), 0o600)
@@ -295,14 +296,17 @@ func TestReviewStartupSweepAndCorruptRecord(t *testing.T) {
 			t.Errorf("run dir of %s kept", id[:8])
 		}
 	}
-	if _, err := os.Stat(expiredCwd); !os.IsNotExist(err) {
-		t.Error("expired cwd kept")
+	for _, d := range []string{expiredCwd, endedCwd} {
+		if _, err := os.Stat(d); !os.IsNotExist(err) {
+			t.Errorf("cwd of inactive record kept: %s", d)
+		}
 	}
 	if rec, _ := st.Load(expired); rec.Status != "ended" {
 		t.Errorf("expired record %s", rec.Status)
 	}
 	h.relay.send("", map[string]any{"kind": "start_session", "correlationId": "start-corrupt", "sessionId": corrupt.SessionID, "agent": "claude", "prompt": "echo x"})
 	waitFor(t, 10*time.Second, "corrupt start acked", func() bool { return h.relay.acked("start-corrupt") })
+	h.relay.waitStatus(t, corrupt.SessionID, "failed", 1)
 	time.Sleep(200 * time.Millisecond)
 	if len(fakeRuns(t, h.home)) != 0 {
 		t.Fatal("corrupt record started claude")
@@ -336,7 +340,11 @@ func TestReviewMessageDuringTurnIsQueued(t *testing.T) {
 	h.start()
 	sid := h.startSession("wait 800")
 	waitFor(t, 10*time.Second, "turn running", func() bool { return len(h.relay.eventsOf(sid, "start")) == 1 })
-	h.message(sid, "echo queued")
+	cid := h.message(sid, "echo queued")
+	waitFor(t, 5*time.Second, "second message acked", func() bool { return h.relay.acked(cid) })
+	if n := len(h.relay.eventsOf(sid, "finish")); n != 0 {
+		t.Fatalf("first turn already finished (%d) when the second message was accepted", n)
+	}
 	h.waitFinishes(sid, 2)
 	text := h.relay.text(sid)
 	if !strings.Contains(text, "waited") || strings.Index(text, "queued") < strings.Index(text, "waited") {

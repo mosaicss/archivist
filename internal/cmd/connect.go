@@ -30,8 +30,9 @@ with your Claude subscription login, in a fresh temporary directory, with
 Mosaic search and read tools (archivist mcp serve under a short-lived,
 session-scoped task token). Tool calls that change anything ask for your
 approval in the workspace. "Allow for session" applies to every later call of
-that tool (any input) in that session without asking again. Ctrl-C stops
-every session and revokes its tokens.
+that tool (any input) in that session without asking again, and "Deny for
+session" refuses it the same way; restarting archivist connect clears these
+session rules. Ctrl-C stops every session and revokes its tokens.
 
 Requires an ak_ API key (archivist auth login) on a Pro account and Claude
 Code logged in with a claude.ai subscription. API key logins are refused.
@@ -40,7 +41,7 @@ Code logged in with a claude.ai subscription. API key logins are refused.
   archivist connect             connect and serve sessions until Ctrl-C
 
 Exit codes: 0 ok; 1 refused or stopped (feature off, superseded, too old);
-2 bad flag; 3 Claude Code not found; 4 credential or Claude login problem.`
+2 bad flag or relay URL; 3 Claude Code not found; 4 credential or Claude login problem.`
 
 var (
 	connectModelRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:\[\]-]{0,127}$`)
@@ -89,6 +90,12 @@ func runConnect(cmd *cobra.Command, version string, check bool, model, effort st
 		_, _ = fmt.Fprintf(stderr, "archivist connect: %v\n", err)
 		return &ExitError{Code: ExitGenericError}
 	}
+	// The relay URL is checked before anything else, --check included.
+	relayURL, err := relayURLFromEnv(os.Getenv("ARCHIVIST_RELAY_URL"))
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "archivist connect: %v\n", err)
+		return &ExitError{Code: ExitUsageError}
+	}
 	childEnv, err := connect.BuildChildEnv(os.Environ(), nil)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "archivist connect: %v\n", err)
@@ -134,11 +141,6 @@ func runConnect(cmd *cobra.Command, version string, check bool, model, effort st
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "archivist connect: %v\n", err)
 		return &ExitError{Code: ExitGenericError}
-	}
-	relayURL, err := relayURLFromEnv(os.Getenv("ARCHIVIST_RELAY_URL"))
-	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "archivist connect: %v\n", err)
-		return &ExitError{Code: ExitUsageError}
 	}
 	api := client.New(token, version)
 	api.SetStderr(io.Discard)
@@ -194,8 +196,13 @@ func relayURLFromEnv(raw string) (string, error) {
 		return connect.DefaultRelayURL, nil
 	}
 	u, err := url.Parse(raw)
-	if err != nil || u.Host == "" {
-		return "", fmt.Errorf("ARCHIVIST_RELAY_URL %q is not a URL", raw)
+	if err != nil || u.Hostname() == "" {
+		return "", fmt.Errorf("ARCHIVIST_RELAY_URL %q is not a URL with a host", raw)
+	}
+	// Routes are appended to the URL: a query, fragment or userinfo would
+	// corrupt them (and userinfo would travel with the ticket).
+	if u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || strings.Contains(raw, "#") || u.User != nil {
+		return "", fmt.Errorf("ARCHIVIST_RELAY_URL must not carry a query, fragment or user info")
 	}
 	switch u.Scheme {
 	case "wss", "https":
