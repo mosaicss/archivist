@@ -3,7 +3,6 @@ package doctor
 import (
 	"bufio"
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -511,9 +510,7 @@ func ResolveExitCode(results []CheckResult) int {
 // tokenFingerprint derives SHA256(key_id)[:8] hex from the token.
 // Per OQ4 resolution (2026-05-20): fingerprint is SHA256 of key_id, not raw token.
 func tokenFingerprint(token string) string {
-	keyID := extractKeyID(token)
-	h := sha256.Sum256([]byte(keyID))
-	return fmt.Sprintf("%x", h[:4])
+	return auth.Fingerprint(token)
 }
 
 // tokenKeyID derives a display-safe key_id string from the token.
@@ -523,26 +520,6 @@ func tokenKeyID(token string) string {
 		return "ak_???"
 	}
 	return token[:10] + "..." + token[len(token)-3:]
-}
-
-// extractKeyID derives a key_id component for fingerprinting display:
-// "<prefix>_<first-8-chars-after-prefix>". Falls back to first 10 chars
-// if no recognized prefix.
-func extractKeyID(token string) string {
-	for _, prefix := range []string{"ak_", "mc_pat_"} {
-		if !strings.HasPrefix(token, prefix) {
-			continue
-		}
-		rest := token[len(prefix):]
-		if len(rest) >= 8 {
-			return prefix + rest[:8]
-		}
-		return token
-	}
-	if len(token) >= 10 {
-		return token[:10]
-	}
-	return token
 }
 
 // isOlderVersion returns true if current < minimum (semver).

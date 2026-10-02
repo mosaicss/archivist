@@ -1,0 +1,474 @@
+package connect
+
+import (
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/mosaicss/archivist/internal/client"
+	"github.com/mosaicss/archivist/internal/mosaicevent"
+)
+
+// ─── child environment ──────────────────────────────────────────────────────
+
+func TestBuildChildEnvAllowlist(t *testing.T) {
+	parent := []string{
+		"HOME=/h", "PATH=/bin", "USER=u", "LOGNAME=u", "SHELL=/bin/sh", "LANG=C", "TERM=xterm", "TMPDIR=/t",
+		"LC_ALL=C", "XDG_CONFIG_HOME=/x",
+		"ANTHROPIC_API_KEY=k", "ANTHROPIC_BASE_URL=u", "CLAUDE_CODE_OAUTH_TOKEN=o", "CLAUDE_CONFIG_DIR=/c",
+		"OPENAI_API_KEY=k", "CODEX_HOME=/c", "ARCHIVIST_TOKEN=ak_x", "HERDR_ENV=1", "AWS_SECRET_ACCESS_KEY=s",
+		"GITHUB_TOKEN=g", "NODE_OPTIONS=--require x", "LD_PRELOAD=/evil.so", "=broken", "NOEQUALS",
+	}
+	env, err := BuildChildEnv(parent, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "HOME,LANG,LC_ALL,LOGNAME,PATH,SHELL,TERM,TMPDIR,USER,XDG_CONFIG_HOME"
+	if got := strings.Join(EnvKeys(env), ","); got != want {
+		t.Fatalf("child keys %s, want %s", got, want)
+	}
+	for _, bad := range []string{"ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "ARCHIVIST_TOKEN", "GITHUB_TOKEN"} {
+		if _, err := BuildChildEnv(nil, map[string]string{bad: "v"}); err == nil {
+			t.Errorf("override %s accepted", bad)
+		}
+	}
+	// Deny prefixes beat allow prefixes even for override keys that look allowed.
+	if EnvAllowed("CLAUDE_HOME") || EnvAllowed("XDG_X") == false {
+		t.Fatal("deny/allow precedence wrong")
+	}
+	env, err = BuildChildEnv(parent, map[string]string{"TMPDIR": "/session"})
+	if err != nil || !contains(env, "TMPDIR=/session") {
+		t.Fatalf("override TMPDIR: %v %v", env, err)
+	}
+}
+
+func contains(list []string, s string) bool {
+	for _, x := range list {
+		if x == s {
+			return true
+		}
+	}
+	return false
+}
+
+// ─── redaction ──────────────────────────────────────────────────────────────
+
+func TestScrub(t *testing.T) {
+	ticket := "eyJ2IjoxLCJzdWIiOiJ1c2VyX3gifQ." + strings.Repeat("A", 43)
+	in := strings.Join([]string{
+		"auth Bearer abc.def-ghi",
+		"key ak_live_0123456789abcdef",
+		"legacy mc_pat_secretsecret",
+		"task mst_0f8fad5b-d9cb-469f-a165-70867728950e.AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-abcde",
+		"anthropic sk-ant-api03-XYZ_123",
+		"ticket " + ticket,
+	}, "\n")
+	out := Scrub(in)
+	for _, secret := range []string{"abc.def-ghi", "0123456789abcdef", "secretsecret", "AbCdEfGh", "XYZ_123", ticket} {
+		if strings.Contains(out, secret) {
+			t.Errorf("scrub kept %q:\n%s", secret, out)
+		}
+	}
+	if !strings.Contains(out, "[redacted fp:") {
+		t.Errorf("archivist credentials lost their fingerprint:\n%s", out)
+	}
+}
+
+// ─── closed command set ─────────────────────────────────────────────────────
+
+const unitSID = "0f8fad5b-d9cb-469f-a165-70867728950e"
+
+func TestDecodeClosedSet(t *testing.T) {
+	ok := []struct {
+		socket Socket
+		raw    string
+		kind   string
+	}{
+		{UserSocket, `{"kind":"start_session","correlationId":"c1","sessionId":"` + unitSID + `","agent":"claude","prompt":"hi"}`, "start_session"},
+		{UserSocket, `{"kind":"presence","online":true,"agents":[]}`, "presence"},
+		{UserSocket, `{"kind":"error","code":"UNKNOWN_ACK"}`, "error"},
+		{UserSocket, `{"kind":"approval_response","correlationId":"resolved:r1","sessionId":"` + unitSID + `","approvalId":"a","decision":"deny","reason":"timeout","terminalReceipt":true}`, "approval_response"},
+		{SessionSocket, `{"kind":"user_message","correlationId":"c2","sessionId":"` + unitSID + `","text":"hi"}`, "user_message"},
+		{SessionSocket, `{"kind":"interrupt","correlationId":"c3","sessionId":"` + unitSID + `"}`, "interrupt"},
+		{SessionSocket, `{"kind":"stop_session","correlationId":"c4","sessionId":"` + unitSID + `"}`, "stop_session"},
+		{SessionSocket, `{"kind":"approval_response","correlationId":"resolved:r2","sessionId":"` + unitSID + `","approvalId":"a","decision":"allow","reason":"user","scope":"allow_always"}`, "approval_response"},
+		{SessionSocket, `{"kind":"ack","correlationId":"run:1","seq":4,"duplicate":false}`, "ack"},
+	}
+	for _, c := range ok {
+		in, err := Decode(c.socket, []byte(c.raw))
+		if err != nil || in.Kind != c.kind {
+			t.Errorf("%s: %v %+v", c.raw, err, in)
+		}
+	}
+	refused := []struct {
+		socket Socket
+		raw    string
+		ackCID string
+	}{
+		{UserSocket, `{"kind":"exec","correlationId":"c1","sessionId":"` + unitSID + `","binary":"/bin/sh"}`, "c1"},
+		{UserSocket, `{"kind":"start_session","correlationId":"c1","sessionId":"` + unitSID + `","agent":"claude","prompt":"hi","binary":"/bin/sh"}`, "c1"},
+		{UserSocket, `{"kind":"start_session","correlationId":"c1","sessionId":"` + unitSID + `","agent":"claude","prompt":"hi","args":["-x"]}`, "c1"},
+		{UserSocket, `{"kind":"start_session","correlationId":"c1","sessionId":"` + unitSID + `","agent":"claude","prompt":"hi","env":{"A":"b"}}`, "c1"},
+		{UserSocket, `{"kind":"start_session","correlationId":"c1","sessionId":"` + unitSID + `","agent":"/usr/bin/claude","prompt":"hi"}`, "c1"},
+		{UserSocket, `{"kind":"start_session","correlationId":"c1","sessionId":"` + unitSID + `","agent":"claude","prompt":""}`, "c1"},
+		{UserSocket, `{"kind":"start_session","correlationId":"c1","sessionId":"not-a-uuid","agent":"claude","prompt":"hi"}`, "c1"},
+		{UserSocket, `{"kind":"start_session","correlationId":"resolved:c1","sessionId":"` + unitSID + `","agent":"claude","prompt":"hi"}`, "resolved:c1"},
+		{UserSocket, `{"kind":"user_message","correlationId":"c1","sessionId":"` + unitSID + `","text":"hi"}`, "c1"},
+		{UserSocket, `{"kind":"approval_response","correlationId":"resolved:r","sessionId":"` + unitSID + `","approvalId":"a","decision":"allow","reason":"user"}`, "resolved:r"},
+		{SessionSocket, `{"kind":"start_session","correlationId":"c1","sessionId":"` + unitSID + `","agent":"claude","prompt":"hi"}`, "c1"},
+		{SessionSocket, `{"kind":"user_message","correlationId":"c1","sessionId":"` + unitSID + `","text":"hi","model":"opus"}`, "c1"},
+		{SessionSocket, `{"kind":"interrupt","correlationId":"c1","sessionId":"` + unitSID + `","signal":"KILL"}`, "c1"},
+		{SessionSocket, `{"kind":"approval_response","correlationId":"r","sessionId":"` + unitSID + `","approvalId":"a","decision":"allow","reason":"user"}`, "r"},
+		{SessionSocket, `{"kind":"approval_response","correlationId":"resolved:r","sessionId":"` + unitSID + `","approvalId":"a","decision":"allow","reason":"user","scope":"reject_always"}`, "resolved:r"},
+		{SessionSocket, `{"kind":"approval_response","correlationId":"resolved:r","sessionId":"` + unitSID + `","approvalId":"a","decision":"maybe","reason":"user"}`, "resolved:r"},
+		{SessionSocket, `{"kind":"user_message","correlationId":7,"sessionId":"` + unitSID + `","text":"hi"}`, ""},
+		{SessionSocket, `{"correlationId":"c1"}`, "c1"},
+		{SessionSocket, `[1,2]`, ""},
+		{SessionSocket, `{"kind":"user_message"} trailing`, ""},
+	}
+	for _, c := range refused {
+		in, err := Decode(c.socket, []byte(c.raw))
+		var de *DecodeError
+		if err == nil || !errors.As(err, &de) {
+			t.Errorf("%s accepted: %+v", c.raw, in)
+			continue
+		}
+		if de.CorrelationID != c.ackCID {
+			t.Errorf("%s: ack id %q, want %q", c.raw, de.CorrelationID, c.ackCID)
+		}
+	}
+}
+
+func TestCommandAckShapes(t *testing.T) {
+	if got := string(commandAck(SessionSocket, "resolved:x", unitSID)); got != `{"kind":"command_ack","correlationId":"resolved:x"}` {
+		t.Errorf("session ack %s", got)
+	}
+	if got := string(commandAck(UserSocket, "resolved:x", unitSID)); got != `{"kind":"command_ack","correlationId":"resolved:x","sessionId":"`+unitSID+`"}` {
+		t.Errorf("user ack %s", got)
+	}
+	caps := string(capabilitiesFrame([]Capability{{Agent: "claude", Version: "2.1.280", Available: true, LoggedIn: true}}))
+	if caps != `{"kind":"capabilities","agents":[{"agent":"claude","version":"2.1.280","available":true,"loggedIn":true}]}` {
+		t.Errorf("capabilities %s", caps)
+	}
+	if capabilityVersion(" 1.2.3\x07 ") != "1.2.3" || capabilityVersion("") != "unknown" || len(capabilityVersion(strings.Repeat("9", 80))) != 64 {
+		t.Error("capability version sanitising")
+	}
+}
+
+// ─── shaping and outbox ─────────────────────────────────────────────────────
+
+func TestCoalescer(t *testing.T) {
+	var c Coalescer
+	var out []Chunk
+	out = append(out, c.Add(Chunk{"type": "text-start", "id": "a"})...)
+	for _, d := range []string{"he", "ll", "o"} {
+		out = append(out, c.Add(Chunk{"type": "text-delta", "id": "a", "delta": d})...)
+	}
+	out = append(out, c.Add(Chunk{"type": "reasoning-delta", "id": "a", "delta": "x"})...)
+	out = append(out, c.Add(Chunk{"type": "text-end", "id": "a"})...)
+	out = append(out, c.Flush()...)
+	var types []string
+	for _, o := range out {
+		types = append(types, fmt.Sprint(o["type"], ":", o["delta"]))
+	}
+	if strings.Join(types, ",") != "text-start:<nil>,text-delta:hello,reasoning-delta:x,text-end:<nil>" {
+		t.Fatalf("coalesced %v", types)
+	}
+}
+
+func newTestOutbox(t *testing.T) *Outbox {
+	p, err := mosaicevent.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return NewOutbox(p, NewLogger(io.Discard))
+}
+
+func TestOutboxValidatesAndKeepsBytes(t *testing.T) {
+	o := newTestOutbox(t)
+	if n := o.Emit(Chunk{"type": "text-delta", "id": "a", "delta": "hi"}); n != 1 {
+		t.Fatalf("valid chunk queued %d", n)
+	}
+	// Invalid chunks never reach the outbox.
+	for _, bad := range []Chunk{
+		{"type": "text-delta", "delta": "missing id"},
+		{"type": "no-such-type"},
+		{"type": "data-session-status", "data": map[string]any{"sessionId": unitSID, "status": "exploded"}},
+	} {
+		if n := o.Emit(bad); n != 0 {
+			t.Errorf("invalid chunk queued: %v", bad)
+		}
+	}
+	entries := o.After(0)
+	if len(entries) != 1 {
+		t.Fatalf("entries %d", len(entries))
+	}
+	var env map[string]any
+	if err := json.Unmarshal(entries[0].raw, &env); err != nil {
+		t.Fatal(err)
+	}
+	if len(env) != 8 || env["origin"] != "daemon" || env["schemaVersion"] != "mosaic-event/1" ||
+		env["correlationId"] != o.RunID()+":1" || env["seq"] != float64(1) {
+		t.Fatalf("envelope %v", env)
+	}
+	first := string(entries[0].raw)
+	if again := o.After(0); string(again[0].raw) != first {
+		t.Fatal("resend bytes differ")
+	}
+	if !o.Ack(entries[0].cid) || o.Len() != 0 {
+		t.Fatal("ack did not remove the event")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if !o.WaitDrained(ctx) {
+		t.Fatal("drained not signalled")
+	}
+}
+
+func TestOutboxFrameGuard(t *testing.T) {
+	o := newTestOutbox(t)
+	big := strings.Repeat("é", 100_000) // 200 KB of 2-byte runes
+	if n := o.Emit(Chunk{"type": "text-delta", "id": "a", "delta": big}); n < 4 {
+		t.Fatalf("large delta split into %d events", n)
+	}
+	var joined strings.Builder
+	for _, e := range o.After(0) {
+		if len(e.raw) > maxFrameBytes {
+			t.Fatalf("frame %d bytes", len(e.raw))
+		}
+		var env struct {
+			Payload map[string]any `json:"payload"`
+		}
+		_ = json.Unmarshal(e.raw, &env)
+		joined.WriteString(env.Payload["delta"].(string))
+	}
+	if joined.String() != big {
+		t.Fatal("split delta does not reassemble")
+	}
+	o2 := newTestOutbox(t)
+	if n := o2.Emit(Chunk{"type": "tool-output-available", "toolCallId": "t", "output": strings.Repeat("x", 200_000)}); n != 1 {
+		t.Fatal("large tool output not truncated into one event")
+	}
+	raw := string(o2.After(0)[0].raw)
+	if len(raw) > maxFrameBytes || !strings.Contains(raw, "truncated by archivist connect") {
+		t.Fatalf("tool output frame %d bytes", len(raw))
+	}
+	// Many small values exceed the relay value bound and are stringified.
+	many := make([]any, 25_000)
+	for i := range many {
+		many[i] = 1
+	}
+	o3 := newTestOutbox(t)
+	if n := o3.Emit(Chunk{"type": "tool-output-available", "toolCallId": "t", "output": many}); n != 1 {
+		t.Fatal("value-bound output not reduced")
+	}
+	// A non-reducible oversized chunk is dropped, never sent.
+	o4 := newTestOutbox(t)
+	if n := o4.Emit(Chunk{"type": "start", "messageId": strings.Repeat("m", 70_000), "messageMetadata": map[string]any{"schemaVersion": mosaicevent.Version}}); n != 0 {
+		t.Fatal("oversized start sent")
+	}
+}
+
+// ─── state ──────────────────────────────────────────────────────────────────
+
+func TestStorePermissionsAndRecords(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "connect")
+	st, err := OpenStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := &SessionRecord{SessionID: unitSID, Agent: "claude", Status: "active", CreatedAt: 1}
+	for i := 0; i < maxHandled+10; i++ {
+		rec.MarkHandled(fmt.Sprint("c", i))
+	}
+	if len(rec.Handled) != maxHandled || rec.HasHandled("c0") || !rec.HasHandled(fmt.Sprint("c", maxHandled+9)) {
+		t.Fatal("handled window")
+	}
+	if err := st.Save(rec); err != nil {
+		t.Fatal(err)
+	}
+	info, _ := os.Stat(filepath.Join(dir, "sessions", unitSID+".json"))
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("record mode %v", info.Mode())
+	}
+	for _, d := range []string{dir, filepath.Join(dir, "sessions"), filepath.Join(dir, "run")} {
+		info, _ := os.Stat(d)
+		if info.Mode().Perm() != 0o700 {
+			t.Fatalf("%s mode %v", d, info.Mode())
+		}
+	}
+	got, err := st.Load(unitSID)
+	if err != nil || got.Agent != "claude" {
+		t.Fatalf("Load %v %v", got, err)
+	}
+	if _, err := st.Load("../../etc/passwd"); err == nil {
+		t.Fatal("path traversal accepted")
+	}
+	if _, err := st.Load("1f8fad5b-d9cb-469f-a165-70867728950e"); !isNotExist(err) {
+		t.Fatalf("missing record: %v", err)
+	}
+	data, _ := os.ReadFile(filepath.Join(dir, "sessions", unitSID+".json"))
+	if strings.Contains(string(data), "mst_") || strings.Contains(string(data), "ak_") {
+		t.Fatal("state holds a token")
+	}
+}
+
+// ─── detection ──────────────────────────────────────────────────────────────
+
+func fakeRunner(version, auth string) Runner {
+	return func(_ context.Context, env []string, dir, bin string, args ...string) ([]byte, error) {
+		switch strings.Join(args, " ") {
+		case "--version":
+			return []byte(version), nil
+		case "auth status --json":
+			return []byte(auth), nil
+		}
+		return nil, errors.New("unexpected")
+	}
+}
+
+func TestDetect(t *testing.T) {
+	look := func(found ...string) LookPath {
+		return func(file string) (string, error) {
+			for _, f := range found {
+				if f == file {
+					return "/bin/" + file, nil
+				}
+			}
+			return "", errors.New("not found")
+		}
+	}
+	sub := `{"loggedIn":true,"authMethod":"claude.ai","subscriptionType":"max"}`
+	cases := []struct {
+		name, version, auth, problem string
+		found                        []string
+	}{
+		{"usable", "2.1.288 (Claude Code)", sub, "", []string{"claude"}},
+		{"missing", "", "", "missing", nil},
+		{"too old", "2.1.279 (Claude Code)", sub, "version", []string{"claude"}},
+		{"logged out", "2.1.280 (Claude Code)", `{"loggedIn":false}`, "auth", []string{"claude"}},
+		{"api key login", "2.1.280 (Claude Code)", `{"loggedIn":true,"authMethod":"api-key"}`, "auth", []string{"claude"}},
+		{"garbage version", "Claude Code", sub, "version", []string{"claude"}},
+	}
+	for _, c := range cases {
+		d := Detect(context.Background(), look(c.found...), fakeRunner(c.version, c.auth), nil, "/")
+		if d.Claude.ProblemCode != c.problem {
+			t.Errorf("%s: problem %q (%s), want %q", c.name, d.Claude.ProblemCode, d.Claude.Problem, c.problem)
+		}
+	}
+	d := Detect(context.Background(), look("claude", "codex"), fakeRunner("codex-cli 0.160.0", sub), nil, "/")
+	caps := d.Capabilities()
+	if len(caps) != 2 || caps[1] != (Capability{Agent: "codex", Version: "0.160.0"}) {
+		t.Fatalf("capabilities %+v", caps)
+	}
+}
+
+// ─── relay helpers ──────────────────────────────────────────────────────────
+
+func TestTicketSubjectAndBackoff(t *testing.T) {
+	claims := base64.RawURLEncoding.EncodeToString([]byte(`{"v":1,"sub":"user_abc","sid":"user:user_abc","iat":1,"exp":2}`))
+	if sub, err := ticketSubject(claims + "." + strings.Repeat("A", 43)); err != nil || sub != "user_abc" {
+		t.Fatalf("subject %q %v", sub, err)
+	}
+	if _, err := ticketSubject("nodot"); err == nil {
+		t.Fatal("malformed ticket accepted")
+	}
+	var b backoff
+	for i := 0; i < 12; i++ {
+		d := b.next()
+		base := 250 * time.Millisecond << min(i, 7)
+		if base > 30*time.Second {
+			base = 30 * time.Second
+		}
+		if d < base*3/4 || d > base*5/4 {
+			t.Fatalf("step %d: %v outside ±25%% of %v", i, d, base)
+		}
+	}
+	b.reset()
+	if d := b.next(); d > 313*time.Millisecond {
+		t.Fatalf("reset backoff %v", d)
+	}
+}
+
+func TestClassifyMint(t *testing.T) {
+	cases := []struct {
+		err   error
+		fatal string
+		gone  bool
+	}{
+		{&client.APIError{Status: 404, Code: "FEATURE_DISABLED"}, "FEATURE_DISABLED", false},
+		{&client.APIError{Status: 401}, "UNAUTHORIZED", false},
+		{&client.APIError{Status: 403, Code: "PARENT_KEY_REQUIRED"}, "PARENT_KEY_REQUIRED", false},
+		{&client.APIError{Status: 409, Code: "SESSION_INACTIVE"}, "", true},
+		{&client.APIError{Status: 404, Code: "SESSION_NOT_FOUND"}, "", true},
+		{&client.ExitCodeError{Code: 5, APICode: "SERVER_ERROR"}, "", false},
+		{errors.New("dial tcp: connection refused"), "", false},
+	}
+	for _, c := range cases {
+		fatal, gone := classifyMint(c.err, true)
+		code := ""
+		if fatal != nil {
+			code = fatal.Code
+		}
+		if code != c.fatal || gone != c.gone {
+			t.Errorf("%v: fatal %q gone %v", c.err, code, gone)
+		}
+	}
+	if fatal, _ := classifyMint(&client.APIError{Status: http.StatusConflict}, false); fatal != nil {
+		t.Error("user scope 409 must be transient")
+	}
+}
+
+// ─── claude invocation ──────────────────────────────────────────────────────
+
+func TestClaudeArgsAreFixed(t *testing.T) {
+	cfg := ClaudeConfig{Bin: "/usr/bin/claude", Model: "claude-sonnet-5", Effort: "low", SettingSources: "", Executable: "/opt/archivist"}
+	args := claudeArgs(cfg, "/state/run/x/mcp.json", "/tmp/cwd", "abc")
+	joined := strings.Join(args, " ")
+	for _, banned := range []string{"--permission-mode", "--bare", "--dangerously-skip-permissions"} {
+		if strings.Contains(joined, banned) {
+			t.Fatalf("banned flag %s", banned)
+		}
+	}
+	if args[len(args)-2] != "--add-dir" || args[len(args)-1] != "/tmp/cwd" {
+		t.Fatalf("--add-dir must be last: %v", args)
+	}
+	for i, a := range args {
+		if a == "--setting-sources" && args[i+1] != "" {
+			t.Fatalf("setting sources %q", args[i+1])
+		}
+	}
+	if !strings.Contains(joined, "--resume=abc") || !strings.Contains(joined, "--model claude-sonnet-5 --effort low") {
+		t.Fatalf("args %s", joined)
+	}
+	raw, err := mcpConfig(cfg, "/state/run/x/task-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(raw) != `{"mcpServers":{"archivist":{"args":["mcp","serve","--token-file","/state/run/x/task-token"],"command":"/opt/archivist","env":{}}}}` {
+		t.Fatalf("mcp config %s", raw)
+	}
+	cfg.BaseURL = "http://127.0.0.1:1"
+	raw, _ = mcpConfig(cfg, "/t")
+	if !strings.Contains(string(raw), `"env":{"ARCHIVIST_BASE_URL":"http://127.0.0.1:1"}`) {
+		t.Fatalf("mcp env %s", raw)
+	}
+	if problem := initProblem(claudeFrame{APIKeySource: "none", PermissionMode: "default"}); problem != "" {
+		t.Fatal(problem)
+	}
+	for _, f := range []claudeFrame{{APIKeySource: "ANTHROPIC_API_KEY", PermissionMode: "default"},
+		{APIKeySource: "none", PermissionMode: "auto"}, {}} {
+		if initProblem(f) == "" {
+			t.Errorf("init %+v passed", f)
+		}
+	}
+}

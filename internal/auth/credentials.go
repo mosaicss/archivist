@@ -1,10 +1,12 @@
 package auth
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/mosaicss/archivist/internal/client"
@@ -15,6 +17,21 @@ import (
 //   - "mc_pat_" — historical placeholder from early 36.x design; kept for
 //     test fixtures and backwards-compat with any docs in the wild.
 var tokenPrefixes = []string{"ak_", "mc_pat_"}
+
+// TaskTokenPrefix marks an opaque Mosaic agent session task token (Story
+// 78.15). Task tokens are minted per session by `archivist connect` and are
+// accepted only where a call reads them (mcp serve, verbs); they are never a
+// login credential.
+const TaskTokenPrefix = "mst_"
+
+// taskTokenRe is the strict 78.15 wire: mst_<lowercase UUID>.<32 bytes b64url>.
+var taskTokenRe = regexp.MustCompile(`^mst_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.[A-Za-z0-9_-]{43}$`)
+
+// ErrInvalidTaskToken is returned for an mst_ token that is not the strict wire.
+var ErrInvalidTaskToken = errors.New("task token format invalid. Expected mst_<uuid>.<secret> as minted for one Mosaic agent session")
+
+// ErrTaskTokenLogin is returned when a task token is offered as a login credential.
+var ErrTaskTokenLogin = errors.New("task tokens (mst_...) belong to one agent session and cannot be saved as a login. Use an ak_... API key")
 
 // ErrNoToken is returned when no credential is found on any rung.
 var ErrNoToken = errors.New("no CLI token found. Run 'archivist auth login --token ak_...' to save a credential, or set ARCHIVIST_TOKEN")
@@ -152,13 +169,60 @@ func MaskToken(token string) string {
 	return token[:10] + "..." + token[len(token)-3:]
 }
 
+// IsTaskToken reports whether token carries the task token prefix.
+func IsTaskToken(token string) bool {
+	return strings.HasPrefix(token, TaskTokenPrefix)
+}
+
 // ValidateTokenFormat checks that the token starts with one of the
-// accepted prefixes (see tokenPrefixes).
+// accepted prefixes (see tokenPrefixes), or is a strictly formed task token.
 func ValidateTokenFormat(token string) error {
+	if IsTaskToken(token) {
+		if !taskTokenRe.MatchString(token) {
+			return ErrInvalidTaskToken
+		}
+		return nil
+	}
 	for _, p := range tokenPrefixes {
 		if strings.HasPrefix(token, p) {
 			return nil
 		}
 	}
 	return fmt.Errorf("%w", ErrInvalidFormat)
+}
+
+// ValidateLoginTokenFormat is ValidateTokenFormat for credentials that will be
+// saved or used as the owner's login: task tokens are refused.
+func ValidateLoginTokenFormat(token string) error {
+	if IsTaskToken(token) {
+		return ErrTaskTokenLogin
+	}
+	return ValidateTokenFormat(token)
+}
+
+// KeyID derives the non-secret key_id component used for fingerprints:
+// "<prefix><first 8 chars after the prefix>". Falls back to the first 10
+// characters when no recognized prefix matches.
+func KeyID(token string) string {
+	for _, prefix := range []string{"ak_", "mc_pat_", TaskTokenPrefix} {
+		if !strings.HasPrefix(token, prefix) {
+			continue
+		}
+		rest := token[len(prefix):]
+		if len(rest) >= 8 {
+			return prefix + rest[:8]
+		}
+		return token
+	}
+	if len(token) >= 10 {
+		return token[:10]
+	}
+	return token
+}
+
+// Fingerprint is the log-safe identity of a credential: SHA256(key_id)[:4] as
+// hex (doctor's OQ4 rule). It never reveals secret material.
+func Fingerprint(token string) string {
+	h := sha256.Sum256([]byte(KeyID(token)))
+	return fmt.Sprintf("%x", h[:4])
 }

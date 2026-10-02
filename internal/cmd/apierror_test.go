@@ -295,10 +295,12 @@ func TestNoCredentialExit4(t *testing.T) {
 // TestNoDeadMosaicURLsInSource: outside comments, no non-test Go source
 // contains mosaic-finance.com except the AccountURL constant definition.
 // Permalinks come from the server; every other page the binary names is
-// client.AccountURL.
+// client.AccountURL. The agent relay endpoint (Story 78.16) is a websocket
+// service, not a page, and is the only other allowed definition.
 func TestNoDeadMosaicURLsInSource(t *testing.T) {
 	repoRoot := filepath.Join("..", "..")
 	const allowed = `const AccountURL = "https://mosaic-finance.com/en/pricing/"`
+	const relayEndpoint = `const DefaultRelayURL = "wss://relay.mosaic-finance.com"`
 	found := 0
 	err := filepath.WalkDir(repoRoot, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -321,6 +323,9 @@ func TestNoDeadMosaicURLsInSource(t *testing.T) {
 			}
 			if trimmed == allowed {
 				found++
+				continue
+			}
+			if trimmed == relayEndpoint && strings.HasSuffix(filepath.ToSlash(path), "internal/connect/relay.go") {
 				continue
 			}
 			t.Errorf("%s:%d names mosaic-finance.com outside AccountURL: %s", path, i+1, trimmed)

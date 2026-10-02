@@ -106,7 +106,7 @@ For CI or scripting, the environment variable override still works:
 // loginWithToken runs the validate, verify, write sequence. No failure mode
 // writes the credentials file.
 func loginWithToken(cmd *cobra.Command, version, token string) error {
-	if err := auth.ValidateTokenFormat(token); err != nil {
+	if err := auth.ValidateLoginTokenFormat(token); err != nil {
 		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "%v\nNothing was saved.\n", err)
 		return &ExitError{Code: ExitAuthError}
 	}
