@@ -525,9 +525,10 @@ func TestE2EFakeClaude(t *testing.T) {
 	waitFor(t, 15*time.Second, "slow output", func() bool { return strings.Contains(s.text(), "\n3\n") || strings.Contains(s.text(), "3\n4") })
 	s.send(map[string]any{"kind": "interrupt", "correlationId": cmdID("int"), "sessionId": sid})
 	s.waitTurns(5, 20*time.Second)
-	if len(s.of("abort")) != 1 || s.countStatus("interrupted") != 1 {
-		t.Fatal("interrupt did not abort the turn")
-	}
+	// The interrupted status follows the abort event.
+	waitFor(t, 10*time.Second, "abort and interrupted status", func() bool {
+		return len(s.of("abort")) == 1 && s.countStatus("interrupted") == 1
+	})
 	s.send(map[string]any{"kind": "user_message", "correlationId": cmdID("msg"), "sessionId": sid, "text": "echo alive after interrupt"})
 	s.waitTurns(6, 20*time.Second)
 
