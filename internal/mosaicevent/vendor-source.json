@@ -1,8 +1,8 @@
 {
   "schemaVersion": "mosaic-event/1",
   "repository": "https://forge.hive.mosaic-finance.com/tunc/mosaic.git",
-  "sourceCommit": "ff366e44fd3828c8851c9169b9f4d55fdf5d21b3",
-  "bundleDigest": "04290e9f30cb96f4862b125f36392e706512c5190718ba4c9a8bf4f1090076cd",
+  "sourceCommit": "649d8eeb2c55ad2e89ebedb439cb59015cc8a030",
+  "bundleDigest": "8120937c478b5a2e04b92d6ba80f1dda7a6f13803da5f2ece92fc3905c6c3780",
   "bundlePath": "reference/schemas/mosaic-event/1",
   "vendoredPath": "internal/mosaicevent/vendor/1",
   "capturedAt": "2026-10-02",

@@ -69,7 +69,17 @@ From contract/: `npm ci --ignore-scripts`, `npm run typecheck`, `npm test`, then
 `npm run check -- /absolute/path/to/mosaic-event-contract`. Dependency retrieval precedes offline
 validation. `npx tsx stamp.ts` intentionally refreshes the sorted byte manifest after reviewed edits;
 CI never regenerates expected outputs or stamps. The manifest covers schemas, fixtures, provenance,
-this documentation, validator, tests and dependency lock. Its own bytes have a separate SHA-256.
+this documentation, validator, tests, dependency lock and project `.npmrc`. Its own bytes have a
+separate SHA-256. The `.npmrc` enforces a three-day release age during new npm resolution, with no
+exemptions or absolute cutoff. Frozen `npm ci` installs the reviewed lock; it does not audit the
+release age of already locked versions.
+
+Renovate excludes `reference/schemas/mosaic-event/**` before package extraction for every version.
+This prevents partial bot changes from ordinary updates, lock maintenance or OSV security force;
+an ordinary package hold can be overridden by that force. The contract lock remains in the
+blocking nightly, PR and delivery security scans, with the existing malicious/critical thresholds
+and reviewed acceptance rules. A detected vulnerability requires explicit reviewed canonical
+dependency/lock changes and the digest/vendor/source-pin reconciliation below, or a new version.
 
 Go vendors this exact version byte for byte. Refresh from an actual committed Mosaic bundle, then
 record that full canonical source commit and manifest digest in Go vendor-source.json. Commit Go

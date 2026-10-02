@@ -3,7 +3,7 @@
   "files": [
     {
       "path": "README.md",
-      "sha256": "1aea5f4ffd465d5039ea3789ef8c3c15079b6e1358df4efa990e68e9344a2093"
+      "sha256": "31615e4fc4725fc374861a3d6325813a9753d9de72f0194db7b635e1b1e0b5fd"
     },
     {
       "path": "cases.json",
@@ -14,12 +14,16 @@
       "sha256": "75c25818478c4d0664c2a3dfc5b322f013cbe67f3c0f4fb97e5bdef97767686b"
     },
     {
+      "path": "contract/.npmrc",
+      "sha256": "302a3ab98854ffb8d14cc3c3e7490222ed4828036b9401359482a899d0e32e94"
+    },
+    {
       "path": "contract/check.ts",
       "sha256": "d542ff88782fcf6c229c4decc089123719f281d896e77602add9dad5c8bde3f9"
     },
     {
       "path": "contract/contract.test.ts",
-      "sha256": "b98586073005a6c28f9d7d31fe4aa6fc3d57e7b4aef8cd62ff57fc96fd0c347c"
+      "sha256": "ec3d422af9dabd9a961cd68f9c65af153488eb274145e4e6ea75dfb6e16fcd44"
     },
     {
       "path": "contract/normalize.ts",

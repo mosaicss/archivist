@@ -179,6 +179,14 @@ test("manifest detects byte, missing, extra and version drift", () => {
     cpSync(bundle, work, { recursive: true, filter: (path) => !path.includes("node_modules") });
     verifyBundle(work);
     const schema = join(work, "chunk.json"), bytes = readFileSync(schema);
+    const npmrc = join(work, "contract/.npmrc"), config = readFileSync(npmrc);
+    assert.equal(config.toString(), "min-release-age=3\n");
+    writeFileSync(npmrc, "min-release-age=0\n");
+    assert.throws(() => verifyBundle(work), /drift/);
+    rmSync(npmrc);
+    assert.throws(() => verifyBundle(work), /inventory/);
+    writeFileSync(npmrc, config);
+    verifyBundle(work);
     writeFileSync(schema, Buffer.concat([bytes, Buffer.from(" ")]));
     assert.throws(() => verifyBundle(work), /drift/);
     writeFileSync(schema, bytes);

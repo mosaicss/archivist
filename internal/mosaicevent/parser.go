@@ -21,7 +21,7 @@ const Version = "mosaic-event/1"
 
 // Explicit patterns keep installed Node dependencies and generated files out of the binary.
 //
-//go:embed vendor/1/*.json vendor/1/*.sha256 vendor/1/*.md vendor/1/fixtures/*.json vendor/1/fixtures/raw/* vendor/1/contract/*.ts vendor/1/contract/*.json
+//go:embed vendor/1/*.json vendor/1/*.sha256 vendor/1/*.md vendor/1/fixtures/*.json vendor/1/fixtures/raw/* vendor/1/contract/*.ts vendor/1/contract/*.json vendor/1/contract/.npmrc
 var assets embed.FS
 
 // Parsed retains exact input bytes: SDK serialization omits some optional v7 fields.

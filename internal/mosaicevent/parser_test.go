@@ -149,6 +149,10 @@ func TestDriftRejectsChangedMissingExtraAndVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	config, err := fs.ReadFile(original, "contract/.npmrc")
+	if err != nil || string(config) != "min-release-age=3\n" {
+		t.Fatalf("native embedded cooldown config: %q, %v", config, err)
+	}
 	clone := func() fstest.MapFS {
 		out := fstest.MapFS{}
 		if err := fs.WalkDir(original, ".", func(name string, d fs.DirEntry, err error) error {
@@ -173,6 +177,8 @@ func TestDriftRejectsChangedMissingExtraAndVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, mutate := range []func(fstest.MapFS){
+		func(f fstest.MapFS) { f["contract/.npmrc"].Data = []byte("min-release-age=0\n") },
+		func(f fstest.MapFS) { delete(f, "contract/.npmrc") },
 		func(f fstest.MapFS) { f["chunk.json"].Data = append(f["chunk.json"].Data, ' ') },
 		func(f fstest.MapFS) { delete(f, "chunk.json") },
 		func(f fstest.MapFS) { f["extra.json"] = &fstest.MapFile{Data: []byte(`{}`)} },
