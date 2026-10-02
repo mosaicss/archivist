@@ -1,7 +1,7 @@
 {
   "schemaVersion": "mosaic-event/1",
   "sourceHarnessCommit": "5cbd6a3552f5db53b607c239135ef6668542ed4a",
-  "normalization": "Retained extracts only; replace UUIDs, absolute home paths, emails and opaque signatures. Frame direction in means harness received agent stdout; out means harness stdin. Drop only inventoried non-contract notices. Inject versioned starts and explicit lifecycle closes at normalization boundaries. Expected normalized outputs are checked, never regenerated in CI. Text/tool/approval/error payloads preserved; assistant snapshots do not repeat partial deltas. Current chat-api capture uses mocked providers/auth/storage and forbids external fetches. Synthetic cases are identified separately.",
+  "normalization": "Retained extracts only; replace UUIDs, absolute home paths, emails and opaque signatures. Frame direction in means harness received agent stdout; out means harness stdin. Drop only inventoried non-contract notices. Inject versioned starts and explicit lifecycle closes at normalization boundaries. Expected normalized outputs are checked, never regenerated in CI. Text/tool/approval/error payloads preserved; assistant snapshots do not repeat partial deltas. Current chat-api capture uses mocked providers/auth/storage and forbids external fetches. Synthetic cases are identified separately. Claude data-usage.inputTokens sums input_tokens, cache_read_input_tokens and cache_creation_input_tokens; cachedInputTokens retains cache_read_input_tokens alone. Injected lifecycle chunks/schemaVersion metadata and the fallback model labels claude-captured/codex-captured are normalization values, not fields claimed captured from stdout. Codex token-usage notifications do not provide a model; Claude modelUsage keys are used when present.",
   "captures": [
     {
       "id": "02-claude-allow",
@@ -218,6 +218,15 @@
       "input": "fixtures/raw/chat-api-current-workspace.sse.json",
       "normalized": "fixtures/chat-api-current-workspace.json",
       "inputEncoding": "json-string"
+    }
+  ],
+  "synthetic": [
+    {
+      "id": "synthetic-codex-mcp-failed",
+      "protocol": "codex",
+      "input": "fixtures/raw/synthetic-codex-mcp-failed.json",
+      "normalized": "fixtures/synthetic-codex-mcp-failed.json",
+      "note": "Synthetic pinned app-server protocol state, not a stdout capture. A failed MCP status with nullable result/error maps to tool-output-error with an injected fallback errorText."
     }
   ]
 }

@@ -1,0 +1,13 @@
+[
+  {
+    "type": "data-plan",
+    "data": {
+      "entries": [
+        {
+          "priority": "high",
+          "status": "pending"
+        }
+      ]
+    }
+  }
+]

@@ -192,16 +192,24 @@ func (p *Parser) Report() (*Report, error) {
 	if corpus.Version != Version || len(corpus.Cases) == 0 {
 		return nil, fmt.Errorf("invalid corpus version/count")
 	}
-	report := &Report{SchemaVersion: Version, BundleDigest: p.Digest}
 	seen := map[string]bool{}
 	valid, invalid := false, false
 	for _, c := range corpus.Cases {
 		if c.ID == "" || seen[c.ID] || !fs.ValidPath(c.Input) {
 			return nil, fmt.Errorf("invalid/duplicate fixture %s", c.ID)
 		}
+		if c.Kind != "chunk" && c.Kind != "envelope" {
+			return nil, fmt.Errorf("invalid corpus kind: %s", c.ID)
+		}
 		seen[c.ID] = true
 		valid = valid || c.Valid
 		invalid = invalid || !c.Valid
+	}
+	if !valid || !invalid {
+		return nil, fmt.Errorf("missing positive/negative corpus")
+	}
+	report := &Report{SchemaVersion: Version, BundleDigest: p.Digest}
+	for _, c := range corpus.Cases {
 		data, err := fs.ReadFile(p.bundle, c.Input)
 		if err != nil {
 			return nil, err
@@ -220,9 +228,6 @@ func (p *Parser) Report() (*Report, error) {
 			}
 		}
 		report.Cases = append(report.Cases, Verdict{c.ID, accepted, len(events)})
-	}
-	if !valid || !invalid {
-		return nil, fmt.Errorf("missing positive/negative corpus")
 	}
 	return report, nil
 }

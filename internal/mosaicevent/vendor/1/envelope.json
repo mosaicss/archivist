@@ -2096,7 +2096,21 @@
             "decision",
             "reason"
           ],
-          "additionalProperties": false
+          "additionalProperties": false,
+          "not": {
+            "properties": {
+              "reason": {
+                "const": "timeout"
+              },
+              "decision": {
+                "const": "allow"
+              }
+            },
+            "required": [
+              "reason",
+              "decision"
+            ]
+          }
         }
       },
       "required": [

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"io/fs"
+	"strings"
 	"testing"
 	"testing/fstest"
 
@@ -72,6 +73,74 @@ func TestRawPreservationAndSDKTypes(t *testing.T) {
 		if parsed.Chunk.Type == aisdk.ChunkData && parsed.Chunk.DataName != "plan" {
 			t.Fatal("SDK data name lost")
 		}
+	}
+}
+
+func TestCorruptedNegativeKindFailsReportSetup(t *testing.T) {
+	original, err := fs.Sub(assets, "vendor/1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	clone := fstest.MapFS{}
+	if err := fs.WalkDir(original, ".", func(name string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		data, err := fs.ReadFile(original, name)
+		if err != nil {
+			return err
+		}
+		clone[name] = &fstest.MapFile{Data: data}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var corpus struct {
+		Version string `json:"schemaVersion"`
+		Cases   []Case `json:"cases"`
+	}
+	if err := json.Unmarshal(clone["cases.json"].Data, &corpus); err != nil {
+		t.Fatal(err)
+	}
+	for i := range corpus.Cases {
+		if !corpus.Cases[i].Valid {
+			corpus.Cases[i].Kind = "chnuk"
+			break
+		}
+	}
+	clone["cases.json"].Data, err = json.Marshal(corpus)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest struct {
+		Version string `json:"schemaVersion"`
+		Files   []struct {
+			Path string `json:"path"`
+			Hash string `json:"sha256"`
+		} `json:"files"`
+	}
+	if err := json.Unmarshal(clone["manifest.json"].Data, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	for i := range manifest.Files {
+		if manifest.Files[i].Path == "cases.json" {
+			manifest.Files[i].Hash = sum(clone["cases.json"].Data)
+		}
+	}
+	clone["manifest.json"].Data, err = json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clone["manifest.sha256"].Data = []byte(sum(clone["manifest.json"].Data) + "\n")
+	p, err := FromBundle(clone)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.Report(); err == nil || !strings.Contains(err.Error(), "invalid corpus kind") {
+		t.Fatalf("corrupted corpus became a verdict: %v", err)
 	}
 }
 

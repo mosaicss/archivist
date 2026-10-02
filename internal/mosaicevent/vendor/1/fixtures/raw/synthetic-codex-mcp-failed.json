@@ -1,0 +1,28 @@
+[
+  {
+    "direction": "in",
+    "sourceIndex": 0,
+    "frame": {
+      "method": "item/completed",
+      "params": {
+        "threadId": "synthetic-thread",
+        "turnId": "synthetic-turn",
+        "item": {
+          "type": "mcpToolCall",
+          "id": "synthetic-failed-mcp",
+          "server": "synthetic",
+          "tool": "failure",
+          "status": "failed",
+          "arguments": {},
+          "appContext": null,
+          "mcpAppUi": null,
+          "pluginId": null,
+          "readOnlyHint": null,
+          "result": null,
+          "error": null,
+          "durationMs": null
+        }
+      }
+    }
+  }
+]

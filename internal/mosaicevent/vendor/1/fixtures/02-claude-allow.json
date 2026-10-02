@@ -143,7 +143,7 @@
   {
     "type": "data-usage",
     "data": {
-      "inputTokens": 4,
+      "inputTokens": 39084,
       "outputTokens": 101,
       "cachedInputTokens": 31325,
       "reasoningTokens": 0,

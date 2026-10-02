@@ -34,9 +34,14 @@ export function parseSSE(wire: string): Chunk[] {
 
 export function normalizeSSE(wire: string, id: string): Chunk[] {
   const chunks = parseSSE(wire);
-  const stamped = chunks.map((chunk) => chunk.type === "start"
-    ? { ...chunk, messageMetadata: { ...record(chunk.messageMetadata ?? {}), schemaVersion: "mosaic-event/1" } }
-    : chunk);
+  const stamped = chunks.map((chunk) => {
+    if (chunk.type !== "start") return chunk;
+    const metadata = record(chunk.messageMetadata === undefined ? {} : chunk.messageMetadata);
+    if (Object.hasOwn(metadata, "schemaVersion") && metadata.schemaVersion !== "mosaic-event/1") {
+      throw new Error("incompatible SSE schemaVersion");
+    }
+    return { ...chunk, messageMetadata: { ...metadata, schemaVersion: "mosaic-event/1" } };
+  });
   if (!stamped.some((chunk) => chunk.type === "start")) stamped.unshift(start(id));
   if (!stamped.some((chunk) => chunk.type === "finish" || chunk.type === "abort")) {
     stamped.push({ type: "finish" });
@@ -143,7 +148,8 @@ export function normalizeClaude(input: unknown): Chunk[] {
         // Interrupt captures omit block_stop. Close only content blocks; incomplete tool JSON is an error.
         for (const index of [...blocks.keys()]) close(index);
         const usage = record(f.usage), models = Object.keys(record(f.modelUsage ?? {}));
-        chunks.push({ type: "data-usage", data: { inputTokens: usage.input_tokens,
+        chunks.push({ type: "data-usage", data: { inputTokens: (usage.input_tokens as number) +
+          (usage.cache_read_input_tokens as number) + (usage.cache_creation_input_tokens as number),
           outputTokens: usage.output_tokens, cachedInputTokens: usage.cache_read_input_tokens,
           reasoningTokens: record(usage.output_tokens_details).thinking_tokens, model: models[0] ?? "claude-captured" } });
         if (f.is_error === true) chunks.push(f.terminal_reason === "aborted_streaming"
@@ -199,6 +205,10 @@ export function normalizeCodex(input: unknown): Chunk[] {
               toolName: item.type === "commandExecution" ? "commandExecution" : `${str(item.server)}.${str(item.tool)}`,
               input: item.type === "commandExecution" ? { command: item.command, cwd: item.cwd } : item.arguments });
             else if (item.status === "declined") chunks.push({ type: "tool-output-denied", toolCallId: id });
+            else if (item.type === "mcpToolCall" && item.status === "failed") chunks.push({
+              type: "tool-output-error", toolCallId: id,
+              errorText: item.error ? JSON.stringify(item.error) : "MCP tool call failed",
+            });
             else if (item.error) chunks.push({ type: "tool-output-error", toolCallId: id, errorText: JSON.stringify(item.error) });
             else chunks.push({ type: "tool-output-available", toolCallId: id,
               output: item.type === "commandExecution" ? { stdout: item.aggregatedOutput, exitCode: item.exitCode, status: item.status, durationMs: item.durationMs } : item.result });

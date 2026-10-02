@@ -46,7 +46,16 @@ for (const name of readdirSync(bundle).filter((name) => name.endsWith(".json") &
 const chunkSchema = ajv.getSchema("https://mosaic-finance.com/schemas/mosaic-event/1/chunk.json")!;
 const envelopeSchema = ajv.getSchema("https://mosaic-finance.com/schemas/mosaic-event/1/envelope.json")!;
 
+function hasNonfiniteNumber(value: unknown): boolean {
+  if (typeof value === "number") return !Number.isFinite(value);
+  if (Array.isArray(value)) return value.some(hasNonfiniteNumber);
+  if (value !== null && typeof value === "object") return Object.values(value).some(hasNonfiniteNumber);
+  return false;
+}
+
 export async function validate(value: unknown, kind: "chunk" | "envelope" = "chunk"): Promise<boolean> {
+  // Opaque SDK JSON fields must obey the same finite-number domain as Go decoding.
+  if (hasNonfiniteNumber(value)) return false;
   if (!(kind === "chunk" ? chunkSchema : envelopeSchema)(value)) return false;
   const envelope = value as Record<string, unknown>;
   if (kind === "envelope" && envelope.type === "approval_resolved") {
@@ -58,39 +67,43 @@ export async function validate(value: unknown, kind: "chunk" | "envelope" = "chu
   return (await safeValidateTypes({ value: chunk, schema: uiMessageChunkSchema })).success;
 }
 
-export function loadCases(): Case[] {
-  const corpus = readJSON<{ schemaVersion: string; cases: Case[] }>(join(bundle, "cases.json"));
-  if (corpus.schemaVersion !== version || !corpus.cases.length ||
+export function loadCases(root = bundle): Case[] {
+  const corpus = readJSON<{ schemaVersion: string; cases: Case[] }>(join(root, "cases.json"));
+  if (corpus.schemaVersion !== version || !Array.isArray(corpus.cases) || !corpus.cases.length ||
     new Set(corpus.cases.map((entry) => entry.id)).size !== corpus.cases.length ||
     !corpus.cases.some((entry) => entry.valid) || !corpus.cases.some((entry) => !entry.valid)) {
     throw new Error("invalid/empty contract corpus");
   }
+  for (const entry of corpus.cases) {
+    if (entry.kind !== "chunk" && entry.kind !== "envelope") throw new Error(`invalid corpus kind: ${entry.id}`);
+  }
   return corpus.cases;
 }
 
-export function checkNormalization(): void {
-  const provenance = readJSON<{ schemaVersion: string; captures: { id: string; protocol: string; input: string; inputEncoding?: string; normalized: string; originalSha256: string }[] }>(join(bundle, "provenance.json"));
+export function checkNormalization(root = bundle, cases = loadCases(root)): void {
+  const provenance = readJSON<{ schemaVersion: string; captures: { id: string; protocol: string; input: string; inputEncoding?: string; normalized: string; originalSha256: string }[] }>(join(root, "provenance.json"));
   if (provenance.schemaVersion !== version || !provenance.captures.length) throw new Error("missing capture provenance");
   for (const capture of provenance.captures) {
     if (!/^[a-f0-9]{64}$/.test(capture.originalSha256)) throw new Error("missing original digest");
-    const raw = readFileSync(join(bundle, capture.input), "utf8");
+    const raw = readFileSync(join(root, capture.input), "utf8");
     const normalized = capture.protocol === "sse" ? normalizeSSE(capture.inputEncoding === "json-string" ? JSON.parse(raw) : raw, capture.id)
       : capture.protocol === "claude" ? normalizeClaude(JSON.parse(raw))
       : capture.protocol === "codex" ? normalizeCodex(JSON.parse(raw)) : undefined;
-    if (!normalized || JSON.stringify(normalized) !== JSON.stringify(readJSON(join(bundle, capture.normalized)))) {
+    if (!normalized || JSON.stringify(normalized) !== JSON.stringify(readJSON(join(root, capture.normalized)))) {
       throw new Error(`normalization drift: ${capture.id}`);
     }
-    if (!loadCases().some((entry) => entry.source === "capture" && entry.input === capture.normalized)) {
+    if (!cases.some((entry) => entry.source === "capture" && entry.input === capture.normalized)) {
       throw new Error(`capture omitted from corpus: ${capture.id}`);
     }
   }
 }
 
-export async function report(): Promise<Report> {
-  const bundleDigest = verifyBundle(); checkNormalization();
+export async function report(root = bundle): Promise<Report> {
+  const bundleDigest = verifyBundle(root), corpus = loadCases(root);
+  checkNormalization(root, corpus);
   const cases: Verdict[] = [];
-  for (const entry of loadCases()) {
-    const events = readJSON<unknown[]>(join(bundle, entry.input));
+  for (const entry of corpus) {
+    const events = readJSON<unknown[]>(join(root, entry.input));
     if (!Array.isArray(events) || !events.length) throw new Error(`empty fixture ${entry.id}`);
     let accepted = true;
     for (const event of events) if (!(await validate(event, entry.kind))) accepted = false;
