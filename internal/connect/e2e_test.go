@@ -92,13 +92,6 @@ func (f *fakeChatAPI) mintCount() int {
 	return n
 }
 
-// ticketMints counts relay tickets for a session ("" = user scope).
-func (f *fakeChatAPI) ticketMints(sid string) int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.tickets[sid]
-}
-
 // ─── consumer (the workspace side of the relay) ─────────────────────────────
 
 type consumer struct {

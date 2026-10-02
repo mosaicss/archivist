@@ -98,6 +98,12 @@ type fakeChatAPI struct {
 	// failMints makes the next N task token mints answer 503.
 	failMints int
 	failed    int
+	// badTokens makes the next N mints return a malformed (non-mst_) token.
+	badTokens int
+	// failRevokes makes the next N revocations answer 503.
+	failRevokes int
+	// sessionTicketStatus, when set, refuses session-scoped tickets with it.
+	sessionTicketStatus int
 }
 
 func newFakeChatAPI(t *testing.T, key []byte) *fakeChatAPI {
@@ -159,6 +165,38 @@ func (f *fakeChatAPI) tokenState() (mints, failed int, live, revoked []string) {
 		}
 	}
 	return f.mints, f.failed, live, revoked
+}
+
+// set runs fn under the fake's lock (toggle options while a test runs).
+func (f *fakeChatAPI) set(fn func(f *fakeChatAPI)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	fn(f)
+}
+
+// revokedByID reports whether the token with this id was revoked.
+func (f *fakeChatAPI) revokedByID(id string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.tokens[id] != nil && f.tokens[id].revoked
+}
+
+// tokenIDs returns every minted token id with its token value.
+func (f *fakeChatAPI) tokenIDs() map[string]string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := map[string]string{}
+	for id, tk := range f.tokens {
+		out[id] = tk.token
+	}
+	return out
+}
+
+// ticketMints counts relay tickets for a session ("" = user scope).
+func (f *fakeChatAPI) ticketMints(sid string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.tickets[sid]
 }
 
 func (f *fakeChatAPI) setFailMints(n int) {
@@ -230,6 +268,10 @@ func (f *fakeChatAPI) serve(w http.ResponseWriter, r *http.Request) {
 		_ = json.Unmarshal(body, &in)
 		sid, scope := "user:"+testOwner, ""
 		if in["scope"] == "session" {
+			if f.sessionTicketStatus != 0 {
+				reply(f.sessionTicketStatus, map[string]any{"error": "A verified API key is required.", "code": "PARENT_KEY_REQUIRED"})
+				return
+			}
 			if active(in["sessionId"]) == nil {
 				reply(409, map[string]any{"error": "Session is not active.", "code": "SESSION_INACTIVE"})
 				return
@@ -264,6 +306,10 @@ func (f *fakeChatAPI) serve(w http.ResponseWriter, r *http.Request) {
 		_, _ = rand.Read(secret)
 		id := randomUUID()
 		tok := "mst_" + id + "." + base64.RawURLEncoding.EncodeToString(secret)
+		if f.badTokens > 0 {
+			f.badTokens--
+			tok = "badtoken_" + id
+		}
 		f.tokens[id] = &fakeToken{id: id, token: tok, session: in.SessionID}
 		ttl := time.Duration(in.TTL) * time.Second
 		if f.tokenTTL > 0 {
@@ -272,6 +318,11 @@ func (f *fakeChatAPI) serve(w http.ResponseWriter, r *http.Request) {
 		reply(201, map[string]any{"token": tok, "tokenId": id, "expiresAt": time.Now().Add(ttl).UnixMilli(), "scopes": in.Scopes})
 	case r.Method == "DELETE" && strings.HasPrefix(r.URL.Path, "/task-tokens/"):
 		tk := f.tokens[strings.TrimPrefix(r.URL.Path, "/task-tokens/")]
+		if f.failRevokes > 0 {
+			f.failRevokes--
+			reply(503, map[string]any{"error": "Temporarily unavailable.", "code": "UNAVAILABLE"})
+			return
+		}
 		if tk == nil {
 			reply(404, map[string]any{"error": "Task token not found.", "code": "TASK_TOKEN_NOT_FOUND"})
 			return

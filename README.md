@@ -217,7 +217,9 @@ For each "My Claude Code" session the daemon:
   the Mosaic search and read tools (`archivist mcp serve` in task mode, under
   a 15 minute task token it rotates and revokes); every tool call that needs
   permission becomes an approval card in the workspace (allow once, allow for
-  the session, deny; no answer within 60 seconds denies);
+  the session, deny; no answer within 60 seconds denies). "Allow for the
+  session" and "reject for the session" apply to every later call of that tool
+  in the session, whatever its input, without another card;
 - streams the session as `mosaic-event/1` events, each validated before it is
   sent.
 
@@ -225,7 +227,10 @@ The relay sends only data (session ids, prompts, approval decisions,
 interrupt and stop). Binaries, arguments and flags are fixed on your machine.
 Session ids and working directories are kept in `~/.archivist/connect/`
 (0700); after a restart, the next message resumes the same Claude session.
-Ctrl-C stops every Claude process and revokes its tokens.
+Each running session's task token and MCP config sit in
+`~/.archivist/connect/run/<session>/` (`task-token`, `mcp.json`, 0600), are
+removed when the session stops or the daemon exits, and the token is revoked
+then. Ctrl-C stops every Claude process and revokes its tokens.
 
 `ARCHIVIST_RELAY_URL` overrides the relay address (default
 `wss://relay.mosaic-finance.com`). macOS and Linux only for now; Codex

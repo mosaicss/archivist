@@ -55,6 +55,8 @@ func (r *SessionRecord) MarkHandled(cid string) {
 type Store struct {
 	dir string
 	mu  sync.Mutex
+	// failSaves makes the next N saves fail (tests of the durability rule).
+	failSaves int
 }
 
 // DefaultStateDir is ~/.archivist/connect.
@@ -123,6 +125,10 @@ func (s *Store) Save(rec *SessionRecord) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.failSaves > 0 {
+		s.failSaves--
+		return errors.New("injected save failure")
+	}
 	return writeFileAtomic(path, data)
 }
 

@@ -110,7 +110,7 @@ func TestToolRoutesMatchDryRun(t *testing.T) {
 		}
 		want := taskscope.ToolRoutes[tool][0]
 		_, wantPath, _ := strings.Cut(want, " ")
-		if strings.Count(wantPath, "/") != strings.Count(u.Path, "/") {
+		if !routeMatches(wantPath, u.Path) {
 			t.Errorf("%s: recorded route %s does not match requested %s", tool, wantPath, u.Path)
 		}
 	}
@@ -222,5 +222,46 @@ func TestMCPServe_TokenFlagsExclusiveAndFileValidated(t *testing.T) {
 	}
 	if code, out := run("mcp", "serve", "--token-file", tokenPath); code != 0 || !strings.Contains(out, "5 tools registered") || !strings.Contains(out, "task mode") {
 		t.Fatalf("task token file: exit %d %s", code, out)
+	}
+}
+
+// routeMatches compares a recorded route pattern with a concrete path:
+// same segment count, literal segments equal, ":id" matching one non-empty
+// segment.
+func routeMatches(pattern, path string) bool {
+	ps, xs := strings.Split(pattern, "/"), strings.Split(path, "/")
+	if len(ps) != len(xs) {
+		return false
+	}
+	for i := range ps {
+		if strings.HasPrefix(ps[i], ":") {
+			if xs[i] == "" {
+				return false
+			}
+			continue
+		}
+		if ps[i] != xs[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func TestRouteMatches(t *testing.T) {
+	cases := []struct {
+		pattern, path string
+		want          bool
+	}{
+		{"/research/filings/:id/toc", "/research/filings/abc/toc", true},
+		{"/research/filings/:id/toc", "/research/filings/abc/sections", false},
+		{"/research/passages/:id", "/research/sections/abc", false},
+		{"/research/search", "/research/search", true},
+		{"/research/search", "/research/companies", false},
+		{"/research/passages/:id", "/research/passages/", false},
+	}
+	for _, c := range cases {
+		if got := routeMatches(c.pattern, c.path); got != c.want {
+			t.Errorf("routeMatches(%q, %q) = %v", c.pattern, c.path, got)
+		}
 	}
 }

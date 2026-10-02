@@ -22,7 +22,6 @@ import (
 // the daemon pings every 20 s; tickets live at most 5 minutes, so sockets
 // rotate before expiry.
 const (
-	pingInterval   = 20 * time.Second
 	rotateBefore   = 30 * time.Second
 	writeTimeout   = 10 * time.Second
 	readLimit      = 32 << 20
@@ -30,6 +29,9 @@ const (
 	closeSuperseed = 4000
 	closeExpired   = 4001
 )
+
+// pingInterval is the application ping cadence (a var so tests can shorten it).
+var pingInterval = 20 * time.Second
 
 // DefaultRelayURL is the production relay. ARCHIVIST_RELAY_URL overrides it.
 const DefaultRelayURL = "wss://relay.mosaic-finance.com"
@@ -413,7 +415,10 @@ func (k *link) handleError(l *live, code string) {
 		}
 	case code == "UNAVAILABLE":
 		if cid, ok := l.popHead(); ok {
-			k.log.Printf("%s: relay unavailable for event %s; resent on reconnect", k.name, cid)
+			// Later events may already be on the wire; reconnecting resends the
+			// outbox in order from the first unacked event.
+			k.log.Printf("%s: relay unavailable for event %s; reconnecting to resend", k.name, cid)
+			_ = l.ws.CloseNow()
 			return
 		}
 	}

@@ -24,6 +24,11 @@ func signalGroup(pgid int, sig syscall.Signal) {}
 
 func groupAlive(pgid int) bool { return false }
 
-func killPID(pid int) {}
+type procID struct {
+	pid   int
+	start string
+}
 
-func descendants(root int) []int { return nil }
+func killPID(id procID) {}
+
+func descendants(root int) []procID { return nil }

@@ -70,6 +70,7 @@ type session struct {
 	running    bool            // a passing init was seen for the current process
 	held       []Chunk         // turn start chunks waiting for the init proof
 	resumedID  string          // Claude session id the current process resumed
+	slot       bool            // holds one of the daemon's live-process slots
 	fatal      string          // subscription proof failure: no further turns
 	stopping   bool
 
@@ -111,6 +112,7 @@ func newSession(d *Daemon, rec *SessionRecord) *session {
 // run owns all session state. prompt is non-empty for a fresh start.
 func (s *session) run(ctx context.Context, prompt string) {
 	defer close(s.done)
+	defer s.releaseSlot()
 	linkCtx, cancelLink := context.WithCancel(context.Background())
 	go func() { s.linkErr <- s.link.run(linkCtx) }()
 	defer func() {
@@ -209,7 +211,18 @@ func (s *session) emitError(text string) {
 
 // spawn starts Claude Code after the subscription login proof; resumeID
 // continues an earlier Claude session.
-func (s *session) spawn(ctx context.Context, resumeID string) error {
+func (s *session) spawn(ctx context.Context, resumeID string) (err error) {
+	if !s.slot {
+		if !s.d.reserveSlot() {
+			return errCapacity
+		}
+		s.slot = true
+	}
+	defer func() {
+		if err != nil {
+			s.releaseSlot()
+		}
+	}()
 	if err := s.ensureToken(ctx); err != nil {
 		return fmt.Errorf("task token: %w", err)
 	}
@@ -242,8 +255,31 @@ func (s *session) spawn(ctx context.Context, resumeID string) error {
 	s.proc, s.procDone, s.procLines = proc, proc.Done(), proc.Lines()
 	s.running, s.turnActive, s.resumedID = false, false, resumeID
 	s.tr.reset()
-	s.d.processStarted()
 	return nil
+}
+
+// errCapacity means every live-process slot is taken.
+var errCapacity = errors.New("too many live sessions")
+
+// releaseSlot returns this session's live-process slot, once.
+func (s *session) releaseSlot() {
+	if s.slot {
+		s.slot = false
+		s.d.releaseSlot()
+	}
+}
+
+// resumable reports whether a later message can resume Claude.
+func (s *session) resumable() bool { return s.rec.ClaudeSessionID != "" }
+
+// failSession ends a session that cannot continue: the record is failed,
+// the token revoked and later messages refused with msg.
+func (s *session) failSession(msg string) {
+	s.fatal = msg
+	s.rec.Status = "failed"
+	s.save()
+	s.revokeToken()
+	s.d.store.RemoveRunDir(s.id)
 }
 
 // proofError is a failed subscription proof: fatal for the session.
@@ -253,16 +289,22 @@ func (e *proofError) Error() string { return e.msg }
 
 func (s *session) failStart(err error) {
 	var proof *proofError
-	msg := "Could not start Claude Code: " + err.Error()
-	if errors.As(err, &proof) {
-		s.fatal = proof.msg
-		s.rec.Status = "failed"
-		s.save()
-		s.revokeToken()
-	}
+	msg := Scrub("Could not start Claude Code: " + err.Error())
 	s.log.Printf("%s", msg)
-	s.emitError(Scrub(msg))
-	s.emitStatus("failed", Scrub(msg))
+	s.emitError(msg)
+	switch {
+	case errors.As(err, &proof):
+		s.failSession(proof.msg)
+		s.emitStatus("failed", msg)
+	case errors.Is(err, errCapacity):
+		s.emitStatus("failed", fmt.Sprintf("archivist connect already runs %d live sessions.", s.d.maxSessions))
+	case s.resumable():
+		s.revokeToken()
+		s.emitStatus("failed", msg+" The next message tries to resume the session.")
+	default:
+		s.failSession(msg)
+		s.emitStatus("failed", msg+" Start a new session.")
+	}
 }
 
 func (s *session) sendUser(text string) {
@@ -310,7 +352,7 @@ func (s *session) stopProcess(kill bool) {
 	} else {
 		p.Stop(stopGrace)
 	}
-	s.d.processStopped()
+	s.releaseSlot()
 	s.turnActive, s.running = false, false
 	s.held = nil
 	s.pending = map[string]*pendingApproval{}
@@ -342,7 +384,21 @@ func (s *session) processExited() {
 	if wasTurn {
 		s.emitError("Claude Code exited before the turn finished.")
 	}
-	s.emitStatus("failed", "Claude Code exited; the next message resumes the session.")
+	s.processGone("Claude Code exited")
+}
+
+// processGone settles a session whose Claude process went away on its own
+// or was killed: the token is revoked (a resume mints a new one) and the
+// session stays resumable only when a Claude session id exists.
+func (s *session) processGone(what string) {
+	if s.resumable() {
+		s.revokeToken()
+		s.emitStatus("failed", what+"; the next message resumes the session.")
+		return
+	}
+	msg := what + " before the session started. Start a new session."
+	s.failSession(msg)
+	s.emitStatus("failed", msg)
 }
 
 // handleLine processes one Claude stdout frame.
@@ -472,9 +528,11 @@ func (s *session) handle(ctx context.Context, c sessionCmd) bool {
 		ack()
 		return false
 	}
+	prev := append([]string(nil), s.rec.Handled...)
 	s.rec.MarkHandled(in.CorrelationID)
 	if !s.save() {
-		return false // not durable: the relay redelivers
+		s.rec.Handled = prev // remembered only once durable; the relay redelivers
+		return false
 	}
 	ack()
 	switch in.Kind {
@@ -498,10 +556,6 @@ func (s *session) userMessage(ctx context.Context, text string) {
 		if s.rec.ClaudeSessionID == "" {
 			s.emitError("There is no Claude Code session to resume.")
 			s.emitStatus("failed", "There is no Claude Code session to resume.")
-			return
-		}
-		if !s.d.capacityAvailable() {
-			s.emitStatus("failed", fmt.Sprintf("archivist connect already runs %d live sessions.", s.d.maxSessions))
 			return
 		}
 		s.emitStatus("starting", "Resuming the Claude Code session.")
@@ -538,7 +592,7 @@ func (s *session) interruptTimedOut() {
 	s.log.Printf("no result %v after interrupt; terminating claude", interruptTimeout)
 	s.stopProcess(true)
 	s.emitError("Claude Code did not stop after the interrupt.")
-	s.emitStatus("failed", "Claude Code did not stop after the interrupt; the next message resumes the session.")
+	s.processGone("Claude Code did not stop after the interrupt")
 }
 
 // answerApproval turns a relay resolution into Claude's control response.
@@ -625,6 +679,8 @@ func (s *session) linkEnded(err error) {
 		var fatal *FatalError
 		if errors.As(err, &fatal) {
 			s.log.Printf("session socket stopped: %v", err)
+			s.rec.Status = "failed"
+			s.save()
 		}
 		s.stopping = true
 		s.stopProcess(false)
@@ -658,7 +714,9 @@ func (s *session) ensureToken(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := auth.ValidateTokenFormat(tok.Token); err != nil || !auth.IsTaskToken(tok.Token) {
+	// Tracked from the mint on, so a failed revoke is retried at exit.
+	s.d.trackToken(tok.TokenID, true)
+	if !validTaskToken(tok.Token) {
 		s.revoke(tok)
 		return fmt.Errorf("chat-api returned a malformed task token")
 	}
@@ -678,7 +736,6 @@ func (s *session) ensureToken(ctx context.Context) error {
 		return err
 	}
 	s.token = tok
-	s.d.trackToken(tok.TokenID, true)
 	s.log.Printf("task token minted (fp:%s, expires %s)", auth.Fingerprint(tok.Token), time.UnixMilli(tok.ExpiresAt).UTC().Format(time.RFC3339))
 	s.scheduleRefresh(time.Until(time.UnixMilli(tok.ExpiresAt)) - tokenRefreshLead)
 	return nil
@@ -704,8 +761,12 @@ func (s *session) refreshToken(ctx context.Context) {
 	}
 	old := s.token
 	tok, err := s.d.api.MintTaskToken(ctx, s.id, taskscope.Scopes, taskTokenTTL)
-	if err == nil && !auth.IsTaskToken(tok.Token) {
-		err = fmt.Errorf("malformed task token")
+	if err == nil {
+		s.d.trackToken(tok.TokenID, true)
+		if !validTaskToken(tok.Token) {
+			s.revoke(tok)
+			err = fmt.Errorf("chat-api returned a malformed task token")
+		}
 	}
 	if err == nil {
 		err = writeFileAtomic(s.tokenFile, []byte(tok.Token+"\n"))
@@ -714,18 +775,13 @@ func (s *session) refreshToken(ctx context.Context) {
 		}
 	}
 	if err != nil {
-		if s.tokenRetry == 0 {
-			s.tokenRetry = tokenRetryBase
-		} else if s.tokenRetry < time.Minute {
-			s.tokenRetry *= 2
-		}
+		s.tokenRetry = nextRetry(s.tokenRetry)
 		s.log.Printf("task token refresh failed (current fp:%s), retrying in %v: %v", auth.Fingerprint(old.Token), s.tokenRetry, err)
 		s.scheduleRefresh(s.tokenRetry)
 		return
 	}
 	s.tokenRetry = 0
 	s.token = tok
-	s.d.trackToken(tok.TokenID, true)
 	s.log.Printf("task token refreshed (fp:%s replaces fp:%s)", auth.Fingerprint(tok.Token), auth.Fingerprint(old.Token))
 	s.revoke(old)
 	s.scheduleRefresh(time.Until(time.UnixMilli(tok.ExpiresAt)) - tokenRefreshLead)
@@ -751,4 +807,18 @@ func (s *session) revoke(tok *client.TaskToken) {
 	}
 	s.d.trackToken(tok.TokenID, false)
 	s.log.Printf("task token revoked (fp:%s)", auth.Fingerprint(tok.Token))
+}
+
+// nextRetry is the token refresh retry delay after cur: tokenRetryBase,
+// then doubling, never above one minute.
+func nextRetry(cur time.Duration) time.Duration {
+	if cur == 0 {
+		return min(tokenRetryBase, time.Minute)
+	}
+	return min(cur*2, time.Minute)
+}
+
+// validTaskToken is the strict mst_ wire check used for every minted token.
+func validTaskToken(tok string) bool {
+	return auth.IsTaskToken(tok) && auth.ValidateTokenFormat(tok) == nil
 }

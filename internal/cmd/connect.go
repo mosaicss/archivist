@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -27,7 +29,9 @@ the Mosaic agent relay; nothing listens on your machine. When you start a
 with your Claude subscription login, in a fresh temporary directory, with
 Mosaic search and read tools (archivist mcp serve under a short-lived,
 session-scoped task token). Tool calls that change anything ask for your
-approval in the workspace. Ctrl-C stops every session and revokes its tokens.
+approval in the workspace. "Allow for session" applies to every later call of
+that tool (any input) in that session without asking again. Ctrl-C stops
+every session and revokes its tokens.
 
 Requires an ak_ API key (archivist auth login) on a Pro account and Claude
 Code logged in with a claude.ai subscription. API key logins are refused.
@@ -36,7 +40,7 @@ Code logged in with a claude.ai subscription. API key logins are refused.
   archivist connect             connect and serve sessions until Ctrl-C
 
 Exit codes: 0 ok; 1 refused or stopped (feature off, superseded, too old);
-3 Claude Code not found; 4 credential or Claude login problem.`
+2 bad flag; 3 Claude Code not found; 4 credential or Claude login problem.`
 
 var (
 	connectModelRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:\[\]-]{0,127}$`)
@@ -131,9 +135,10 @@ func runConnect(cmd *cobra.Command, version string, check bool, model, effort st
 		_, _ = fmt.Fprintf(stderr, "archivist connect: %v\n", err)
 		return &ExitError{Code: ExitGenericError}
 	}
-	relayURL := os.Getenv("ARCHIVIST_RELAY_URL")
-	if relayURL == "" {
-		relayURL = connect.DefaultRelayURL
+	relayURL, err := relayURLFromEnv(os.Getenv("ARCHIVIST_RELAY_URL"))
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "archivist connect: %v\n", err)
+		return &ExitError{Code: ExitUsageError}
 	}
 	api := client.New(token, version)
 	api.SetStderr(io.Discard)
@@ -181,6 +186,33 @@ func runConnect(cmd *cobra.Command, version string, check bool, model, effort st
 	}
 }
 
+// relayURLFromEnv returns the relay base URL. Tickets travel in the
+// handshake, so only wss/https are accepted, except ws/http to a loopback
+// host (a local relay).
+func relayURLFromEnv(raw string) (string, error) {
+	if raw == "" {
+		return connect.DefaultRelayURL, nil
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return "", fmt.Errorf("ARCHIVIST_RELAY_URL %q is not a URL", raw)
+	}
+	switch u.Scheme {
+	case "wss", "https":
+		return raw, nil
+	case "ws", "http":
+		host := u.Hostname()
+		if host == "localhost" {
+			return raw, nil
+		}
+		if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+			return raw, nil
+		}
+		return "", fmt.Errorf("ARCHIVIST_RELAY_URL must use wss:// (cleartext %s:// is allowed only for a loopback relay)", u.Scheme)
+	}
+	return "", fmt.Errorf("ARCHIVIST_RELAY_URL scheme %q is not wss", u.Scheme)
+}
+
 // claudeExit maps a detection result to the typed exit code.
 func claudeExit(c connect.ClaudeInfo) error {
 	switch c.ProblemCode {
@@ -226,6 +258,7 @@ func printDetection(w io.Writer, det connect.Detection) {
 	} else {
 		p("  path:     %s\n", det.Codex.Path)
 		p("  version:  %s\n", orDash(det.Codex.Version))
+		p("  loggedIn: %v\n", det.Codex.LoggedIn)
 	}
 	p("  adapter:  not supported yet\n")
 }

@@ -16,6 +16,11 @@
 //	remember <w>    store a codeword for this Claude session
 //	recall          reply with the stored codeword
 //	spawn           start a detached `sleep 300` in its own process group
+//	exit            start streaming, then exit 3 mid-turn
+//	wait <ms>       sleep, then reply "waited"
+//	big <bytes>     write one stdout line of that many bytes
+//
+// config.json "exitBeforeInit": true exits 3 on the first turn before init.
 package main
 
 import (
@@ -28,6 +33,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -41,6 +47,7 @@ type config struct {
 	AuthMethod     string `json:"authMethod"`
 	APIKeySource   string `json:"apiKeySource"`
 	PermissionMode string `json:"permissionMode"`
+	ExitBeforeInit bool   `json:"exitBeforeInit"`
 }
 
 var (
@@ -210,6 +217,9 @@ func (r *runner) turn(text string) bool {
 	if strings.TrimSpace(text) == "mcp" && r.mcp == nil {
 		r.connectMCP()
 	}
+	if cfg.ExitBeforeInit {
+		os.Exit(3)
+	}
 	r.initFrame()
 	r.msgN++
 	mid := fmt.Sprintf("msg_fake_%s_%d", session[:8], r.msgN)
@@ -241,6 +251,21 @@ func (r *runner) turn(text string) bool {
 		_ = c.Start()
 		_ = os.WriteFile(filepath.Join(base, "spawned.pid"), []byte(fmt.Sprint(c.Process.Pid)), 0o600)
 		r.say(0, "spawned")
+	case "exit":
+		emit(stream(map[string]any{"type": "content_block_start", "index": 0, "content_block": map[string]any{"type": "text", "text": ""}}))
+		emit(stream(map[string]any{"type": "content_block_delta", "index": 0, "delta": map[string]any{"type": "text_delta", "text": "about to exit"}}))
+		os.Exit(3)
+	case "wait":
+		ms, _ := strconv.Atoi(arg)
+		time.Sleep(time.Duration(ms) * time.Millisecond)
+		r.say(0, "waited")
+	case "big":
+		n, _ := strconv.Atoi(arg)
+		outMu.Lock()
+		_, _ = stdout.WriteString(`{"type":"system","subtype":"padding","x":"` + strings.Repeat("x", n) + "\"}\n")
+		_ = stdout.Flush()
+		outMu.Unlock()
+		r.say(0, "big done")
 	case "slow":
 		return r.slow(true)
 	case "stuck":

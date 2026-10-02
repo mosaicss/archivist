@@ -13,8 +13,8 @@ import (
 )
 
 // maxLine bounds one stdout frame from a harness (stream-json lines carry
-// whole tool results).
-const maxLine = 32 << 20
+// whole tool results). A var so tests can shorten it.
+var maxLine = 32 << 20
 
 // ProcSpec describes one harness child. Bin and Args are fixed by the
 // adapter; nothing in them comes from the relay.
@@ -95,7 +95,7 @@ func StartProc(spec ProcSpec) (*Proc, error) {
 		defer drain.Done()
 		defer close(p.lines)
 		sc := bufio.NewScanner(stdout)
-		sc.Buffer(make([]byte, 0, 1<<20), maxLine)
+		sc.Buffer(make([]byte, 0, min(1<<20, maxLine)), maxLine)
 		for sc.Scan() {
 			b := sc.Bytes()
 			if len(strings.TrimSpace(string(b))) == 0 {
@@ -108,7 +108,11 @@ func StartProc(spec ProcSpec) (*Proc, error) {
 			}
 		}
 		if err := sc.Err(); err != nil {
-			p.log.Printf("harness stdout reader stopped: %v", err)
+			// A frame over maxLine (or a read error) ends the stream; the child
+			// would otherwise run on unread, so end its group and let the exit
+			// path settle the session.
+			p.log.Printf("harness stdout reader stopped: %v; terminating claude", err)
+			signalGroup(p.PID(), sigKill)
 		}
 		_, _ = io.Copy(io.Discard, stdout)
 	}()
@@ -177,7 +181,7 @@ func (p *Proc) Kill() {
 	p.killGroup(tracked)
 }
 
-func (p *Proc) killGroup(tracked []int) {
+func (p *Proc) killGroup(tracked []procID) {
 	pgid := p.PID()
 	tracked = append(tracked, descendants(pgid)...)
 	if groupAlive(pgid) {
@@ -190,8 +194,8 @@ func (p *Proc) killGroup(tracked []int) {
 	if groupAlive(pgid) {
 		signalGroup(pgid, sigKill)
 	}
-	for _, pid := range tracked {
-		killPID(pid)
+	for _, id := range tracked {
+		killPID(id)
 	}
 	select {
 	case <-p.done:

@@ -22,6 +22,8 @@ func detectWith(found []string, claudeVersion, authJSON, codexVersion string) co
 	}
 	run := func(_ context.Context, _ []string, _ string, bin string, args ...string) ([]byte, error) {
 		switch {
+		case strings.HasSuffix(bin, "codex") && len(args) == 2 && args[0] == "login":
+			return nil, nil // exit 0: logged in
 		case strings.HasSuffix(bin, "codex"):
 			return []byte(codexVersion), nil
 		case len(args) == 1 && args[0] == "--version":
@@ -81,6 +83,37 @@ func TestConnectCheckOutputAndExitCodes(t *testing.T) {
 		}
 		if got := exitOf(claudeExit(c.det.Claude)); got != c.exit {
 			t.Errorf("%s: exit %d, want %d", c.name, got, c.exit)
+		}
+	}
+}
+
+func TestConnectCheckShowsCodexLogin(t *testing.T) {
+	sub := `{"loggedIn":true,"authMethod":"claude.ai","subscriptionType":"max"}`
+	det := detectWith([]string{"claude", "codex"}, "2.1.280 (Claude Code)", sub, "codex-cli 0.160.0")
+	var out bytes.Buffer
+	printDetection(&out, det)
+	if !strings.Contains(out.String(), "codex\n  path:     /opt/bin/codex\n  version:  0.160.0\n  loggedIn: true\n  adapter:  not supported yet") {
+		t.Fatalf("codex block:\n%s", out.String())
+	}
+}
+
+func TestRelayURLFromEnv(t *testing.T) {
+	ok := map[string]string{
+		"":                           connect.DefaultRelayURL,
+		"wss://relay.example.test":   "wss://relay.example.test",
+		"https://relay.example.test": "https://relay.example.test",
+		"ws://127.0.0.1:8787":        "ws://127.0.0.1:8787",
+		"http://localhost:8787":      "http://localhost:8787",
+		"ws://[::1]:8787":            "ws://[::1]:8787",
+	}
+	for in, want := range ok {
+		if got, err := relayURLFromEnv(in); err != nil || got != want {
+			t.Errorf("%q: %q %v", in, got, err)
+		}
+	}
+	for _, in := range []string{"ws://relay.example.test", "http://10.0.0.5:8787", "ws://localhost.example.test", "ftp://x", "relay.example.test", "ws://"} {
+		if _, err := relayURLFromEnv(in); err == nil {
+			t.Errorf("%q accepted", in)
 		}
 	}
 }

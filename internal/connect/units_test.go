@@ -134,6 +134,15 @@ func TestDecodeClosedSet(t *testing.T) {
 		{SessionSocket, `{"correlationId":"c1"}`, "c1"},
 		{SessionSocket, `[1,2]`, ""},
 		{SessionSocket, `{"kind":"user_message"} trailing`, ""},
+		{SessionSocket, `{"kind":"stop_session","correlationId":"c1","sessionId":"` + unitSID + `"}}`, ""},
+		{SessionSocket, `{"kind":"stop_session","correlationId":"c1","sessionId":"` + unitSID + `"}]`, ""},
+		{SessionSocket, `{"kind":"stop_session","correlationId":"c1","sessionId":"` + unitSID + `"} {}`, ""},
+		{UserSocket, `{"kind":"presence","online":null,"agents":[]}`, ""},
+		{UserSocket, `{"kind":"presence","online":true,"agents":null}`, ""},
+		{SessionSocket, `{"kind":"ack","correlationId":"run:1","seq":null,"duplicate":false}`, "run:1"},
+		{SessionSocket, `{"kind":"ack","correlationId":"run:1","seq":4,"duplicate":null}`, "run:1"},
+		{UserSocket, `{"kind":"approval_response","correlationId":"resolved:r","sessionId":"` + unitSID + `","approvalId":"a","decision":"allow","reason":"user","terminalReceipt":null}`, "resolved:r"},
+		{SessionSocket, `{"kind":"approval_response","correlationId":"resolved:r","sessionId":"` + unitSID + `","approvalId":"a","decision":"allow","reason":"user","scope":null}`, "resolved:r"},
 	}
 	for _, c := range refused {
 		in, err := Decode(c.socket, []byte(c.raw))
@@ -469,6 +478,45 @@ func TestClaudeArgsAreFixed(t *testing.T) {
 		{APIKeySource: "none", PermissionMode: "auto"}, {}} {
 		if initProblem(f) == "" {
 			t.Errorf("init %+v passed", f)
+		}
+	}
+}
+
+func TestDetectCodexLogin(t *testing.T) {
+	look := func(file string) (string, error) { return "/bin/" + file, nil }
+	sub := `{"loggedIn":true,"authMethod":"claude.ai","subscriptionType":"max"}`
+	runner := func(loginErr error, loginOut string) Runner {
+		return func(_ context.Context, _ []string, _ string, bin string, args ...string) ([]byte, error) {
+			switch strings.Join(args, " ") {
+			case "--version":
+				if strings.HasSuffix(bin, "codex") {
+					return []byte("codex-cli 0.160.0"), nil
+				}
+				return []byte("2.1.280 (Claude Code)"), nil
+			case "auth status --json":
+				return []byte(sub), nil
+			case "login status":
+				return []byte(loginOut), loginErr
+			}
+			return nil, errors.New("unexpected")
+		}
+	}
+	cases := []struct {
+		err  error
+		out  string
+		want bool
+	}{
+		{nil, "", true},                           // codex-cli 0.160.0 prints status on stderr, exit 0
+		{nil, "Logged in using ChatGPT", true},    // stdout variant
+		{errors.New("exit status 1"), "", false},  // not logged in
+		{nil, "Not logged in", false},             // defensive: text says logged out
+		{errors.New("signal: killed"), "", false}, // any error falls back to false
+	}
+	for _, c := range cases {
+		d := Detect(context.Background(), look, runner(c.err, c.out), nil, "/")
+		caps := d.Capabilities()
+		if d.Codex.LoggedIn != c.want || caps[1].LoggedIn != c.want || caps[1].Available {
+			t.Errorf("%v/%q: codex %+v caps %+v", c.err, c.out, d.Codex, caps[1])
 		}
 	}
 }

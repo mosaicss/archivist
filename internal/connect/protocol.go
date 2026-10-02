@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"regexp"
 	"sort"
 	"strings"
@@ -97,7 +98,7 @@ func Decode(socket Socket, raw []byte) (*Inbound, error) {
 	if err := dec.Decode(&fields); err != nil || fields == nil {
 		return nil, &DecodeError{Reason: "not a JSON object"}
 	}
-	if dec.More() {
+	if _, err := dec.Token(); err != io.EOF {
 		return nil, &DecodeError{Reason: "trailing data after the JSON object"}
 	}
 	derr := &DecodeError{}
@@ -235,6 +236,11 @@ func exactFields(fields map[string]json.RawMessage, sh shape) string {
 	}
 	for _, k := range sh.optional {
 		allowed[k] = true
+	}
+	for k, v := range fields {
+		if string(bytes.TrimSpace(v)) == "null" {
+			return "field " + k + " is null"
+		}
 	}
 	var extra []string
 	for k := range fields {

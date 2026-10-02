@@ -57,7 +57,8 @@ type Daemon struct {
 	mu       sync.Mutex
 	sessions map[string]*session
 	starting map[string]bool
-	procs    int
+	procs    int             // reserved live-process slots
+	closing  bool            // Run is shutting down: no new start dispatch
 	tokens   map[string]bool // live task token ids
 	wg       sync.WaitGroup
 }
@@ -97,24 +98,30 @@ func New(cfg Config) (*Daemon, error) {
 func (d *Daemon) Run(ctx context.Context) error {
 	sessCtx, cancelSessions := context.WithCancel(context.Background())
 	defer func() {
+		d.beginClosing()
 		cancelSessions()
 		d.wg.Wait()
 	}()
 
 	// Reattach sessions that were active when an earlier run stopped; their
-	// next user_message resumes Claude from the stored session id.
+	// next user_message resumes Claude from the stored session id. Leftovers
+	// of a crashed run are removed: the run dir (task token, MCP config) of
+	// every inactive record, and the cwd too once a record expires.
 	if recs, err := d.store.List(); err == nil {
 		now := time.Now().UnixMilli()
 		for _, rec := range recs {
-			if rec.Status != "active" {
-				continue
-			}
-			if rec.ExpiresAt <= now {
+			if rec.Status == "active" && rec.ExpiresAt <= now {
 				rec.Status = "ended"
 				_ = d.store.Save(rec)
+				if rec.Cwd != "" {
+					_ = os.RemoveAll(rec.Cwd)
+				}
+			}
+			if rec.Status != "active" {
+				d.store.RemoveRunDir(rec.SessionID)
 				continue
 			}
-			d.attach(sessCtx, rec, "")
+			d.attach(sessCtx, rec, "", false)
 		}
 	}
 
@@ -131,7 +138,15 @@ func (d *Daemon) Run(ctx context.Context) error {
 	user.onCommand = func(l *live, in *Inbound) {
 		switch in.Kind {
 		case "start_session":
+			d.mu.Lock()
+			if d.closing {
+				d.mu.Unlock()
+				// Not acknowledged: the relay redelivers to the next daemon.
+				d.log.Printf("start_session %s ignored: shutting down", in.CorrelationID)
+				return
+			}
 			d.wg.Add(1)
+			d.mu.Unlock()
 			go func() {
 				defer d.wg.Done()
 				d.handleStart(sessCtx, l, in)
@@ -148,10 +163,17 @@ func (d *Daemon) Run(ctx context.Context) error {
 		err = nil
 	}
 	d.log.Printf("stopping: ending %d session(s)", d.sessionCount())
+	d.beginClosing()
 	cancelSessions()
 	d.wg.Wait()
 	d.revokeLeftovers()
 	return err
+}
+
+func (d *Daemon) beginClosing() {
+	d.mu.Lock()
+	d.closing = true
+	d.mu.Unlock()
 }
 
 func (d *Daemon) sessionCount() int {
@@ -160,9 +182,11 @@ func (d *Daemon) sessionCount() int {
 	return len(d.sessions)
 }
 
-// attach starts a session goroutine; prompt is non-empty for a new session.
-func (d *Daemon) attach(ctx context.Context, rec *SessionRecord, prompt string) {
+// attach starts a session goroutine; prompt is non-empty for a new session,
+// and slot passes a live-process slot already reserved for it.
+func (d *Daemon) attach(ctx context.Context, rec *SessionRecord, prompt string, slot bool) {
 	s := newSession(d, rec)
+	s.slot = slot
 	d.mu.Lock()
 	d.sessions[rec.SessionID] = s
 	d.mu.Unlock()
@@ -207,7 +231,9 @@ func (d *Daemon) handleStart(ctx context.Context, l *live, in *Inbound) {
 		ack()
 		return
 	} else if !isNotExist(err) {
-		d.log.Printf("start_session %s: session record unreadable: %v", in.CorrelationID, err)
+		// Refused without execution; acked so the relay stops redelivering.
+		d.log.Printf("start_session %s refused: session record unreadable: %v", in.CorrelationID, err)
+		ack()
 		return
 	}
 	if in.Agent != "claude" {
@@ -234,25 +260,27 @@ func (d *Daemon) handleStart(ctx context.Context, l *live, in *Inbound) {
 		d.refuseStart(ctx, l, in, "The session belongs to another agent.", true)
 		return
 	}
-	if !d.capacityAvailable() {
+	if !d.reserveSlot() {
 		d.refuseStart(ctx, l, in, fmt.Sprintf("archivist connect already runs %d live sessions.", d.maxSessions), true)
 		return
 	}
 	cwd, err := d.makeCwd()
 	if err != nil {
+		d.releaseSlot()
 		d.log.Printf("start_session %s: working directory: %v", in.CorrelationID, err)
 		return
 	}
 	rec := &SessionRecord{SessionID: sid, Agent: in.Agent, StartCorrelationID: in.CorrelationID, Cwd: cwd,
 		ExpiresAt: info.ExpiresAt, Status: "active", CreatedAt: now}
 	if err := d.store.Save(rec); err != nil {
+		d.releaseSlot()
 		_ = os.RemoveAll(cwd)
 		d.log.Printf("start_session %s: session record not saved: %v", in.CorrelationID, err)
 		return
 	}
 	ack()
 	d.log.Printf("session %s starting (cwd %s)", sid, cwd)
-	d.attach(ctx, rec, in.Prompt)
+	d.attach(ctx, rec, in.Prompt, true)
 }
 
 // refuseStart acknowledges a start that will not run. When the session is
@@ -304,22 +332,29 @@ func (d *Daemon) makeCwd() (string, error) {
 	return resolved, nil
 }
 
-func (d *Daemon) capacityAvailable() bool {
+// reserveSlot claims one live-process slot under the lock (check and act
+// together), so concurrent starts and resumes cannot exceed maxSessions.
+func (d *Daemon) reserveSlot() bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	return d.procs < d.maxSessions
-}
-
-func (d *Daemon) processStarted() {
-	d.mu.Lock()
+	if d.procs >= d.maxSessions {
+		return false
+	}
 	d.procs++
-	d.mu.Unlock()
+	return true
 }
 
-func (d *Daemon) processStopped() {
+func (d *Daemon) releaseSlot() {
 	d.mu.Lock()
 	d.procs--
 	d.mu.Unlock()
+}
+
+// slotsInUse reports reserved slots (tests).
+func (d *Daemon) slotsInUse() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.procs
 }
 
 func (d *Daemon) trackToken(id string, live bool) {

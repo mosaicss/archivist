@@ -36,6 +36,11 @@ type fakeRelay struct {
 	queued   map[string][]map[string]any // session id ("" = user) -> unacked commands
 	invalid  []string
 	dials    map[string]int
+	// withhold suppresses event acks for a session id (resend tests).
+	withhold map[string]bool
+	// frames records every raw event frame received, by correlation id.
+	frames map[string][]string
+	pings  int
 }
 
 func newFakeRelay(t *testing.T) *fakeRelay {
@@ -44,7 +49,8 @@ func newFakeRelay(t *testing.T) *fakeRelay {
 		t.Fatal(err)
 	}
 	r := &fakeRelay{t: t, parser: p, sessions: map[string]*websocket.Conn{}, events: map[string][]map[string]any{},
-		seen: map[string]bool{}, queued: map[string][]map[string]any{}, dials: map[string]int{}}
+		seen: map[string]bool{}, queued: map[string][]map[string]any{}, dials: map[string]int{},
+		withhold: map[string]bool{}, frames: map[string][]string{}}
 	r.srv = httptest.NewServer(http.HandlerFunc(r.serve))
 	t.Cleanup(r.srv.Close)
 	return r
@@ -95,6 +101,9 @@ func (r *fakeRelay) serve(w http.ResponseWriter, req *http.Request) {
 			return
 		}
 		if string(data) == "ping" {
+			r.mu.Lock()
+			r.pings++
+			r.mu.Unlock()
 			_ = c.Write(ctx, websocket.MessageText, []byte("pong"))
 			continue
 		}
@@ -137,13 +146,18 @@ func (r *fakeRelay) serve(w http.ResponseWriter, req *http.Request) {
 				continue
 			}
 			r.mu.Lock()
+			r.frames[cid] = append(r.frames[cid], string(data))
 			dup := r.seen[cid]
 			if !dup {
 				r.seen[cid] = true
 				r.events[sid] = append(r.events[sid], x)
 			}
 			seq := len(r.events[sid])
+			withhold := r.withhold[sid]
 			r.mu.Unlock()
+			if withhold {
+				continue
+			}
 			ack, _ := json.Marshal(map[string]any{"kind": "ack", "correlationId": cid, "seq": seq, "duplicate": dup})
 			_ = c.Write(ctx, websocket.MessageText, ack)
 		}
@@ -253,6 +267,40 @@ func (r *fakeRelay) lastCaps() []Capability {
 		return nil
 	}
 	return r.caps[len(r.caps)-1]
+}
+
+// dropSession cuts a session socket without a close frame (1006 for the daemon).
+func (r *fakeRelay) dropSession(sid string) {
+	r.mu.Lock()
+	c := r.sessions[sid]
+	r.mu.Unlock()
+	if c != nil {
+		_ = c.CloseNow()
+	}
+}
+
+func (r *fakeRelay) set(fn func(r *fakeRelay)) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	fn(r)
+}
+
+func (r *fakeRelay) framesOf(cid string) []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.frames[cid]...)
+}
+
+func (r *fakeRelay) pingCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.pings
+}
+
+func (r *fakeRelay) capsCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.caps)
 }
 
 func (r *fakeRelay) dialCount(sid string) int {

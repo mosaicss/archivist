@@ -50,6 +50,8 @@ func (c ClaudeInfo) Usable() bool { return c.Problem == "" }
 type CodexInfo struct {
 	Path    string
 	Version string
+	// LoggedIn is `codex login status` exiting 0 (a local check, no model call).
+	LoggedIn bool
 }
 
 // Detection is the local harness inventory.
@@ -79,7 +81,7 @@ func (d Detection) Capabilities() []Capability {
 		})
 	}
 	if d.Codex.Path != "" {
-		caps = append(caps, Capability{Agent: "codex", Version: capabilityVersion(d.Codex.Version)})
+		caps = append(caps, Capability{Agent: "codex", Version: capabilityVersion(d.Codex.Version), LoggedIn: d.Codex.LoggedIn})
 	}
 	return caps
 }
@@ -136,6 +138,11 @@ func Detect(ctx context.Context, lookPath LookPath, run Runner, env []string, di
 		d.Codex.Path = path
 		if out, err := run(ctx, env, dir, path, "--version"); err == nil {
 			d.Codex.Version = parseVersion(string(out))
+		}
+		// codex-cli prints "Logged in using ..." or "Not logged in" on stderr
+		// and exits 0 or 1; any error counts as logged out.
+		if out, err := run(ctx, env, dir, path, "login", "status"); err == nil && !strings.Contains(string(out), "Not logged in") {
+			d.Codex.LoggedIn = true
 		}
 	}
 	return d
