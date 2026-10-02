@@ -227,6 +227,18 @@
       "input": "fixtures/raw/synthetic-codex-mcp-failed.json",
       "normalized": "fixtures/synthetic-codex-mcp-failed.json",
       "note": "Synthetic pinned app-server protocol state, not a stdout capture. A failed MCP status with nullable result/error maps to tool-output-error with an injected fallback errorText."
+    },
+    {
+      "id": "synthetic-codex-mcp-failed-result",
+      "protocol": "codex",
+      "input": "fixtures/raw/synthetic-codex-mcp-failed-result.json",
+      "normalized": "fixtures/synthetic-codex-mcp-failed-result.json",
+      "note": "Synthetic app-server notification, not a stdout capture. Pinned 0.159.2/latest 0.160.0 notify_mcp_tool_call_completed emits Failed with Some(result) and None error for tool-reported is_error. The app-server maps result content/structuredContent/_meta to the wire; normalization retains these diagnostics in tool-output-error.errorText. Explicit error plus result are both retained when available; fallback requires neither.",
+      "source": [
+        "https://github.com/openai/codex/blob/rust-v0.159.2/codex-rs/core/src/mcp_tool_call.rs",
+        "https://github.com/openai/codex/blob/rust-v0.160.0/codex-rs/core/src/mcp_tool_call.rs",
+        "https://github.com/openai/codex/blob/rust-v0.159.2/codex-rs/app-server-protocol/src/protocol/v2/mcp.rs"
+      ]
     }
   ]
 }

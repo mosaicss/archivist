@@ -3,11 +3,11 @@
   "files": [
     {
       "path": "README.md",
-      "sha256": "a7c3eedb8e645443608dddbb4068a9f6552f587e8f0e114d8953dcc1a6bd1e2d"
+      "sha256": "1aea5f4ffd465d5039ea3789ef8c3c15079b6e1358df4efa990e68e9344a2093"
     },
     {
       "path": "cases.json",
-      "sha256": "27012919f100b1dba25aaf1501ef4d5efb6be32eb367ee97188420b979f848f0"
+      "sha256": "0b11f65801b02fd7cd762cc70e31fd9a349c104dc1a277ca823dfac63d55f235"
     },
     {
       "path": "chunk.json",
@@ -19,11 +19,11 @@
     },
     {
       "path": "contract/contract.test.ts",
-      "sha256": "adf9f42839c8cda754a2dd1e34f66de4c93ce411adc26e82cccf2aa1fd12d7b4"
+      "sha256": "b98586073005a6c28f9d7d31fe4aa6fc3d57e7b4aef8cd62ff57fc96fd0c347c"
     },
     {
       "path": "contract/normalize.ts",
-      "sha256": "8e161073ac81331eac6552270dd77cbb46abfea010a828494111d0d204544de2"
+      "sha256": "21d54dfe5069e6560ffd34a87baf018d77b44d06d76f9ef12be80f1351655387"
     },
     {
       "path": "contract/package-lock.json",
@@ -47,7 +47,7 @@
     },
     {
       "path": "contract/validate.ts",
-      "sha256": "5c431d25aa58316a08b05357df4ecfd9c1bf79bc68df644570eb6d2384ac85e4"
+      "sha256": "f6319071772ad4500aa403b7c1b8dd34b88069cf28f743f3861f9f55147e2bd2"
     },
     {
       "path": "data-anon-turn.json",
@@ -790,8 +790,16 @@
       "sha256": "469692551d3181fc2a073a55e9b99a711e1c4dbf0f035a1d2ac7fa21efaa2cfb"
     },
     {
+      "path": "fixtures/raw/synthetic-codex-mcp-failed-result.json",
+      "sha256": "22bfdfee094c48a03d11f778bc8053d4a2ba37ebb0e8f40ee076f6fab8a0a1e3"
+    },
+    {
       "path": "fixtures/raw/synthetic-codex-mcp-failed.json",
       "sha256": "0ab4f45684411b2086eabd9dfdf41dc846ca63b7efce1b7a45629da6a674fe0c"
+    },
+    {
+      "path": "fixtures/synthetic-codex-mcp-failed-result.json",
+      "sha256": "e0bec264805e87a295bddf5a53b7ed79a5b36a669dc31a48bb7c9e1000ffce10"
     },
     {
       "path": "fixtures/synthetic-codex-mcp-failed.json",
@@ -1015,7 +1023,7 @@
     },
     {
       "path": "provenance.json",
-      "sha256": "884dbf9fb1d637a21a314649d6b1868b4ba63226833ef434df7e341dcb74e0b8"
+      "sha256": "2d341b9888f3c6b9393fa5e259bc3573c43736304a54a680fac8c9446a531a2b"
     }
   ]
 }

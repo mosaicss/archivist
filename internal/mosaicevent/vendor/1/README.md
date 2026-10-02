@@ -49,6 +49,9 @@ means cache reads only. A Claude modelUsage key supplies the model when present;
 `claude-captured` is a synthetic fallback. Codex usage notifications lack a model field, so
 `codex-captured` is always a synthetic normalization label. The synthetic failed MCP fixture
 models a permitted protocol state with null result/error; its fallback errorText is injected.
+Tool-reported MCP failures can instead carry result diagnostics with no separate error. Their
+result content is retained in errorText; explicit error diagnostics are retained too. Only the
+absence of both diagnostics uses the synthetic fallback. These failure regressions are synthetic.
 None of these normalization values claim additional fields captured from the agent's stdout.
 
 The locked `contract/` package validates with Ajv and the public ai UI chunk schema. Its CLI compares
@@ -58,6 +61,9 @@ entrypoints run identical locked TS code/corpus plus Go, negative controls and m
 Invalid corpus kind metadata fails setup before event evaluation; a routing typo cannot count as
 an expected negative verdict. Static negatives independently omit every required data payload field,
 including each ACP plan entry field. Literal overflow fixtures keep `1e400` as JSON text.
+An optional root passed to report.ts supplies schemas as well as manifest, provenance and fixtures.
+Each report compiles that root's local schemas in a separate Ajv instance; exported validate uses
+the canonical bundle. Supplied schemas cannot reuse a different bundle's compiled schema cache.
 
 From contract/: `npm ci --ignore-scripts`, `npm run typecheck`, `npm test`, then
 `npm run check -- /absolute/path/to/mosaic-event-contract`. Dependency retrieval precedes offline

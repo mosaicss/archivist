@@ -39,13 +39,6 @@ export function verifyBundle(root = bundle): string {
   return digest;
 }
 
-const ajv = new Ajv({ strict: true, allErrors: true, coerceTypes: false, useDefaults: false, removeAdditional: false });
-for (const name of readdirSync(bundle).filter((name) => name.endsWith(".json") && !["manifest.json", "provenance.json", "cases.json"].includes(name))) {
-  ajv.addSchema(readJSON<Record<string, unknown>>(join(bundle, name)));
-}
-const chunkSchema = ajv.getSchema("https://mosaic-finance.com/schemas/mosaic-event/1/chunk.json")!;
-const envelopeSchema = ajv.getSchema("https://mosaic-finance.com/schemas/mosaic-event/1/envelope.json")!;
-
 function hasNonfiniteNumber(value: unknown): boolean {
   if (typeof value === "number") return !Number.isFinite(value);
   if (Array.isArray(value)) return value.some(hasNonfiniteNumber);
@@ -53,19 +46,31 @@ function hasNonfiniteNumber(value: unknown): boolean {
   return false;
 }
 
-export async function validate(value: unknown, kind: "chunk" | "envelope" = "chunk"): Promise<boolean> {
-  // Opaque SDK JSON fields must obey the same finite-number domain as Go decoding.
-  if (hasNonfiniteNumber(value)) return false;
-  if (!(kind === "chunk" ? chunkSchema : envelopeSchema)(value)) return false;
-  const envelope = value as Record<string, unknown>;
-  if (kind === "envelope" && envelope.type === "approval_resolved") {
-    const resolution = envelope.payload as Record<string, unknown>;
-    return envelope.correlationId === `resolved:${String(resolution.correlationId)}`;
+function createValidator(root: string) {
+  // Each bundle has its own schema cache. References resolve only through these local schemas.
+  const ajv = new Ajv({ strict: true, allErrors: true, coerceTypes: false, useDefaults: false, removeAdditional: false });
+  for (const name of readdirSync(root).filter((name) => name.endsWith(".json") && !["manifest.json", "provenance.json", "cases.json"].includes(name))) {
+    ajv.addSchema(readJSON<Record<string, unknown>>(join(root, name)));
   }
-  const chunk = kind === "envelope" ? envelope.payload : value;
-  // SDK validation is complementary: open data payloads are narrowed by the canonical schemas.
-  return (await safeValidateTypes({ value: chunk, schema: uiMessageChunkSchema })).success;
+  const chunkSchema = ajv.getSchema("https://mosaic-finance.com/schemas/mosaic-event/1/chunk.json");
+  const envelopeSchema = ajv.getSchema("https://mosaic-finance.com/schemas/mosaic-event/1/envelope.json");
+  if (!chunkSchema || !envelopeSchema) throw new Error("missing contract schemas");
+  return async (value: unknown, kind: "chunk" | "envelope" = "chunk"): Promise<boolean> => {
+    // Opaque SDK JSON fields must obey the same finite-number domain as Go decoding.
+    if (hasNonfiniteNumber(value)) return false;
+    if (!(kind === "chunk" ? chunkSchema : envelopeSchema)(value)) return false;
+    const envelope = value as Record<string, unknown>;
+    if (kind === "envelope" && envelope.type === "approval_resolved") {
+      const resolution = envelope.payload as Record<string, unknown>;
+      return envelope.correlationId === `resolved:${String(resolution.correlationId)}`;
+    }
+    const chunk = kind === "envelope" ? envelope.payload : value;
+    // SDK validation is complementary: open data payloads are narrowed by the canonical schemas.
+    return (await safeValidateTypes({ value: chunk, schema: uiMessageChunkSchema })).success;
+  };
 }
+
+export const validate = createValidator(bundle);
 
 export function loadCases(root = bundle): Case[] {
   const corpus = readJSON<{ schemaVersion: string; cases: Case[] }>(join(root, "cases.json"));
@@ -101,12 +106,13 @@ export function checkNormalization(root = bundle, cases = loadCases(root)): void
 export async function report(root = bundle): Promise<Report> {
   const bundleDigest = verifyBundle(root), corpus = loadCases(root);
   checkNormalization(root, corpus);
+  const validateEvent = createValidator(root);
   const cases: Verdict[] = [];
   for (const entry of corpus) {
     const events = readJSON<unknown[]>(join(root, entry.input));
     if (!Array.isArray(events) || !events.length) throw new Error(`empty fixture ${entry.id}`);
     let accepted = true;
-    for (const event of events) if (!(await validate(event, entry.kind))) accepted = false;
+    for (const event of events) if (!(await validateEvent(event, entry.kind))) accepted = false;
     cases.push({ id: entry.id, accepted, eventCount: events.length });
   }
   return { schemaVersion: version, bundleDigest, cases };

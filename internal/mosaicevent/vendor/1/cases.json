@@ -1491,6 +1491,13 @@
       "valid": true,
       "input": "fixtures/synthetic-codex-mcp-failed.json",
       "source": "synthetic"
+    },
+    {
+      "id": "synthetic-codex-mcp-failed-result",
+      "kind": "chunk",
+      "valid": true,
+      "input": "fixtures/synthetic-codex-mcp-failed-result.json",
+      "source": "synthetic"
     }
   ]
 }

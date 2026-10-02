@@ -207,7 +207,10 @@ export function normalizeCodex(input: unknown): Chunk[] {
             else if (item.status === "declined") chunks.push({ type: "tool-output-denied", toolCallId: id });
             else if (item.type === "mcpToolCall" && item.status === "failed") chunks.push({
               type: "tool-output-error", toolCallId: id,
-              errorText: item.error ? JSON.stringify(item.error) : "MCP tool call failed",
+              errorText: item.error != null && item.result != null
+                ? JSON.stringify({ error: item.error, result: item.result })
+                : item.error != null ? JSON.stringify(item.error)
+                : item.result != null ? JSON.stringify(item.result) : "MCP tool call failed",
             });
             else if (item.error) chunks.push({ type: "tool-output-error", toolCallId: id, errorText: JSON.stringify(item.error) });
             else chunks.push({ type: "tool-output-available", toolCallId: id,
