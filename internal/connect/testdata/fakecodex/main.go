@@ -53,6 +53,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -257,6 +258,16 @@ func (s *server) run() {
 	// stdin EOF: graceful shutdown.
 	if s.mcp != nil {
 		_ = s.mcp.Close()
+	}
+	if cfg.CloseBeforeMCP {
+		// The scenario is "stdout closed, process alive": the daemon closes
+		// stdin when its JSON-RPC connection ends, and exiting here would let
+		// the process exit race the disconnect in the daemon's MCP wait. Stay
+		// alive until the daemon signals the process group.
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT)
+		<-sig
+		os.Exit(1)
 	}
 }
 
