@@ -17,18 +17,23 @@ import (
 	"github.com/mosaicss/archivist/internal/mosaicevent"
 )
 
-// DefaultMaxSessions caps concurrently running Claude processes.
+// DefaultMaxSessions caps concurrently running harness processes.
 const DefaultMaxSessions = 4
 
 // Config assembles a daemon. Only local configuration lives here; the relay
 // never supplies any of it.
 type Config struct {
-	API         API
-	RelayURL    string
-	StateDir    string
+	API      API
+	RelayURL string
+	StateDir string
+	// Claude and Codex configure each adapter; an empty Bin means that
+	// harness is not usable here and its sessions are refused.
 	Claude      ClaudeConfig
+	Codex       CodexConfig
 	MaxSessions int
-	Log         *Logger
+	// AppVersion is this archivist's version (Codex clientInfo).
+	AppVersion string
+	Log        *Logger
 	// Detect re-inventories harnesses for each capabilities report.
 	Detect func(ctx context.Context) Detection
 	// Runner runs `claude auth status` for the per-session proof.
@@ -46,6 +51,8 @@ type Daemon struct {
 	api         API
 	relayURL    string
 	claude      ClaudeConfig
+	codex       CodexConfig
+	appVersion  string
 	maxSessions int
 	log         *Logger
 	parser      *mosaicevent.Parser
@@ -78,8 +85,9 @@ func New(cfg Config) (*Daemon, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open state %s: %w", cfg.StateDir, err)
 	}
-	d := &Daemon{api: cfg.API, relayURL: cfg.RelayURL, claude: cfg.Claude, maxSessions: cfg.MaxSessions,
-		log: cfg.Log, parser: parser, store: store, detect: cfg.Detect, runner: cfg.Runner,
+	d := &Daemon{api: cfg.API, relayURL: cfg.RelayURL, claude: cfg.Claude, codex: cfg.Codex, appVersion: cfg.AppVersion,
+		maxSessions: cfg.MaxSessions,
+		log:         cfg.Log, parser: parser, store: store, detect: cfg.Detect, runner: cfg.Runner,
 		environ: cfg.Environ, tempDir: cfg.TempDir, dial: cfg.Dial,
 		sessions: map[string]*session{}, starting: map[string]bool{}, tokens: map[string]bool{}}
 	if d.maxSessions <= 0 {
@@ -90,6 +98,14 @@ func New(cfg Config) (*Daemon, error) {
 	}
 	if d.environ == nil {
 		d.environ = os.Environ
+	}
+	if d.appVersion == "" {
+		d.appVersion = "dev"
+	}
+	// Orphaned harness descendants are reparented to the daemon (Linux), so
+	// the stop sweep can kill and reap them.
+	if err := enableSubreaper(); err != nil && d.log != nil {
+		d.log.Printf("warning: could not become the child subreaper: %v", err)
 	}
 	return d, nil
 }
@@ -103,6 +119,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 		d.beginClosing()
 		cancelSessions()
 		d.wg.Wait()
+		SweepAllOrphans()
 	}()
 
 	// Reattach sessions that were active when an earlier run stopped; their
@@ -121,6 +138,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 			d.store.RemoveRunDir(rec.SessionID)
 			if rec.Status != "active" {
 				removeSessionCwd(rec.Cwd)
+				d.store.RemoveCodexHome(rec.SessionID)
 				continue
 			}
 			d.attach(sessCtx, rec, "", false)
@@ -168,6 +186,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	d.beginClosing()
 	cancelSessions()
 	d.wg.Wait()
+	SweepAllOrphans()
 	d.revokeLeftovers()
 	return err
 }
@@ -241,8 +260,8 @@ func (d *Daemon) handleStart(ctx context.Context, l *live, in *Inbound) {
 		d.log.Printf("start_session %s: session record unreadable, awaiting redelivery: %v", in.CorrelationID, err)
 		return
 	}
-	if in.Agent != "claude" {
-		d.refuseStart(ctx, l, in, fmt.Sprintf("The %s agent is not supported by this archivist connect yet.", in.Agent), true)
+	if !d.agentUsable(in.Agent) {
+		d.refuseStart(ctx, l, in, fmt.Sprintf("The %s agent is not available in this archivist connect.", in.Agent), true)
 		return
 	}
 	info, err := d.api.GetAgentSession(ctx, sid)
@@ -261,7 +280,7 @@ func (d *Daemon) handleStart(ctx context.Context, l *live, in *Inbound) {
 		d.refuseStart(ctx, l, in, "The session is not active.", false)
 		return
 	}
-	if info.Agent != "claude" {
+	if info.Agent != in.Agent {
 		d.refuseStart(ctx, l, in, "The session belongs to another agent.", true)
 		return
 	}
@@ -320,6 +339,18 @@ func (d *Daemon) refuseStart(ctx context.Context, l *live, in *Inbound, reason s
 	}
 	cancel()
 	close(s.done)
+}
+
+// agentUsable reports whether this daemon drives agent (its harness was
+// usable at startup).
+func (d *Daemon) agentUsable(agent string) bool {
+	switch agent {
+	case "claude":
+		return d.claude.Bin != ""
+	case "codex":
+		return d.codex.Bin != ""
+	}
+	return false
 }
 
 // makeCwd creates a private temp working directory, resolved through

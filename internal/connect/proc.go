@@ -40,7 +40,21 @@ type Proc struct {
 	exitMu sync.Mutex
 	exit   error
 	stopMu sync.Mutex
+
+	inMu     sync.Mutex
+	inClosed bool
+
+	trackMu sync.Mutex
+	tracked map[procID]bool // every descendant seen (snapshots), for the stop sweep
 }
+
+// procRegistry holds the live harness children. A child is registered under
+// the lock while it starts and leaves only after os/exec reaped it, so the
+// orphan sweep never mistakes a harness for an orphan it may reap.
+var procRegistry = struct {
+	mu   sync.Mutex
+	live map[int]*Proc
+}{live: map[int]*Proc{}}
 
 // ErrUnsupportedPlatform is returned where process groups are unavailable.
 var ErrUnsupportedPlatform = errors.New("archivist connect does not supervise harness processes on this platform yet")
@@ -66,11 +80,15 @@ func StartProc(spec ProcSpec) (*Proc, error) {
 	if err != nil {
 		return nil, err
 	}
+	procRegistry.mu.Lock()
 	if err := cmd.Start(); err != nil {
+		procRegistry.mu.Unlock()
 		return nil, err
 	}
 	p := &Proc{cmd: cmd, stdin: stdin, log: spec.Log, lines: make(chan []byte, 64),
-		quit: make(chan struct{}), done: make(chan struct{})}
+		quit: make(chan struct{}), done: make(chan struct{}), tracked: map[procID]bool{}}
+	procRegistry.live[cmd.Process.Pid] = p
+	procRegistry.mu.Unlock()
 
 	var drain sync.WaitGroup
 	drain.Add(2)
@@ -125,6 +143,9 @@ func StartProc(spec ProcSpec) (*Proc, error) {
 	go func() {
 		drain.Wait()
 		err := cmd.Wait()
+		procRegistry.mu.Lock()
+		delete(procRegistry.live, cmd.Process.Pid)
+		procRegistry.mu.Unlock()
 		p.exitMu.Lock()
 		p.exit = err
 		p.exitMu.Unlock()
@@ -161,6 +182,56 @@ func (p *Proc) WriteJSON(v any) error {
 	return err
 }
 
+// CloseStdin closes the child's stdin (end of input); safe to call twice.
+// Codex's app-server treats EOF as a graceful shutdown request.
+func (p *Proc) CloseStdin() {
+	p.inMu.Lock()
+	defer p.inMu.Unlock()
+	if p.inClosed {
+		return
+	}
+	p.inClosed = true
+	p.wmu.Lock()
+	_ = p.stdin.Close()
+	p.wmu.Unlock()
+}
+
+// Snapshot records every current descendant (any process group), so a
+// later stop can kill those that left the tree or were orphaned. Without a
+// subreaper (macOS) these snapshots are the only record of detached
+// grandchildren.
+func (p *Proc) Snapshot() {
+	p.track(descendants(p.PID()))
+}
+
+func (p *Proc) track(ids []procID) {
+	p.trackMu.Lock()
+	defer p.trackMu.Unlock()
+	for _, id := range ids {
+		p.tracked[id] = true
+	}
+}
+
+func (p *Proc) isTracked(id procID) bool {
+	p.trackMu.Lock()
+	defer p.trackMu.Unlock()
+	return p.tracked[id]
+}
+
+func (p *Proc) trackedIDs() []procID {
+	p.trackMu.Lock()
+	defer p.trackMu.Unlock()
+	out := make([]procID, 0, len(p.tracked))
+	for id := range p.tracked {
+		out = append(out, id)
+	}
+	return out
+}
+
+// SweepOrphans kills and reaps processes of this harness that were
+// reparented to the daemon (Linux subreaper); a no-op elsewhere.
+func (p *Proc) SweepOrphans() { sweepOrphans(p, false) }
+
 // Stop closes stdin, waits grace for a clean exit, then SIGTERMs and
 // SIGKILLs the group and any descendant that left it. Safe to call twice.
 func (p *Proc) Stop(grace time.Duration) {
@@ -168,9 +239,7 @@ func (p *Proc) Stop(grace time.Duration) {
 	defer p.stopMu.Unlock()
 	tracked := descendants(p.PID())
 	p.qOnce.Do(func() { close(p.quit) })
-	p.wmu.Lock()
-	_ = p.stdin.Close()
-	p.wmu.Unlock()
+	p.CloseStdin()
 	select {
 	case <-p.done:
 	case <-time.After(grace):
@@ -190,6 +259,8 @@ func (p *Proc) Kill() {
 func (p *Proc) killGroup(tracked []procID) {
 	pgid := p.PID()
 	tracked = append(tracked, descendants(pgid)...)
+	p.track(tracked)
+	tracked = p.trackedIDs()
 	if groupAlive(pgid) {
 		signalGroup(pgid, sigTerm)
 		select {
@@ -203,6 +274,9 @@ func (p *Proc) killGroup(tracked []procID) {
 	for _, id := range tracked {
 		killPID(id)
 	}
+	// Orphans reparented to the daemon (Linux subreaper) are killed and
+	// reaped; tracked ones that died after the snapshot are reaped too.
+	sweepOrphans(p, false)
 	select {
 	case <-p.done:
 	case <-time.After(5 * time.Second):

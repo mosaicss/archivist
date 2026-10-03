@@ -174,23 +174,36 @@ func truncateString(s string, keep int) string {
 }
 
 // reduceDescriptor keeps the fields an approval card needs and truncates the
-// tool input.
+// tool input: Claude's can_use_tool keys, and Codex's command, cwd, kind,
+// reason, availableDecisions, ids and the changed paths of a file change.
 func reduceDescriptor(v any) any {
 	d, ok := v.(map[string]any)
 	if !ok {
 		return truncateValue(v)
 	}
 	out := map[string]any{}
-	for _, k := range []string{"subtype", "tool_name", "display_name", "tool_use_id", "blocked_path"} {
+	for _, k := range []string{"subtype", "tool_name", "display_name", "tool_use_id", "blocked_path",
+		"kind", "threadId", "turnId", "itemId", "approvalId", "serverName", "availableDecisions"} {
 		if x, ok := d[k]; ok {
 			out[k] = x
 		}
 	}
-	if s, ok := d["description"].(string); ok {
-		out["description"] = truncateString(s, 2000)
+	for _, k := range []string{"description", "command", "cwd", "reason", "message"} {
+		if s, ok := d[k].(string); ok {
+			out[k] = truncateString(s, 2000)
+		}
 	}
 	if in, ok := d["input"]; ok {
 		out["input"] = truncateValue(in)
+	}
+	if changes, ok := d["changes"].([]any); ok {
+		paths := []any{}
+		for _, c := range changes {
+			if m, ok := c.(map[string]any); ok && len(paths) < 200 {
+				paths = append(paths, map[string]any{"path": m["path"], "kind": m["kind"]})
+			}
+		}
+		out["changes"] = paths
 	}
 	out["truncated"] = true
 	return out

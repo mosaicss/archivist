@@ -24,6 +24,7 @@ type SessionRecord struct {
 	Agent              string   `json:"agent"`
 	StartCorrelationID string   `json:"startCorrelationId"`
 	ClaudeSessionID    string   `json:"claudeSessionId,omitempty"`
+	CodexThreadID      string   `json:"codexThreadId,omitempty"`
 	Cwd                string   `json:"cwd,omitempty"`
 	ExpiresAt          int64    `json:"expiresAt"`
 	Status             string   `json:"status"` // active | ended | failed
@@ -173,6 +174,26 @@ func (s *Store) RunDir(id string) (string, error) {
 func (s *Store) RemoveRunDir(id string) {
 	if uuidRe.MatchString(id) {
 		_ = os.RemoveAll(filepath.Join(s.dir, "run", id))
+	}
+}
+
+// codexHomeDir is the parent of per-session Codex homes (Story 78.17).
+const codexHomeDir = "codex-home"
+
+// CodexHomePath is the per-session CODEX_HOME (not created).
+func (s *Store) CodexHomePath(id string) (string, error) {
+	if !uuidRe.MatchString(id) {
+		return "", fmt.Errorf("invalid session id")
+	}
+	return filepath.Join(s.dir, codexHomeDir, id), nil
+}
+
+// RemoveCodexHome deletes a session's Codex home (rollouts, the auth.json
+// link and Codex's local databases). The link target, the owner's
+// auth.json, is never touched: RemoveAll removes the link itself.
+func (s *Store) RemoveCodexHome(id string) {
+	if dir, err := s.CodexHomePath(id); err == nil {
+		_ = os.RemoveAll(dir)
 	}
 }
 

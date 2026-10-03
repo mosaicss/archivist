@@ -9,8 +9,10 @@ require (
 	github.com/google/jsonschema-go v0.4.3
 	github.com/grafana/ai-sdk v0.1.0-alpha.1
 	github.com/modelcontextprotocol/go-sdk v1.8.0
+	github.com/sourcegraph/jsonrpc2 v0.2.3
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.9
+	golang.org/x/sys v0.46.0
 	golang.org/x/term v0.43.0
 )
 
@@ -27,7 +29,6 @@ require (
 	go.yaml.in/yaml/v4 v4.0.0-rc.6 // indirect
 	golang.org/x/oauth2 v0.35.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
-	golang.org/x/sys v0.46.0 // indirect
 	golang.org/x/text v0.40.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 )
