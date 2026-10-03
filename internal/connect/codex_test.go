@@ -1197,9 +1197,11 @@ func TestCodexResumeErrorKinds(t *testing.T) {
 	setFake(map[string]any{"resumeError": "no rollout found for thread id x"})
 	h.message(sid, "echo three")
 	waitFor(t, 20*time.Second, "failed record", func() bool { return h.record(sid).Status == "failed" })
-	if _, err := os.Stat(home); !os.IsNotExist(err) {
-		t.Fatal("home kept after the thread was gone")
-	}
+	// failSession saves the record before it removes the home.
+	waitFor(t, 5*time.Second, "home removed after the thread was gone", func() bool {
+		_, err := os.Stat(home)
+		return os.IsNotExist(err)
+	})
 }
 
 func TestResumeForUndrivenHarnessStaysResumable(t *testing.T) {
@@ -1227,5 +1229,20 @@ func TestResumeForUndrivenHarnessStaysResumable(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(h.home, ".archivist", "connect", "codex-home", sid)); err != nil {
 		t.Fatal("home removed")
+	}
+}
+
+// threadGone: only a missing thread or rollout ends the session; any other
+// resume error (a missing model included) keeps it resumable.
+func TestThreadGoneMatchesOnlyMissingThread(t *testing.T) {
+	for msg, want := range map[string]bool{
+		"no rollout found for thread id 019da1a1": true,
+		"thread not found: 019da1a1":              true,
+		"model not found: gpt-x":                  false,
+		"internal error: database is locked":      false,
+	} {
+		if got := threadGone(msg); got != want {
+			t.Errorf("threadGone(%q) = %v, want %v", msg, got, want)
+		}
 	}
 }

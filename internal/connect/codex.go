@@ -333,10 +333,13 @@ func (s *session) codexHandshake(ctx context.Context, home, threadID string) err
 }
 
 // threadGone reports a thread/resume error that means the thread cannot
-// come back (its rollout is missing), as opposed to a passing failure.
+// come back (its rollout is missing), as opposed to a passing failure. The
+// two messages are codex-rs 0.160.0's ("no rollout found for thread id",
+// "thread not found: <id>"); a wider match such as a missing model would
+// delete a session that a restart with another --codex-model could resume.
 func threadGone(msg string) bool {
 	m := strings.ToLower(msg)
-	return strings.Contains(m, "no rollout found") || strings.Contains(m, "not found")
+	return strings.Contains(m, "no rollout found") || strings.Contains(m, "thread not found")
 }
 
 // threadProblem checks the thread/start (or resume) response against the
