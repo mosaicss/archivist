@@ -5,12 +5,15 @@
 //
 // CONNECT_E2E_LIVE=1 CONNECT_E2E_LIVE_AGENT=codex runs TestE2ELiveCodex
 // with the real Codex on the owner's ChatGPT login (bounded and ledgered);
-// CONNECT_E2E_LIVE_ROW=restart runs only the restart and resume row.
+// CONNECT_E2E_LIVE_ROW=restart runs only the restart and resume row;
+// CONNECT_E2E_LIVE_ROW=sandbox runs one approved command in the session
+// sandbox (cwd and its .tmp writable, /tmp outside the cwd not), then stops.
 package connect
 
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -357,6 +360,41 @@ func TestE2ELiveCodex(t *testing.T) {
 		t.Fatalf("statuses %v\n%s", st, d.out.String())
 	}
 	ledger(fmt.Sprintf("proof log line present: %v", strings.Contains(d.out.String(), "codex proof ok")))
+
+	// "sandbox": one approved command proves the session sandbox (cwd and
+	// its .tmp writable, /tmp outside the cwd not), then stop.
+	if row == "sandbox" {
+		outside := "/tmp/outside-7817.txt"
+		_ = os.Remove(outside)
+		turn("Use your shell tool to run exactly this command in the current directory (the user approves or declines it in their interface): mktemp; touch sandbox-7817.txt; touch " + outside + "; echo finished-7817 . Do not run any other command. Reply with only its output.")
+		answer("sandbox", "allow", "allow_once")
+		s.waitTurns(n, turnTimeout)
+		rec, _ := os.ReadFile(filepath.Join(home, ".archivist", "connect", "sessions", sid+".json"))
+		var r struct {
+			Cwd string `json:"cwd"`
+		}
+		_ = json.Unmarshal(rec, &r)
+		_, inErr := os.Stat(filepath.Join(r.Cwd, "sandbox-7817.txt"))
+		_, outErr := os.Stat(outside)
+		tmpEntries, _ := os.ReadDir(filepath.Join(r.Cwd, ".tmp"))
+		ledger(fmt.Sprintf("sandbox: cwd under /tmp %v; file in cwd %v; mktemp entries in cwd/.tmp %d; file outside the cwd in /tmp %v; proof excludes logged %v",
+			strings.HasPrefix(r.Cwd, "/tmp/"), inErr == nil, len(tmpEntries), outErr == nil, strings.Contains(d.out.String(), "codex proof ok")))
+		s.send(map[string]any{"kind": "stop_session", "correlationId": cmdID("stop"), "sessionId": sid})
+		waitFor(t, time.Minute, "completed", func() bool { return s.countStatus("completed") == 1 })
+		if code := d.ctrlC(t); code != 0 {
+			t.Fatalf("Ctrl-C exit %d", code)
+		}
+		left := codexProcesses("7817")
+		_, homeErr := os.Stat(filepath.Join(home, ".archivist", "connect", "codex-home", sid))
+		ledger(fmt.Sprintf("sandbox row end: session processes %d %v; live task tokens %d; session home removed %v",
+			len(left), left, len(api.liveTokens()), os.IsNotExist(homeErr)))
+		_ = os.Remove(outside)
+		if inErr != nil || len(tmpEntries) == 0 || outErr == nil || len(left) != 0 || len(api.liveTokens()) != 0 || !os.IsNotExist(homeErr) {
+			t.Fatalf("sandbox row failed (see ledger)")
+		}
+		s.check()
+		return
+	}
 
 	if !restartOnly && row != "rest" {
 		turn("Call the archivist MCP tool named search exactly once with query \"revenue\". Do not run shell commands. Reply with only the number of results it returned.")
