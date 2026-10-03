@@ -40,8 +40,18 @@ func TestTaskModeToolSet(t *testing.T) {
 	if strings.Join(got, ",") != strings.Join(expectedTaskToolNames, ",") {
 		t.Fatalf("task tools = %v, want %v", got, expectedTaskToolNames)
 	}
-	if strings.Join(taskscope.Tools(), ",") != strings.Join(expectedTaskToolNames, ",") {
+	// Tools() adds publish_artifact (Story 78.18), which is not a verb.
+	if strings.Join(taskscope.Tools(), ",") != "companies_search,publish_artifact,read_passage,read_section,search,toc" {
 		t.Fatalf("taskscope.Tools() = %v", taskscope.Tools())
+	}
+	if strings.Join(taskscope.AutoAllowedTools(), ",") != strings.Join(expectedTaskToolNames, ",") {
+		t.Fatalf("taskscope.AutoAllowedTools() = %v", taskscope.AutoAllowedTools())
+	}
+	if !taskscope.ApprovalRequired("publish_artifact") || taskscope.ApprovalRequired("search") {
+		t.Fatal("only publish_artifact requires approval")
+	}
+	if taskscope.ToolAllowedFor("publish_artifact", []string{"search", "read"}) || !taskscope.ToolAllowedFor("publish_artifact", []string{"publish"}) {
+		t.Fatal("publish_artifact must need the publish scope")
 	}
 	// companies_get falls back to GET /companies, which tasks cannot call.
 	if taskscope.ToolAllowed("companies_get") {
@@ -68,6 +78,10 @@ func TestTaskRouteScopeMirrorsChatAPI(t *testing.T) {
 		"GET /account/cli-tokens":                "",
 		"POST /chat":                             "",
 		"GET /research/filings/f1/sections/more": "",
+		"POST /artifacts":                        "publish",
+		"GET /artifacts":                         "",
+		"POST /artifacts/x":                      "",
+		"GET /artifacts/x":                       "",
 	}
 	for route, want := range cases {
 		method, path, _ := strings.Cut(route, " ")

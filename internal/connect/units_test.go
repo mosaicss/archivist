@@ -459,15 +459,19 @@ func TestClaudeArgsAreFixed(t *testing.T) {
 	if !strings.Contains(joined, "--resume=abc") || !strings.Contains(joined, "--model claude-sonnet-5 --effort low") {
 		t.Fatalf("args %s", joined)
 	}
-	raw, err := mcpConfig(cfg, "/state/run/x/task-token")
+	raw, err := mcpConfig(cfg, "/state/run/x/task-token", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(raw) != `{"mcpServers":{"archivist":{"args":["mcp","serve","--token-file","/state/run/x/task-token"],"command":"/opt/archivist","env":{}}}}` {
 		t.Fatalf("mcp config %s", raw)
 	}
+	raw, _ = mcpConfig(cfg, "/t", []string{"--publish-session", "s1", "--publish-dir", "/cwd"})
+	if !strings.Contains(string(raw), `"args":["mcp","serve","--token-file","/t","--publish-session","s1","--publish-dir","/cwd"]`) {
+		t.Fatalf("mcp config with publish %s", raw)
+	}
 	cfg.BaseURL = "http://127.0.0.1:1"
-	raw, _ = mcpConfig(cfg, "/t")
+	raw, _ = mcpConfig(cfg, "/t", nil)
 	if !strings.Contains(string(raw), `"env":{"ARCHIVIST_BASE_URL":"http://127.0.0.1:1"}`) {
 		t.Fatalf("mcp env %s", raw)
 	}

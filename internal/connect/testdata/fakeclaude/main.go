@@ -11,6 +11,8 @@
 //	bash <cmd>      ask can_use_tool for Bash and report the decision
 //	write <path>    ask can_use_tool for Write and report the decision
 //	mcp             list the archivist MCP tools and call search
+//	publish <path>  call publish_artifact; asks can_use_tool unless the tool
+//	                is in --allowedTools (as Claude Code does)
 //	slow            stream numbers until interrupted (60 s cap)
 //	stuck           stream numbers and ignore interrupts (60 s cap)
 //	remember <w>    store a codeword for this Claude session
@@ -233,7 +235,7 @@ func mustCwd() string { d, _ := os.Getwd(); return d }
 
 // turn runs one user turn; false ends the process (stdin closed).
 func (r *runner) turn(text string) bool {
-	if strings.TrimSpace(text) == "mcp" && r.mcp == nil {
+	if (strings.TrimSpace(text) == "mcp" || strings.HasPrefix(strings.TrimSpace(text), "publish ")) && r.mcp == nil {
 		r.connectMCP()
 	}
 	if cfg.ExitBeforeInit {
@@ -264,6 +266,8 @@ func (r *runner) turn(text string) bool {
 		return r.ask("Write", map[string]any{"file_path": arg, "content": "x"})
 	case "mcp":
 		r.callMCP()
+	case "publish":
+		return r.publish(arg)
 	case "orphanexit":
 		// A detached grandchild whose parent exits at once and which exits
 		// itself shortly after: an orphan for the subreaper to reap.
@@ -438,6 +442,71 @@ func (r *runner) connectMCP() {
 		return
 	}
 	r.mcp = cs
+}
+
+// publish runs mcp__archivist__publish_artifact the way Claude Code does:
+// a tool in --allowedTools runs at once, any other asks can_use_tool first.
+func (r *runner) publish(path string) bool {
+	const tool = "mcp__archivist__publish_artifact"
+	toolID := "toolu_pub" + strings.ReplaceAll(uuid(), "-", "")[:16]
+	input := map[string]any{"path": path}
+	r.toolUse(0, toolID, tool, input)
+	allowed := false
+	for _, t := range strings.Split(r.flags["--allowedTools"], ",") {
+		if t == tool {
+			allowed = true
+		}
+	}
+	if !allowed {
+		reqID := uuid()
+		emit(map[string]any{"type": "control_request", "request_id": reqID, "request": map[string]any{
+			"subtype": "can_use_tool", "tool_name": tool, "display_name": "publish_artifact", "input": input,
+			"description": "Publish artifact", "tool_use_id": toolID}})
+		var body map[string]any
+		for f := range r.frames {
+			resp, _ := f["response"].(map[string]any)
+			if f["type"] == "control_response" && resp["request_id"] == reqID {
+				body, _ = resp["response"].(map[string]any)
+				break
+			}
+		}
+		if body == nil {
+			return false
+		}
+		if body["behavior"] != "allow" {
+			r.toolResult(toolID, fmt.Sprint(body["message"]), true)
+			r.say(1, "publish denied")
+			emit(stream(map[string]any{"type": "message_stop"}))
+			r.result(false, "completed", "done")
+			return true
+		}
+		if in, ok := body["updatedInput"].(map[string]any); ok {
+			input = in
+		}
+	}
+	text, isErr := "mcp unavailable", true
+	if r.mcp != nil {
+		call, err := r.mcp.CallTool(context.Background(), &mcp.CallToolParams{Name: "publish_artifact", Arguments: input})
+		if err != nil {
+			text = err.Error()
+		} else {
+			text, isErr = "", call.IsError
+			for _, c := range call.Content {
+				if tc, ok := c.(*mcp.TextContent); ok {
+					text += tc.Text
+				}
+			}
+		}
+	}
+	r.toolResult(toolID, []any{map[string]any{"type": "text", "text": text}}, isErr)
+	if isErr {
+		r.say(1, "publish failed")
+	} else {
+		r.say(1, "published")
+	}
+	emit(stream(map[string]any{"type": "message_stop"}))
+	r.result(false, "completed", "done")
+	return true
 }
 
 func (r *runner) callMCP() {

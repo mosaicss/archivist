@@ -67,7 +67,7 @@ func tomlValue(v any) string {
 // was checked on codex-cli 0.160.0 with --strict-config (an unknown key is
 // a startup error). approval_policy never appears here: it travels in
 // thread/start, the only place "untrusted" is accepted.
-func codexArgs(cfg CodexConfig, tokenFile string) []string {
+func codexArgs(cfg CodexConfig, tokenFile string, publish []string) []string {
 	set := [][2]string{
 		// Login: the ChatGPT subscription from the linked auth.json only.
 		{"forced_login_method", `"chatgpt"`},
@@ -107,11 +107,19 @@ func codexArgs(cfg CodexConfig, tokenFile string) []string {
 		{"project_root_markers", "[]"},
 		// The archivist MCP server under the session task token.
 		{"mcp_servers.archivist.command", tomlValue(cfg.Executable)},
-		{"mcp_servers.archivist.args", tomlValue([]string{"mcp", "serve", "--token-file", tokenFile})},
+		{"mcp_servers.archivist.args", tomlValue(mcpServeArgs(tokenFile, publish))},
 		{"mcp_servers.archivist.enabled_tools", tomlValue(taskscope.Tools())},
 		{"mcp_servers.archivist.default_tools_approval_mode", `"auto"`},
 		{"mcp_servers.archivist.startup_timeout_sec", "20"},
 		{"mcp_servers.archivist.tool_timeout_sec", "120"},
+	}
+	// Approval-required tools (publish_artifact) always ask: the per-tool
+	// override wins over the server default (Codex config reference,
+	// mcp_servers.<id>.tools.<tool>.approval_mode).
+	for _, tool := range taskscope.Tools() {
+		if taskscope.ApprovalRequired(tool) {
+			set = append(set, [2]string{"mcp_servers.archivist.tools." + tool + ".approval_mode", `"prompt"`})
+		}
 	}
 	if cfg.BaseURL != "" {
 		set = append(set, [2]string{"mcp_servers.archivist.env", "{ARCHIVIST_BASE_URL=" + tomlValue(cfg.BaseURL) + "}"})
@@ -234,7 +242,7 @@ func (s *session) spawnCodex(ctx context.Context, threadID string) error {
 	}
 	// The one adapter-set key; BuildChildEnv refuses CODEX_ overrides.
 	env = append(env, "CODEX_HOME="+home)
-	proc, err := StartProc(ProcSpec{Bin: cfg.Bin, Args: codexArgs(cfg, s.tokenFile), Env: env, Dir: s.rec.Cwd, Log: s.log})
+	proc, err := StartProc(ProcSpec{Bin: cfg.Bin, Args: codexArgs(cfg, s.tokenFile, s.publishArgsFor(s.token)), Env: env, Dir: s.rec.Cwd, Log: s.log})
 	if err != nil {
 		return fmt.Errorf("start codex: %w", err)
 	}
@@ -243,6 +251,7 @@ func (s *session) spawnCodex(ctx context.Context, threadID string) error {
 	s.cx = &codexRun{rpc: newCodexRPC(proc, s.log), pending: map[string]*codexPending{}}
 	s.running, s.turnActive = false, false
 	s.ctr.reset()
+	s.art.reset()
 	if err := s.codexHandshake(ctx, home, threadID); err != nil {
 		s.stopProcess(true)
 		return err
@@ -824,7 +833,7 @@ func (s *session) emitApproval(c Chunk) bool {
 // emitCodex sends translated chunks, holding data-usage back so a turn
 // carries only its last usage report, just before finish or abort.
 func (s *session) emitCodex(chunks ...Chunk) {
-	for _, c := range chunks {
+	for _, c := range s.art.observe(chunks) {
 		switch c["type"] {
 		case "data-usage":
 			s.lastUsage = c

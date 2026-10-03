@@ -3,19 +3,24 @@
 package connect
 
 import (
+	"bytes"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -87,7 +92,15 @@ const testOwner = "user_connecttest"
 
 type fakeToken struct {
 	id, token, session string
+	scopes             []string
 	revoked            bool
+}
+
+// fakeArtifact is one POST /artifacts upload the fake accepted.
+type fakeArtifact struct {
+	ID, SessionID, Name, MediaType, Digest string
+	Data                                   []byte
+	Fields                                 []string // multipart field names, in order
 }
 
 type fakeChatAPI struct {
@@ -116,6 +129,13 @@ type fakeChatAPI struct {
 	failRevokesFor string
 	// sessionTicketStatus, when set, refuses session-scoped tickets with it.
 	sessionTicketStatus int
+	// grantScopes, when set, are the scopes minted tokens get instead of
+	// the requested ones.
+	grantScopes []string
+	// artifacts are the accepted uploads; artifactCalls counts every
+	// POST /artifacts (refused ones too).
+	artifacts     []fakeArtifact
+	artifactCalls int
 }
 
 func newFakeChatAPI(t *testing.T, key []byte) *fakeChatAPI {
@@ -246,6 +266,12 @@ func (f *fakeChatAPI) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if r.Method == "POST" && r.URL.Path == "/artifacts" {
+		f.artifactCalls++
+		status, v := f.publish(auth, r.Header.Get("Content-Type"), body)
+		reply(status, v)
+		return
+	}
 	if researchRoute.MatchString(r.URL.Path) {
 		f.bearers = append(f.bearers, auth)
 		tok := strings.TrimPrefix(auth, "Bearer ")
@@ -303,7 +329,7 @@ func (f *fakeChatAPI) serve(w http.ResponseWriter, r *http.Request) {
 			TTL       int      `json:"ttlSeconds"`
 		}
 		_ = json.Unmarshal(body, &in)
-		if active(in.SessionID) == nil || in.TTL > 900 || strings.Join(in.Scopes, ",") != "search,read" {
+		if active(in.SessionID) == nil || in.TTL > 900 || strings.Join(in.Scopes, ",") != "search,read,publish" {
 			reply(400, map[string]any{"error": "Invalid request fields.", "code": "BAD_REQUEST"})
 			return
 		}
@@ -327,7 +353,11 @@ func (f *fakeChatAPI) serve(w http.ResponseWriter, r *http.Request) {
 		if f.tokenTTL > 0 {
 			ttl = f.tokenTTL
 		}
-		reply(201, map[string]any{"token": tok, "tokenId": id, "expiresAt": time.Now().Add(ttl).UnixMilli(), "scopes": in.Scopes})
+		f.tokens[id].scopes = in.Scopes
+		if f.grantScopes != nil {
+			f.tokens[id].scopes = f.grantScopes
+		}
+		reply(201, map[string]any{"token": tok, "tokenId": id, "expiresAt": time.Now().Add(ttl).UnixMilli(), "scopes": f.tokens[id].scopes})
 	case r.Method == "DELETE" && strings.HasPrefix(r.URL.Path, "/task-tokens/"):
 		tk := f.tokens[strings.TrimPrefix(r.URL.Path, "/task-tokens/")]
 		if f.failRevokesFor != "" && strings.TrimPrefix(r.URL.Path, "/task-tokens/") == f.failRevokesFor {
@@ -355,6 +385,73 @@ func (f *fakeChatAPI) serve(w http.ResponseWriter, r *http.Request) {
 	default:
 		reply(404, map[string]any{"error": "not found", "code": "NOT_FOUND"})
 	}
+}
+
+// publish is chat-api's POST /artifacts (78.18) under a task token with
+// the publish scope: exactly the sessionId and file fields.
+func (f *fakeChatAPI) publish(auth, contentType string, body []byte) (int, any) {
+	refuse := func(status int, code, msg string) (int, any) {
+		return status, map[string]any{"error": msg, "code": code}
+	}
+	var tk *fakeToken
+	for _, x := range f.tokens {
+		if "Bearer "+x.token == auth && !x.revoked {
+			tk = x
+		}
+	}
+	if tk == nil {
+		return refuse(401, "INVALID_TASK_TOKEN", "Invalid task token.")
+	}
+	if !slices.Contains(tk.scopes, "publish") {
+		return refuse(403, "TASK_SCOPE_REQUIRED", "This task token does not allow this operation.")
+	}
+	mt, params, err := mime.ParseMediaType(contentType)
+	if err != nil || mt != "multipart/form-data" {
+		return refuse(400, "BAD_REQUEST", "A multipart file is required.")
+	}
+	mr := multipart.NewReader(bytes.NewReader(body), params["boundary"])
+	a := fakeArtifact{ID: randomUUID()}
+	for {
+		part, err := mr.NextPart()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return refuse(400, "BAD_REQUEST", "Invalid multipart body.")
+		}
+		data, _ := io.ReadAll(part)
+		a.Fields = append(a.Fields, part.FormName())
+		switch part.FormName() {
+		case "sessionId":
+			a.SessionID = string(data)
+		case "file":
+			a.Name, a.MediaType, a.Data = part.FileName(), part.Header.Get("Content-Type"), data
+		}
+	}
+	if strings.Join(a.Fields, ",") != "sessionId,file" {
+		return refuse(400, "BAD_REQUEST", "Exactly one file and sessionId are required.")
+	}
+	if a.SessionID != tk.session {
+		return refuse(403, "TASK_SCOPE_REQUIRED", "This task belongs to another session.")
+	}
+	if len(a.Data) == 0 || len(a.Data) > 10*1024*1024 {
+		return refuse(400, "ARTIFACT_INVALID", "The file is empty or too large.")
+	}
+	if !slices.Contains([]string{"application/pdf", "text/plain", "text/markdown", "text/csv", "application/json"}, a.MediaType) {
+		return refuse(415, "ARTIFACT_TYPE_INVALID", "Unsupported artifact type.")
+	}
+	sum := sha256.Sum256(a.Data)
+	a.Digest = hex.EncodeToString(sum[:])
+	f.artifacts = append(f.artifacts, a)
+	return 201, map[string]any{"artifactId": a.ID, "ownerId": testOwner, "sessionId": a.SessionID, "name": a.Name,
+		"mediaType": a.MediaType, "size": len(a.Data), "digest": a.Digest, "createdAt": time.Now().UnixMilli()}
+}
+
+// uploads returns the accepted artifacts and the POST /artifacts count.
+func (f *fakeChatAPI) uploads() ([]fakeArtifact, int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]fakeArtifact(nil), f.artifacts...), f.artifactCalls
 }
 
 // ─── fake Claude configuration and records ──────────────────────────────────

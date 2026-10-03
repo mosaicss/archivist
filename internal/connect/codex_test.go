@@ -196,7 +196,7 @@ func TestCodexCapabilitiesReportUsable(t *testing.T) {
 
 func TestCodexArgsAreFixed(t *testing.T) {
 	cfg := CodexConfig{Bin: "/usr/bin/codex", Executable: "/opt/archivist"}
-	args := codexArgs(cfg, "/state/run/x/task-token")
+	args := codexArgs(cfg, "/state/run/x/task-token", nil)
 	if args[0] != "app-server" || args[1] != "--stdio" || args[2] != "--strict-config" {
 		t.Fatalf("args %v", args[:3])
 	}
@@ -226,8 +226,10 @@ func TestCodexArgsAreFixed(t *testing.T) {
 		"project_root_markers":                              "[]",
 		"mcp_servers.archivist.command":                     `"/opt/archivist"`,
 		"mcp_servers.archivist.args":                        `["mcp","serve","--token-file","/state/run/x/task-token"]`,
-		"mcp_servers.archivist.enabled_tools":               `["companies_search","read_passage","read_section","search","toc"]`,
+		"mcp_servers.archivist.enabled_tools":               `["companies_search","publish_artifact","read_passage","read_section","search","toc"]`,
 		"mcp_servers.archivist.default_tools_approval_mode": `"auto"`,
+		// Story 78.18: publish_artifact is never auto-approved.
+		"mcp_servers.archivist.tools.publish_artifact.approval_mode": `"prompt"`,
 	}
 	for k, v := range want {
 		if set[k] != v {
@@ -243,8 +245,12 @@ func TestCodexArgsAreFixed(t *testing.T) {
 		t.Error("env set without ARCHIVIST_BASE_URL")
 	}
 	cfg.BaseURL = "http://127.0.0.1:9"
-	if !slices.Contains(codexArgs(cfg, "/t"), `mcp_servers.archivist.env={ARCHIVIST_BASE_URL="http://127.0.0.1:9"}`) {
+	if !slices.Contains(codexArgs(cfg, "/t", nil), `mcp_servers.archivist.env={ARCHIVIST_BASE_URL="http://127.0.0.1:9"}`) {
 		t.Error("ARCHIVIST_BASE_URL not passed to the MCP server")
+	}
+	if !slices.Contains(codexArgs(cfg, "/t", []string{"--publish-session", "s1", "--publish-dir", "/cwd"}),
+		`mcp_servers.archivist.args=["mcp","serve","--token-file","/t","--publish-session","s1","--publish-dir","/cwd"]`) {
+		t.Error("publish flags not passed to the MCP server")
 	}
 }
 
@@ -402,7 +408,7 @@ func TestCodexSessionLifecycle(t *testing.T) {
 	// MCP task tools under the session task token.
 	h.message(sid, "mcp")
 	h.waitFinishes(sid, 2)
-	if !strings.Contains(h.relay.text(sid), "tools: companies_search,read_passage,read_section,search,toc") {
+	if !strings.Contains(h.relay.text(sid), "tools: companies_search,publish_artifact,read_passage,read_section,search,toc") {
 		t.Fatalf("mcp text %q", h.relay.text(sid))
 	}
 	if b := h.api.researchBearers(); len(b) != 1 || !strings.HasPrefix(b[0], "Bearer mst_") {

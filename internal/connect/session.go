@@ -28,6 +28,8 @@ const (
 var (
 	// interruptTimeout bounds the wait for a result after a control interrupt.
 	interruptTimeout = 10 * time.Second
+	// parkTimeout bounds each step of parking another session.
+	parkTimeout = 20 * time.Second
 	// tokenRetryBase is the first task token refresh retry delay (doubling to 1 min).
 	tokenRetryBase = 5 * time.Second
 )
@@ -96,6 +98,15 @@ type session struct {
 	tokenTimer *time.Timer
 	tokenRetry time.Duration
 
+	// art follows publish_artifact calls (Story 78.18).
+	art *artifactTracker
+	// parkReq asks the loop to park the session (LRU idle park, Story
+	// 78.18); the reply says whether it did.
+	parkReq chan chan bool
+	// idle and lastActive are published under d.mu for the slot picker.
+	idle       bool
+	lastActive time.Time
+
 	linkErr chan error
 	done    chan struct{}
 }
@@ -104,7 +115,8 @@ func newSession(d *Daemon, rec *SessionRecord) *session {
 	log := d.log.With("session " + rec.SessionID[:8])
 	s := &session{d: d, id: rec.SessionID, rec: rec, log: log,
 		cmds: make(chan sessionCmd, 64), pending: map[string]*pendingApproval{},
-		remember: map[string]bool{}, linkErr: make(chan error, 1), done: make(chan struct{})}
+		remember: map[string]bool{}, linkErr: make(chan error, 1), done: make(chan struct{}),
+		art: newArtifactTracker(d.chatAPIURL), parkReq: make(chan chan bool), lastActive: time.Now()}
 	s.outbox = NewOutbox(d.parser, log)
 	s.tr = NewTranslator()
 	s.ctr = NewCodexTranslator()
@@ -174,6 +186,7 @@ func (s *session) run(ctx context.Context, prompt string) {
 			flush.Reset(coalesceWindow)
 			armed = true
 		}
+		s.publishActivity()
 		select {
 		case <-ctx.Done():
 			s.shutdown()
@@ -210,6 +223,8 @@ func (s *session) run(ctx context.Context, prompt string) {
 			s.processExited()
 		case <-timerC(s.snapTimer):
 			s.snapshot()
+		case reply := <-s.parkReq:
+			reply <- s.park()
 		}
 	}
 }
@@ -297,7 +312,7 @@ func (s *session) emitError(text string) {
 // resumeID continues an earlier Claude session or Codex thread.
 func (s *session) spawn(ctx context.Context, resumeID string) (err error) {
 	if !s.slot {
-		if !s.d.reserveSlot() {
+		if !s.d.acquireSlot(s) {
 			return errCapacity
 		}
 		s.slot = true
@@ -347,6 +362,7 @@ func (s *session) spawn(ctx context.Context, resumeID string) (err error) {
 	s.proc, s.procDone, s.procLines = proc, proc.Done(), proc.Lines()
 	s.running, s.turnActive, s.resumedID = false, false, resumeID
 	s.tr.reset()
+	s.art.reset()
 	if s.d.reaping {
 		// The daemon adopts orphans (Codex configured): reap Claude's too.
 		s.snapTimer = time.NewTimer(codexSnapshotEvery)
@@ -367,6 +383,72 @@ func (s *session) releaseSlot() {
 	if s.slot {
 		s.slot = false
 		s.d.releaseSlot()
+	}
+}
+
+// idleNow reports a live, resumable session with nothing in flight: no
+// turn, approval, queued message or interrupt. Only such a session may be
+// parked.
+func (s *session) idleNow() bool {
+	if s.proc == nil || !s.slot || !s.running || s.turnActive || s.stopping || s.fatal != "" {
+		return false
+	}
+	if len(s.pending) > 0 || len(s.queue) > 0 || s.interruptTimer != nil {
+		return false
+	}
+	// Not cx.turnID: a turn/start reply handled after turn/completed leaves
+	// it set; turnActive is the turn state.
+	if s.cx != nil && len(s.cx.pending) > 0 {
+		return false
+	}
+	return s.resumable()
+}
+
+// publishActivity shares idleness with the daemon's slot picker; a busy
+// session counts as active now.
+func (s *session) publishActivity() {
+	idle := s.idleNow()
+	s.d.mu.Lock()
+	s.idle = idle
+	if !idle {
+		s.lastActive = time.Now()
+	}
+	s.d.mu.Unlock()
+}
+
+// park stops an idle session's harness to free its live-process slot. The
+// record, working directory and harness session stay: the next message
+// resumes it (Claude --resume, Codex thread/resume) like after a restart.
+func (s *session) park() bool {
+	if !s.idleNow() {
+		return false
+	}
+	s.log.Printf("parking: least recently active idle session, its slot goes to a new start or resume")
+	s.flushCoalesced()
+	s.stopProcess(false)
+	s.revokeToken()
+	s.d.store.RemoveRunDir(s.id) // ensureToken recreates it on resume
+	s.emitStatus("disconnected", "Paused to make room for another session; the next message resumes it.")
+	return true
+}
+
+// requestPark asks the session's loop to park it and waits for the answer.
+func (s *session) requestPark() bool {
+	reply := make(chan bool, 1)
+	select {
+	case s.parkReq <- reply:
+	case <-s.done:
+		return false
+	case <-time.After(parkTimeout):
+		return false
+	}
+	select {
+	case ok := <-reply:
+		return ok
+	case <-s.done:
+		return false
+	case <-time.After(parkTimeout):
+		return false
 	}
 }
 
@@ -605,7 +687,7 @@ func (s *session) handleLine(line []byte) {
 		// Nothing reaches the relay before the init proof passes.
 		return
 	}
-	s.emit(s.tr.In(line)...)
+	s.emit(s.art.observe(s.tr.In(line))...)
 	if f.Type == "result" {
 		s.turnActive = false
 		aborted := f.TerminalReason == "aborted_streaming"
@@ -728,9 +810,10 @@ func (s *session) userMessage(ctx context.Context, text string) {
 			s.emitStatus("failed", "There is no "+what+" to resume.")
 			return
 		}
-		// Reserve the slot first: a full daemon refuses without "starting".
+		// Reserve the slot first: a full daemon refuses without "starting"
+		// (after parking the least recently active idle session, if any).
 		if !s.slot {
-			if !s.d.reserveSlot() {
+			if !s.d.acquireSlot(s) {
 				s.emitCapacity()
 				return
 			}
@@ -942,7 +1025,7 @@ func (s *session) ensureToken(ctx context.Context) error {
 		return nil
 	}
 	s.mcpFile = filepath.Join(dir, "mcp.json")
-	cfg, err := mcpConfig(s.d.claude, s.tokenFile)
+	cfg, err := mcpConfig(s.d.claude, s.tokenFile, s.publishArgsFor(tok))
 	if err != nil {
 		s.revoke(tok)
 		return err
@@ -955,6 +1038,16 @@ func (s *session) ensureToken(ctx context.Context) error {
 	s.log.Printf("task token minted (fp:%s, expires %s)", auth.Fingerprint(tok.Token), time.UnixMilli(tok.ExpiresAt).UTC().Format(time.RFC3339))
 	s.scheduleRefresh(time.Until(time.UnixMilli(tok.ExpiresAt)) - tokenRefreshLead)
 	return nil
+}
+
+// publishArgsFor is the `mcp serve` publish_artifact flags when tok was
+// granted the publish scope (Story 78.18), else none: without them the
+// server never offers the tool.
+func (s *session) publishArgsFor(tok *client.TaskToken) []string {
+	if tok == nil || !taskscope.Granted(tok.Scopes, "publish") {
+		return nil
+	}
+	return []string{"--publish-session", s.id, "--publish-dir", s.rec.Cwd}
 }
 
 func (s *session) scheduleRefresh(in time.Duration) {

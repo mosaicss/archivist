@@ -10,8 +10,14 @@ import (
 	"strings"
 )
 
-// Scopes are the scopes `archivist connect` mints task tokens with.
-var Scopes = []string{"search", "read"}
+// Scopes are the scopes `archivist connect` mints task tokens with. publish
+// (Story 78.18) admits only POST /artifacts, which publish_artifact calls.
+var Scopes = []string{"search", "read", "publish"}
+
+// PublishTool is the one task tool that is not a CLI verb: `archivist mcp
+// serve` registers it itself, only for a session that was granted the
+// publish scope (Story 78.18).
+const PublishTool = "publish_artifact"
 
 var readRoute = regexp.MustCompile(`^(/research/passages/[^/]+|/research/filings/[^/]+/(toc|sections)|/uploads/[^/]+/chunks/[0-9]+)$`)
 
@@ -19,6 +25,9 @@ var readRoute = regexp.MustCompile(`^(/research/passages/[^/]+|/research/filings
 // (chat-api/src/middleware/task-scope.ts): the scope a route needs, or ""
 // when a task token may not call it.
 func RouteScope(method, path string) string {
+	if method == "POST" && path == "/artifacts" {
+		return "publish"
+	}
 	if method != "GET" {
 		return ""
 	}
@@ -46,11 +55,19 @@ var ToolRoutes = map[string][]string{
 	"auth_whoami":      {"GET /account/cli-tokens"},
 	"usage":            {"GET /account/usage"},
 	"doctor":           {"GET /health", "GET /account/cli-tokens"},
+	PublishTool:        {"POST /artifacts"},
 }
+
+// ApprovalRequired reports a task tool that must never be pre-allowed: every
+// call goes through the harness's permission prompt (the approval card).
+func ApprovalRequired(name string) bool { return name == PublishTool }
 
 // ToolAllowed reports whether every route the tool calls is allowed under
 // the minted scopes.
-func ToolAllowed(name string) bool {
+func ToolAllowed(name string) bool { return ToolAllowedFor(name, Scopes) }
+
+// ToolAllowedFor is ToolAllowed under the scopes a token was granted.
+func ToolAllowedFor(name string, granted []string) bool {
 	routes, ok := ToolRoutes[name]
 	if !ok || len(routes) == 0 {
 		return false
@@ -58,7 +75,7 @@ func ToolAllowed(name string) bool {
 	for _, r := range routes {
 		method, path, _ := strings.Cut(r, " ")
 		scope := RouteScope(method, path)
-		if scope == "" || !contains(Scopes, scope) {
+		if scope == "" || !contains(granted, scope) {
 			return false
 		}
 	}
@@ -76,6 +93,21 @@ func Tools() []string {
 	sort.Strings(out)
 	return out
 }
+
+// AutoAllowedTools are the task mode tools a harness may run without asking:
+// Tools() without the approval-required ones.
+func AutoAllowedTools() []string {
+	var out []string
+	for _, name := range Tools() {
+		if !ApprovalRequired(name) {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+// Granted reports whether scope is among the granted scopes.
+func Granted(granted []string, scope string) bool { return contains(granted, scope) }
 
 func contains(list []string, s string) bool {
 	for _, x := range list {

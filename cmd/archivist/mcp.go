@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -252,7 +253,7 @@ func newMCPCmd(newRoot func() *cobra.Command, version string) *cobra.Command {
 }
 
 func newMCPServeCmd(newRoot func() *cobra.Command, version string) *cobra.Command {
-	var tokenFile string
+	var tokenFile, publishDir, publishSession string
 	serve := &cobra.Command{
 		Use:   "serve",
 		Short: "Serve every archivist verb as an MCP tool over stdio",
@@ -267,6 +268,10 @@ call, so a supervisor can rotate the token without restarting the server.
 A session task token (mst_..., minted by 'archivist connect') switches the
 server to task mode: only the search and read tools whose chat-api routes a
 task token may call are exposed.
+
+--publish-session and --publish-dir (set together, task mode only) add the
+publish_artifact tool for that 'archivist connect' session: it publishes a
+file from the session's working directory to the Mosaic workspace.
 
 Claude Desktop config:
   {"mcpServers":{"archivist":{"command":"archivist","args":["mcp","serve"],
@@ -303,7 +308,15 @@ Claude Desktop config:
 			}
 
 			taskMode := auth.IsTaskToken(token)
-			server, count := buildMCPServerWith(newRoot, version, src, taskMode)
+			var pub *publishConfig
+			if publishDir != "" || publishSession != "" {
+				if !taskMode || publishDir == "" || !publishSessionRe.MatchString(publishSession) || !filepath.IsAbs(publishDir) {
+					_, _ = fmt.Fprintln(c.ErrOrStderr(), "archivist mcp serve: --publish-session (a session id) and an absolute --publish-dir go together, with a task token only.")
+					return &cmd.ExitError{Code: cmd.ExitUsageError}
+				}
+				pub = &publishConfig{SessionID: publishSession, Dir: publishDir}
+			}
+			server, count := buildMCPServerTask(newRoot, version, src, taskMode, pub)
 			mode := ""
 			if taskMode {
 				mode = ", task mode"
@@ -323,6 +336,10 @@ Claude Desktop config:
 	}
 	serve.Flags().StringVar(&tokenFile, "token-file", "",
 		"Read the token from this file on every tool call (rotation without restart)")
+	serve.Flags().StringVar(&publishSession, "publish-session", "",
+		"Task mode: the archivist connect session publish_artifact publishes for")
+	serve.Flags().StringVar(&publishDir, "publish-dir", "",
+		"Task mode: the session working directory publish_artifact may read from")
 	return serve
 }
 
@@ -363,6 +380,12 @@ func buildMCPServer(newRoot func() *cobra.Command, version, tokenOverride string
 // buildMCPServerWith is buildMCPServer with a token source; taskMode limits
 // the tools to the task allowlist.
 func buildMCPServerWith(newRoot func() *cobra.Command, version string, src tokenSource, taskMode bool) (*mcp.Server, int) {
+	return buildMCPServerTask(newRoot, version, src, taskMode, nil)
+}
+
+// buildMCPServerTask is buildMCPServerWith plus, in task mode with a
+// session, the publish_artifact tool (Story 78.18).
+func buildMCPServerTask(newRoot func() *cobra.Command, version string, src tokenSource, taskMode bool, pub *publishConfig) (*mcp.Server, int) {
 	server := mcp.NewServer(
 		&mcp.Implementation{Name: "archivist", Version: version},
 		&mcp.ServerOptions{Instructions: mcpInstructions},
@@ -387,6 +410,10 @@ func buildMCPServerWith(newRoot func() *cobra.Command, version string, src token
 				OpenWorldHint:   boolPtr(false),
 			},
 		}, newToolHandler(newRoot, spec, src))
+	}
+	if taskMode && pub != nil && taskscope.ToolAllowed(taskscope.PublishTool) {
+		addPublishTool(server, version, src, *pub)
+		count++
 	}
 	return server, count
 }

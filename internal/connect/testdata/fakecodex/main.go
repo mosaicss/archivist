@@ -15,6 +15,9 @@
 //	cmd <command>    ask a command approval; acceptForSession is cached
 //	file <name>      ask a file change approval; accept writes the file
 //	mcp              call the archivist MCP search tool (MCP approval when configured)
+//	publish <path>   call publish_artifact; an MCP approval when its
+//	                 approval mode (per tool, else the server default) is
+//	                 "prompt"
 //	elicit           send a non-approval MCP elicitation
 //	askuser          send item/tool/requestUserInput
 //	perms            send item/permissions/requestApproval
@@ -626,6 +629,8 @@ func (s *server) turn(turn, text string, stop <-chan struct{}) {
 		t.fileChange(arg)
 	case "mcp":
 		t.mcpCall()
+	case "publish":
+		t.publish(arg)
 	case "mcplate":
 		t.itemN++
 		id := fmt.Sprintf("mcp-%s-%d", turn[:8], t.itemN)
@@ -832,6 +837,73 @@ func (t *turnCtx) mcpCall() {
 	}
 	t.item("item/completed", item)
 	t.say("tools: " + strings.Join(t.s.tools, ","))
+}
+
+// publish calls publish_artifact. Only the "prompt" approval mode asks;
+// "auto" is treated as no prompt, so a test proves the per-tool override.
+func (t *turnCtx) publish(path string) {
+	t.itemN++
+	id := fmt.Sprintf("mcp-%s-%d", t.turn[:8], t.itemN)
+	args := map[string]any{"path": path}
+	item := map[string]any{"type": "mcpToolCall", "id": id, "server": "archivist", "tool": "publish_artifact",
+		"status": "inProgress", "arguments": args, "result": nil, "error": nil}
+	t.item("item/started", item)
+	mode, ok := t.s.overrides["mcp_servers.archivist.tools.publish_artifact.approval_mode"]
+	if !ok {
+		mode = t.s.overrides["mcp_servers.archivist.default_tools_approval_mode"]
+	}
+	if mode == `"prompt"` {
+		r := t.s.ask("mcpServer/elicitation/request", t.with("serverName", "archivist", "mode", "form",
+			"message", "Allow archivist publish_artifact?", "requestedSchema", map[string]any{"type": "object", "properties": map[string]any{}},
+			"_meta", map[string]any{"codex_approval_kind": "mcp_tool_call", "persist": []any{"session", "always"},
+				"tool_name": "publish_artifact", "tool_params": args}))
+		if decisionOf(r) != "accept" {
+			item["status"] = "failed"
+			item["error"] = map[string]any{"message": "user rejected MCP tool call"}
+			t.item("item/completed", item)
+			t.say("publish declined")
+			return
+		}
+	}
+	if t.s.mcp == nil || !slicesContains(t.s.tools, "publish_artifact") {
+		item["status"], item["error"] = "failed", map[string]any{"message": "tool publish_artifact unavailable"}
+		t.item("item/completed", item)
+		t.say("publish unavailable")
+		return
+	}
+	res, err := t.s.mcp.CallTool(context.Background(), &mcp.CallToolParams{Name: "publish_artifact", Arguments: args})
+	if err != nil {
+		item["status"], item["error"] = "failed", map[string]any{"message": err.Error()}
+		t.item("item/completed", item)
+		t.say("publish failed")
+		return
+	}
+	var content []any
+	for _, c := range res.Content {
+		if tc, ok := c.(*mcp.TextContent); ok {
+			content = append(content, map[string]any{"type": "text", "text": tc.Text})
+		}
+	}
+	item["result"] = map[string]any{"content": content, "structuredContent": res.StructuredContent}
+	item["status"] = "completed"
+	if res.IsError {
+		item["status"] = "failed"
+	}
+	t.item("item/completed", item)
+	if res.IsError {
+		t.say("publish failed")
+	} else {
+		t.say("published")
+	}
+}
+
+func slicesContains(list []string, s string) bool {
+	for _, x := range list {
+		if x == s {
+			return true
+		}
+	}
+	return false
 }
 
 // stream sends numbers; honour=false ignores interrupts. It reports

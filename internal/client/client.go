@@ -87,12 +87,23 @@ func (c *Client) SetStderr(w io.Writer) {
 // an *ExitCodeError with code 7. A non-2xx response other than 429 and 5xx is
 // returned to the caller unread.
 func (c *Client) Do(ctx context.Context, method, path string, body io.Reader) (*http.Response, error) {
+	return c.doAs(ctx, method, path, body, "application/json", true)
+}
+
+// doAs is Do with the request body's Content-Type. retry false makes exactly
+// one attempt: a network error, 429 or 5xx is returned as Do would return it
+// after its last retry. A non-idempotent create uses it so a retry cannot
+// create a duplicate.
+func (c *Client) doAs(ctx context.Context, method, path string, body io.Reader, contentType string, retry bool) (*http.Response, error) {
 	url := c.BaseURL + path
 
 	isGet := method == http.MethodGet
 	maxRetries := 1
 	if isGet {
 		maxRetries = 3
+	}
+	if !retry {
+		maxRetries = 0
 	}
 
 	backoffs := []time.Duration{250 * time.Millisecond, 500 * time.Millisecond, 1000 * time.Millisecond}
@@ -128,7 +139,7 @@ func (c *Client) Do(ctx context.Context, method, path string, body io.Reader) (*
 		if err != nil {
 			return nil, fmt.Errorf("build request: %w", err)
 		}
-		c.injectHeaders(req)
+		c.injectHeaders(req, contentType)
 
 		resp, err := c.httpClient.Do(req)
 		if err != nil {
@@ -232,14 +243,15 @@ func (c *Client) Do(ctx context.Context, method, path string, body io.Reader) (*
 	return lastResp, nil
 }
 
-// injectHeaders sets all required headers on the request.
-func (c *Client) injectHeaders(req *http.Request) {
+// injectHeaders sets all required headers on the request; contentType
+// applies when it carries a body.
+func (c *Client) injectHeaders(req *http.Request, contentType string) {
 	req.Header.Set("Authorization", "Bearer "+c.Token)
 	req.Header.Set("X-Archivist-CLI-Version", c.Version)
 	req.Header.Set("X-Archivist-Origin", c.Origin)
 	req.Header.Set("User-Agent", fmt.Sprintf("archivist-cli/%s (%s/%s)", c.Version, c.OS, c.Arch))
 	if req.Body != nil {
-		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Content-Type", contentType)
 	}
 }
 

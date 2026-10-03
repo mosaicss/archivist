@@ -33,9 +33,11 @@ type ClaudeConfig struct {
 	BaseURL string
 }
 
-// archivistAllowedTools pre-allows the task mode archivist tools.
+// archivistAllowedTools pre-allows the task mode archivist tools, except
+// the approval-required ones (publish_artifact): those reach the
+// permission prompt tool (can_use_tool) on every call.
 func archivistAllowedTools() string {
-	tools := taskscope.Tools()
+	tools := taskscope.AutoAllowedTools()
 	out := make([]string, len(tools))
 	for i, t := range tools {
 		out[i] = "mcp__archivist__" + t
@@ -72,17 +74,23 @@ func claudeArgs(cfg ClaudeConfig, mcpConfigPath, cwd, resumeID string) []string 
 }
 
 // mcpConfig is the --mcp-config file: only archivist, run from this binary
-// against a token file the daemon rotates.
-func mcpConfig(cfg ClaudeConfig, tokenFile string) ([]byte, error) {
+// against a token file the daemon rotates. publish carries the
+// publish_artifact flags when the token was granted the publish scope.
+func mcpConfig(cfg ClaudeConfig, tokenFile string, publish []string) ([]byte, error) {
 	env := map[string]string{}
 	if cfg.BaseURL != "" {
 		env["ARCHIVIST_BASE_URL"] = cfg.BaseURL
 	}
 	return json.Marshal(map[string]any{"mcpServers": map[string]any{"archivist": map[string]any{
 		"command": cfg.Executable,
-		"args":    []string{"mcp", "serve", "--token-file", tokenFile},
+		"args":    mcpServeArgs(tokenFile, publish),
 		"env":     env,
 	}}})
+}
+
+// mcpServeArgs is the archivist MCP server argv (both harnesses).
+func mcpServeArgs(tokenFile string, publish []string) []string {
+	return append([]string{"mcp", "serve", "--token-file", tokenFile}, publish...)
 }
 
 // Stream-json frames written to Claude's stdin.
