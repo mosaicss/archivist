@@ -1,0 +1,1142 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://mosaic-finance.com/schemas/mosaic-event/1/chunk.json",
+  "oneOf": [
+    {
+      "$ref": "#/definitions/text-start"
+    },
+    {
+      "$ref": "#/definitions/text-delta"
+    },
+    {
+      "$ref": "#/definitions/text-end"
+    },
+    {
+      "$ref": "#/definitions/reasoning-start"
+    },
+    {
+      "$ref": "#/definitions/reasoning-delta"
+    },
+    {
+      "$ref": "#/definitions/reasoning-end"
+    },
+    {
+      "$ref": "#/definitions/tool-input-start"
+    },
+    {
+      "$ref": "#/definitions/tool-input-available"
+    },
+    {
+      "$ref": "#/definitions/tool-input-error"
+    },
+    {
+      "$ref": "#/definitions/tool-input-delta"
+    },
+    {
+      "$ref": "#/definitions/tool-approval-request"
+    },
+    {
+      "$ref": "#/definitions/tool-approval-response"
+    },
+    {
+      "$ref": "#/definitions/tool-output-available"
+    },
+    {
+      "$ref": "#/definitions/tool-output-error"
+    },
+    {
+      "$ref": "#/definitions/tool-output-denied"
+    },
+    {
+      "$ref": "#/definitions/source-url"
+    },
+    {
+      "$ref": "#/definitions/source-document"
+    },
+    {
+      "$ref": "#/definitions/file"
+    },
+    {
+      "$ref": "#/definitions/reasoning-file"
+    },
+    {
+      "$ref": "#/definitions/start"
+    },
+    {
+      "$ref": "#/definitions/finish"
+    },
+    {
+      "$ref": "#/definitions/abort"
+    },
+    {
+      "$ref": "#/definitions/error"
+    },
+    {
+      "$ref": "#/definitions/message-metadata"
+    },
+    {
+      "$ref": "#/definitions/start-step"
+    },
+    {
+      "$ref": "#/definitions/finish-step"
+    },
+    {
+      "$ref": "#/definitions/data-plan"
+    },
+    {
+      "$ref": "#/definitions/data-permission-scope"
+    },
+    {
+      "$ref": "#/definitions/data-exec-output"
+    },
+    {
+      "$ref": "#/definitions/data-patch"
+    },
+    {
+      "$ref": "#/definitions/data-task"
+    },
+    {
+      "$ref": "#/definitions/data-usage"
+    },
+    {
+      "$ref": "#/definitions/data-auth-prompt"
+    },
+    {
+      "$ref": "#/definitions/data-session-status"
+    },
+    {
+      "$ref": "#/definitions/data-artifact"
+    },
+    {
+      "$ref": "#/definitions/data-status"
+    },
+    {
+      "$ref": "#/definitions/data-conversation-id"
+    },
+    {
+      "$ref": "#/definitions/data-teaser-tail"
+    },
+    {
+      "$ref": "#/definitions/data-teaser-gate"
+    },
+    {
+      "$ref": "#/definitions/data-anon-turn"
+    }
+  ],
+  "definitions": {
+    "text-start": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "text-start"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "providerMetadata": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object"
+          }
+        }
+      },
+      "required": [
+        "type",
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    "text-delta": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "text-delta"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "providerMetadata": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object"
+          }
+        },
+        "delta": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "delta"
+      ],
+      "additionalProperties": false
+    },
+    "text-end": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "text-end"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "providerMetadata": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object"
+          }
+        }
+      },
+      "required": [
+        "type",
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    "reasoning-start": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "reasoning-start"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "providerMetadata": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object"
+          }
+        }
+      },
+      "required": [
+        "type",
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    "reasoning-delta": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "reasoning-delta"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "providerMetadata": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object"
+          }
+        },
+        "delta": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "delta"
+      ],
+      "additionalProperties": false
+    },
+    "reasoning-end": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "reasoning-end"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "providerMetadata": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object"
+          }
+        }
+      },
+      "required": [
+        "type",
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    "tool-input-start": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "tool-input-start"
+        },
+        "toolCallId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "toolName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "providerExecuted": {
+          "type": "boolean"
+        },
+        "providerMetadata": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object"
+          }
+        },
+        "toolMetadata": {
+          "type": "object"
+        },
+        "dynamic": {
+          "type": "boolean"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "toolCallId",
+        "toolName"
+      ],
+      "additionalProperties": false
+    },
+    "tool-input-available": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "tool-input-available"
+        },
+        "toolCallId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "toolName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "providerExecuted": {
+          "type": "boolean"
+        },
+        "providerMetadata": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object"
+          }
+        },
+        "toolMetadata": {
+          "type": "object"
+        },
+        "dynamic": {
+          "type": "boolean"
+        },
+        "title": {
+          "type": "string"
+        },
+        "input": {}
+      },
+      "required": [
+        "type",
+        "toolCallId",
+        "toolName",
+        "input"
+      ],
+      "additionalProperties": false
+    },
+    "tool-input-error": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "tool-input-error"
+        },
+        "toolCallId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "toolName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "providerExecuted": {
+          "type": "boolean"
+        },
+        "providerMetadata": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object"
+          }
+        },
+        "toolMetadata": {
+          "type": "object"
+        },
+        "dynamic": {
+          "type": "boolean"
+        },
+        "title": {
+          "type": "string"
+        },
+        "input": {},
+        "errorText": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "toolCallId",
+        "toolName",
+        "input",
+        "errorText"
+      ],
+      "additionalProperties": false
+    },
+    "tool-input-delta": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "tool-input-delta"
+        },
+        "toolCallId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "inputTextDelta": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "toolCallId",
+        "inputTextDelta"
+      ],
+      "additionalProperties": false
+    },
+    "tool-approval-request": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "tool-approval-request"
+        },
+        "approvalId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "toolCallId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "approvalDescriptor": {},
+        "inputSchemaInput": {},
+        "reason": {
+          "type": "string"
+        },
+        "isAutomatic": {
+          "type": "boolean"
+        },
+        "signature": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "approvalId",
+        "toolCallId"
+      ],
+      "additionalProperties": false
+    },
+    "tool-approval-response": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "tool-approval-response"
+        },
+        "approvalId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "approved": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "providerExecuted": {
+          "type": "boolean"
+        },
+        "providerMetadata": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object"
+          }
+        }
+      },
+      "required": [
+        "type",
+        "approvalId",
+        "approved"
+      ],
+      "additionalProperties": false
+    },
+    "tool-output-available": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "tool-output-available"
+        },
+        "toolCallId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "output": {},
+        "providerExecuted": {
+          "type": "boolean"
+        },
+        "providerMetadata": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object"
+          }
+        },
+        "toolMetadata": {
+          "type": "object"
+        },
+        "dynamic": {
+          "type": "boolean"
+        },
+        "preliminary": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "type",
+        "toolCallId",
+        "output"
+      ],
+      "additionalProperties": false
+    },
+    "tool-output-error": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "tool-output-error"
+        },
+        "toolCallId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "errorText": {
+          "type": "string"
+        },
+        "providerExecuted": {
+          "type": "boolean"
+        },
+        "providerMetadata": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object"
+          }
+        },
+        "toolMetadata": {
+          "type": "object"
+        },
+        "dynamic": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "type",
+        "toolCallId",
+        "errorText"
+      ],
+      "additionalProperties": false
+    },
+    "tool-output-denied": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "tool-output-denied"
+        },
+        "toolCallId": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "type",
+        "toolCallId"
+      ],
+      "additionalProperties": false
+    },
+    "source-url": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "source-url"
+        },
+        "sourceId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "url": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "providerMetadata": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object"
+          }
+        }
+      },
+      "required": [
+        "type",
+        "sourceId",
+        "url"
+      ],
+      "additionalProperties": false
+    },
+    "source-document": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "source-document"
+        },
+        "sourceId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "mediaType": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "filename": {
+          "type": "string"
+        },
+        "providerMetadata": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object"
+          }
+        }
+      },
+      "required": [
+        "type",
+        "sourceId",
+        "mediaType",
+        "title"
+      ],
+      "additionalProperties": false
+    },
+    "file": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "file"
+        },
+        "url": {
+          "type": "string"
+        },
+        "mediaType": {
+          "type": "string"
+        },
+        "providerMetadata": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object"
+          }
+        }
+      },
+      "required": [
+        "type",
+        "url",
+        "mediaType"
+      ],
+      "additionalProperties": false
+    },
+    "reasoning-file": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "reasoning-file"
+        },
+        "url": {
+          "type": "string"
+        },
+        "mediaType": {
+          "type": "string"
+        },
+        "providerMetadata": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object"
+          }
+        }
+      },
+      "required": [
+        "type",
+        "url",
+        "mediaType"
+      ],
+      "additionalProperties": false
+    },
+    "start": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "start"
+        },
+        "messageId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "messageMetadata": {
+          "type": "object",
+          "properties": {
+            "schemaVersion": {
+              "const": "mosaic-event/1"
+            }
+          },
+          "required": [
+            "schemaVersion"
+          ],
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "type",
+        "messageMetadata"
+      ],
+      "additionalProperties": false
+    },
+    "finish": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "finish"
+        },
+        "finishReason": {
+          "enum": [
+            "stop",
+            "length",
+            "content-filter",
+            "tool-calls",
+            "error",
+            "other"
+          ]
+        },
+        "messageMetadata": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "additionalProperties": false
+    },
+    "abort": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "abort"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "additionalProperties": false
+    },
+    "error": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "error"
+        },
+        "errorText": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "errorText"
+      ],
+      "additionalProperties": false
+    },
+    "message-metadata": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "message-metadata"
+        },
+        "messageMetadata": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "type",
+        "messageMetadata"
+      ],
+      "additionalProperties": false
+    },
+    "start-step": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "start-step"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "additionalProperties": false
+    },
+    "finish-step": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "finish-step"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "additionalProperties": false
+    },
+    "data-plan": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "data-plan"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "data": {
+          "$ref": "data-plan.json"
+        },
+        "transient": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "type",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    "data-permission-scope": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "data-permission-scope"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "data": {
+          "$ref": "data-permission-scope.json"
+        },
+        "transient": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "type",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    "data-exec-output": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "data-exec-output"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "data": {
+          "$ref": "data-exec-output.json"
+        },
+        "transient": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "type",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    "data-patch": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "data-patch"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "data": {
+          "$ref": "data-patch.json"
+        },
+        "transient": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "type",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    "data-task": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "data-task"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "data": {
+          "$ref": "data-task.json"
+        },
+        "transient": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "type",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    "data-usage": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "data-usage"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "data": {
+          "$ref": "data-usage.json"
+        },
+        "transient": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "type",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    "data-auth-prompt": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "data-auth-prompt"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "data": {
+          "$ref": "data-auth-prompt.json"
+        },
+        "transient": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "type",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    "data-session-status": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "data-session-status"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "data": {
+          "$ref": "data-session-status.json"
+        },
+        "transient": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "type",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    "data-artifact": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "data-artifact"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "data": {
+          "$ref": "data-artifact.json"
+        },
+        "transient": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "type",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    "data-status": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "data-status"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "data": {
+          "$ref": "data-status.json"
+        },
+        "transient": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "type",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    "data-conversation-id": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "data-conversation-id"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "data": {
+          "$ref": "data-conversation-id.json"
+        },
+        "transient": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "type",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    "data-teaser-tail": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "data-teaser-tail"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "data": {
+          "$ref": "data-teaser-tail.json"
+        },
+        "transient": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "type",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    "data-teaser-gate": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "data-teaser-gate"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "data": {
+          "$ref": "data-teaser-gate.json"
+        },
+        "transient": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "type",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    "data-anon-turn": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "data-anon-turn"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "data": {
+          "$ref": "data-anon-turn.json"
+        },
+        "transient": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "type",
+        "data"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

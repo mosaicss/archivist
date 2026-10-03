@@ -1,0 +1,23 @@
+{
+  "name": "mosaic-event-contract-v1",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=24" },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test *.test.ts",
+    "report": "tsx report.ts",
+    "check": "tsx check.ts"
+  },
+  "dependencies": {
+    "@ai-sdk/provider-utils": "5.0.51",
+    "ai": "7.0.122",
+    "ajv": "8.20.0"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.3",
+    "tsx": "4.23.15",
+    "typescript": "npm:@typescript/typescript6@6.0.2"
+  }
+}

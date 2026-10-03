@@ -1,0 +1,1503 @@
+{
+  "schemaVersion": "mosaic-event/1",
+  "cases": [
+    {
+      "id": "02-claude-allow",
+      "kind": "chunk",
+      "valid": true,
+      "input": "fixtures/02-claude-allow.json",
+      "source": "capture"
+    },
+    {
+      "id": "03-claude-deny",
+      "kind": "chunk",
+      "valid": true,
+      "input": "fixtures/03-claude-deny.json",
+      "source": "capture"
+    },
+    {
+      "id": "04-claude-interrupt",
+      "kind": "chunk",
+      "valid": true,
+      "input": "fixtures/04-claude-interrupt.json",
+      "source": "capture"
+    },
+    {
+      "id": "06-claude-mcp",
+      "kind": "chunk",
+      "valid": true,
+      "input": "fixtures/06-claude-mcp.json",
+      "source": "capture"
+    },
+    {
+      "id": "07-codex-accept",
+      "kind": "chunk",
+      "valid": true,
+      "input": "fixtures/07-codex-accept.json",
+      "source": "capture"
+    },
+    {
+      "id": "08-codex-decline",
+      "kind": "chunk",
+      "valid": true,
+      "input": "fixtures/08-codex-decline.json",
+      "source": "capture"
+    },
+    {
+      "id": "09-codex-mcp",
+      "kind": "chunk",
+      "valid": true,
+      "input": "fixtures/09-codex-mcp.json",
+      "source": "capture"
+    },
+    {
+      "id": "10-codex-interrupt",
+      "kind": "chunk",
+      "valid": true,
+      "input": "fixtures/10-codex-interrupt.json",
+      "source": "capture"
+    },
+    {
+      "id": "chat-api-78-2",
+      "kind": "chunk",
+      "valid": true,
+      "input": "fixtures/chat-api-78-2.json",
+      "source": "capture"
+    },
+    {
+      "id": "valid-text-start",
+      "kind": "chunk",
+      "valid": true,
+      "input": "fixtures/valid-text-start.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-text-start-id",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-text-start-id.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "valid-text-delta",
+      "kind": "chunk",
+      "valid": true,
+      "input": "fixtures/valid-text-delta.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-text-delta-id",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-text-delta-id.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-text-delta-delta",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-text-delta-delta.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "valid-text-end",
+      "kind": "chunk",
+      "valid": true,
+      "input": "fixtures/valid-text-end.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-text-end-id",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-text-end-id.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "valid-reasoning-start",
+      "kind": "chunk",
+      "valid": true,
+      "input": "fixtures/valid-reasoning-start.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-reasoning-start-id",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-reasoning-start-id.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "valid-reasoning-delta",
+      "kind": "chunk",
+      "valid": true,
+      "input": "fixtures/valid-reasoning-delta.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-reasoning-delta-id",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-reasoning-delta-id.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-reasoning-delta-delta",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-reasoning-delta-delta.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "valid-reasoning-end",
+      "kind": "chunk",
+      "valid": true,
+      "input": "fixtures/valid-reasoning-end.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-reasoning-end-id",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-reasoning-end-id.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "valid-tool-input-start",
+      "kind": "chunk",
+      "valid": true,
+      "input": "fixtures/valid-tool-input-start.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-tool-input-start-toolCallId",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-tool-input-start-toolCallId.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-tool-input-start-toolName",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-tool-input-start-toolName.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "valid-tool-input-available",
+      "kind": "chunk",
+      "valid": true,
+      "input": "fixtures/valid-tool-input-available.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-tool-input-available-toolCallId",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-tool-input-available-toolCallId.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-tool-input-available-toolName",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-tool-input-available-toolName.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-tool-input-available-input",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-tool-input-available-input.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "valid-tool-input-error",
+      "kind": "chunk",
+      "valid": true,
+      "input": "fixtures/valid-tool-input-error.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-tool-input-error-toolCallId",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-tool-input-error-toolCallId.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-tool-input-error-toolName",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-tool-input-error-toolName.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-tool-input-error-input",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-tool-input-error-input.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-tool-input-error-errorText",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-tool-input-error-errorText.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "valid-tool-input-delta",
+      "kind": "chunk",
+      "valid": true,
+      "input": "fixtures/valid-tool-input-delta.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-tool-input-delta-toolCallId",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-tool-input-delta-toolCallId.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-tool-input-delta-inputTextDelta",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-tool-input-delta-inputTextDelta.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "valid-tool-approval-request",
+      "kind": "chunk",
+      "valid": true,
+      "input": "fixtures/valid-tool-approval-request.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-tool-approval-request-approvalId",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-tool-approval-request-approvalId.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-tool-approval-request-toolCallId",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-tool-approval-request-toolCallId.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "valid-tool-approval-response",
+      "kind": "chunk",
+      "valid": true,
+      "input": "fixtures/valid-tool-approval-response.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-tool-approval-response-approvalId",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-tool-approval-response-approvalId.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-tool-approval-response-approved",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-tool-approval-response-approved.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "valid-tool-output-available",
+      "kind": "chunk",
+      "valid": true,
+      "input": "fixtures/valid-tool-output-available.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-tool-output-available-toolCallId",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-tool-output-available-toolCallId.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-tool-output-available-output",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-tool-output-available-output.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "valid-tool-output-error",
+      "kind": "chunk",
+      "valid": true,
+      "input": "fixtures/valid-tool-output-error.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-tool-output-error-toolCallId",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-tool-output-error-toolCallId.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-tool-output-error-errorText",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-tool-output-error-errorText.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "valid-tool-output-denied",
+      "kind": "chunk",
+      "valid": true,
+      "input": "fixtures/valid-tool-output-denied.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-tool-output-denied-toolCallId",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-tool-output-denied-toolCallId.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "valid-source-url",
+      "kind": "chunk",
+      "valid": true,
+      "input": "fixtures/valid-source-url.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-source-url-sourceId",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-source-url-sourceId.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-source-url-url",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-source-url-url.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "valid-source-document",
+      "kind": "chunk",
+      "valid": true,
+      "input": "fixtures/valid-source-document.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-source-document-sourceId",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-source-document-sourceId.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-source-document-mediaType",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-source-document-mediaType.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-source-document-title",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-source-document-title.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "valid-file",
+      "kind": "chunk",
+      "valid": true,
+      "input": "fixtures/valid-file.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-file-url",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-file-url.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-file-mediaType",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-file-mediaType.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "valid-reasoning-file",
+      "kind": "chunk",
+      "valid": true,
+      "input": "fixtures/valid-reasoning-file.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-reasoning-file-url",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-reasoning-file-url.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-reasoning-file-mediaType",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-reasoning-file-mediaType.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "valid-start",
+      "kind": "chunk",
+      "valid": true,
+      "input": "fixtures/valid-start.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-start-messageMetadata",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-start-messageMetadata.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "valid-finish",
+      "kind": "chunk",
+      "valid": true,
+      "input": "fixtures/valid-finish.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "valid-abort",
+      "kind": "chunk",
+      "valid": true,
+      "input": "fixtures/valid-abort.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "valid-error",
+      "kind": "chunk",
+      "valid": true,
+      "input": "fixtures/valid-error.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-error-errorText",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-error-errorText.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "valid-message-metadata",
+      "kind": "chunk",
+      "valid": true,
+      "input": "fixtures/valid-message-metadata.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-message-metadata-messageMetadata",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-message-metadata-messageMetadata.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "valid-start-step",
+      "kind": "chunk",
+      "valid": true,
+      "input": "fixtures/valid-start-step.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "valid-finish-step",
+      "kind": "chunk",
+      "valid": true,
+      "input": "fixtures/valid-finish-step.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "valid-data-plan",
+      "kind": "chunk",
+      "valid": true,
+      "input": "fixtures/valid-data-plan.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-data-plan-data",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-data-plan-data.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "malformed-data-plan",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/malformed-data-plan.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "valid-data-permission-scope",
+      "kind": "chunk",
+      "valid": true,
+      "input": "fixtures/valid-data-permission-scope.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-data-permission-scope-data",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-data-permission-scope-data.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "malformed-data-permission-scope",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/malformed-data-permission-scope.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "valid-data-exec-output",
+      "kind": "chunk",
+      "valid": true,
+      "input": "fixtures/valid-data-exec-output.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-data-exec-output-data",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-data-exec-output-data.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "malformed-data-exec-output",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/malformed-data-exec-output.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "valid-data-patch",
+      "kind": "chunk",
+      "valid": true,
+      "input": "fixtures/valid-data-patch.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-data-patch-data",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-data-patch-data.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "malformed-data-patch",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/malformed-data-patch.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "valid-data-task",
+      "kind": "chunk",
+      "valid": true,
+      "input": "fixtures/valid-data-task.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-data-task-data",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-data-task-data.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "malformed-data-task",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/malformed-data-task.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "valid-data-usage",
+      "kind": "chunk",
+      "valid": true,
+      "input": "fixtures/valid-data-usage.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-data-usage-data",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-data-usage-data.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "malformed-data-usage",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/malformed-data-usage.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "valid-data-auth-prompt",
+      "kind": "chunk",
+      "valid": true,
+      "input": "fixtures/valid-data-auth-prompt.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-data-auth-prompt-data",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-data-auth-prompt-data.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "malformed-data-auth-prompt",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/malformed-data-auth-prompt.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "valid-data-session-status",
+      "kind": "chunk",
+      "valid": true,
+      "input": "fixtures/valid-data-session-status.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-data-session-status-data",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-data-session-status-data.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "malformed-data-session-status",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/malformed-data-session-status.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "valid-data-artifact",
+      "kind": "chunk",
+      "valid": true,
+      "input": "fixtures/valid-data-artifact.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-data-artifact-data",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-data-artifact-data.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "malformed-data-artifact",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/malformed-data-artifact.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "valid-data-status",
+      "kind": "chunk",
+      "valid": true,
+      "input": "fixtures/valid-data-status.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-data-status-data",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-data-status-data.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "malformed-data-status",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/malformed-data-status.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "valid-data-conversation-id",
+      "kind": "chunk",
+      "valid": true,
+      "input": "fixtures/valid-data-conversation-id.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-data-conversation-id-data",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-data-conversation-id-data.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "malformed-data-conversation-id",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/malformed-data-conversation-id.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "valid-data-teaser-tail",
+      "kind": "chunk",
+      "valid": true,
+      "input": "fixtures/valid-data-teaser-tail.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-data-teaser-tail-data",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-data-teaser-tail-data.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "malformed-data-teaser-tail",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/malformed-data-teaser-tail.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "valid-data-teaser-gate",
+      "kind": "chunk",
+      "valid": true,
+      "input": "fixtures/valid-data-teaser-gate.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-data-teaser-gate-data",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-data-teaser-gate-data.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "malformed-data-teaser-gate",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/malformed-data-teaser-gate.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "valid-data-anon-turn",
+      "kind": "chunk",
+      "valid": true,
+      "input": "fixtures/valid-data-anon-turn.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-data-anon-turn-data",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-data-anon-turn-data.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "malformed-data-anon-turn",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/malformed-data-anon-turn.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "invalid-unknown-data",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/invalid-unknown-data.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "invalid-unsupported-custom",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/invalid-unsupported-custom.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "invalid-unsupported-reset",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/invalid-unsupported-reset.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "invalid-wrong-version",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/invalid-wrong-version.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "invalid-missing-version",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/invalid-missing-version.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "invalid-wrong-status",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/invalid-wrong-status.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "invalid-wrong-plan-status",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/invalid-wrong-plan-status.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "invalid-wrong-plan-priority",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/invalid-wrong-plan-priority.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "invalid-wrong-permission",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/invalid-wrong-permission.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "invalid-denial-string",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/invalid-denial-string.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "invalid-extra-field",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/invalid-extra-field.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "invalid-unsafe-tokens",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/invalid-unsafe-tokens.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "invalid-negative-tokens",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/invalid-negative-tokens.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "valid-optional-approval",
+      "kind": "chunk",
+      "valid": true,
+      "input": "fixtures/valid-optional-approval.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "valid-denial",
+      "kind": "chunk",
+      "valid": true,
+      "input": "fixtures/valid-denial.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "valid-plan-meta",
+      "kind": "chunk",
+      "valid": true,
+      "input": "fixtures/valid-plan-meta.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "valid-null-gate",
+      "kind": "chunk",
+      "valid": true,
+      "input": "fixtures/valid-null-gate.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "valid-scope-allow_once",
+      "kind": "chunk",
+      "valid": true,
+      "input": "fixtures/valid-scope-allow_once.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "valid-scope-allow_always",
+      "kind": "chunk",
+      "valid": true,
+      "input": "fixtures/valid-scope-allow_always.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "valid-scope-reject_once",
+      "kind": "chunk",
+      "valid": true,
+      "input": "fixtures/valid-scope-reject_once.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "valid-scope-reject_always",
+      "kind": "chunk",
+      "valid": true,
+      "input": "fixtures/valid-scope-reject_always.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "valid-envelope",
+      "kind": "envelope",
+      "valid": true,
+      "input": "fixtures/valid-envelope.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "valid-resolution",
+      "kind": "envelope",
+      "valid": true,
+      "input": "fixtures/valid-resolution.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-envelope-kind",
+      "kind": "envelope",
+      "valid": false,
+      "input": "fixtures/missing-envelope-kind.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-envelope-schemaVersion",
+      "kind": "envelope",
+      "valid": false,
+      "input": "fixtures/missing-envelope-schemaVersion.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-envelope-seq",
+      "kind": "envelope",
+      "valid": false,
+      "input": "fixtures/missing-envelope-seq.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-envelope-ts",
+      "kind": "envelope",
+      "valid": false,
+      "input": "fixtures/missing-envelope-ts.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-envelope-correlationId",
+      "kind": "envelope",
+      "valid": false,
+      "input": "fixtures/missing-envelope-correlationId.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-envelope-origin",
+      "kind": "envelope",
+      "valid": false,
+      "input": "fixtures/missing-envelope-origin.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-envelope-type",
+      "kind": "envelope",
+      "valid": false,
+      "input": "fixtures/missing-envelope-type.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-envelope-payload",
+      "kind": "envelope",
+      "valid": false,
+      "input": "fixtures/missing-envelope-payload.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "invalid-forged-resolution",
+      "kind": "envelope",
+      "valid": false,
+      "input": "fixtures/invalid-forged-resolution.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "invalid-reserved-producer-correlation",
+      "kind": "envelope",
+      "valid": false,
+      "input": "fixtures/invalid-reserved-producer-correlation.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "invalid-payload-type-mismatch",
+      "kind": "envelope",
+      "valid": false,
+      "input": "fixtures/invalid-payload-type-mismatch.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "invalid-envelope-unsafe-seq",
+      "kind": "envelope",
+      "valid": false,
+      "input": "fixtures/invalid-envelope-unsafe-seq.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "invalid-envelope-fractional-seq",
+      "kind": "envelope",
+      "valid": false,
+      "input": "fixtures/invalid-envelope-fractional-seq.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "invalid-envelope-wrong-version",
+      "kind": "envelope",
+      "valid": false,
+      "input": "fixtures/invalid-envelope-wrong-version.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "invalid-unknown-origin",
+      "kind": "envelope",
+      "valid": false,
+      "input": "fixtures/invalid-unknown-origin.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "invalid-relay-producer-event",
+      "kind": "envelope",
+      "valid": false,
+      "input": "fixtures/invalid-relay-producer-event.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "chat-api-current-anon-gate",
+      "kind": "chunk",
+      "valid": true,
+      "input": "fixtures/chat-api-current-anon-gate.json",
+      "source": "capture"
+    },
+    {
+      "id": "chat-api-current-anon-turn",
+      "kind": "chunk",
+      "valid": true,
+      "input": "fixtures/chat-api-current-anon-turn.json",
+      "source": "capture"
+    },
+    {
+      "id": "chat-api-current-workspace",
+      "kind": "chunk",
+      "valid": true,
+      "input": "fixtures/chat-api-current-workspace.json",
+      "source": "capture"
+    },
+    {
+      "id": "invalid-resolution-correlation",
+      "kind": "envelope",
+      "valid": false,
+      "input": "fixtures/invalid-resolution-correlation.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "valid-resolution-allow-user",
+      "kind": "envelope",
+      "valid": true,
+      "input": "fixtures/valid-resolution-allow-user.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "valid-resolution-deny-user",
+      "kind": "envelope",
+      "valid": true,
+      "input": "fixtures/valid-resolution-deny-user.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "invalid-resolution-allow-timeout",
+      "kind": "envelope",
+      "valid": false,
+      "input": "fixtures/invalid-resolution-allow-timeout.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "invalid-resolution-origin-daemon",
+      "kind": "envelope",
+      "valid": false,
+      "input": "fixtures/invalid-resolution-origin-daemon.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "invalid-resolution-origin-chat-api",
+      "kind": "envelope",
+      "valid": false,
+      "input": "fixtures/invalid-resolution-origin-chat-api.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "invalid-resolution-correlation-empty",
+      "kind": "envelope",
+      "valid": false,
+      "input": "fixtures/invalid-resolution-correlation-empty.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "invalid-resolution-correlation-unreserved",
+      "kind": "envelope",
+      "valid": false,
+      "input": "fixtures/invalid-resolution-correlation-unreserved.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "invalid-resolution-correlation-prefix-only",
+      "kind": "envelope",
+      "valid": false,
+      "input": "fixtures/invalid-resolution-correlation-prefix-only.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "invalid-resolution-payload-correlation-empty",
+      "kind": "envelope",
+      "valid": false,
+      "input": "fixtures/invalid-resolution-payload-correlation-empty.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "valid-envelope-chat-api-origin",
+      "kind": "envelope",
+      "valid": true,
+      "input": "fixtures/valid-envelope-chat-api-origin.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "invalid-opaque-overflow-input",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/invalid-opaque-overflow-input.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "invalid-opaque-overflow-output",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/invalid-opaque-overflow-output.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "invalid-opaque-overflow-message-metadata",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/invalid-opaque-overflow-message-metadata.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "invalid-opaque-overflow-provider-metadata",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/invalid-opaque-overflow-provider-metadata.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "invalid-opaque-overflow-plan-metadata",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/invalid-opaque-overflow-plan-metadata.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "valid-opaque-finite-output",
+      "kind": "chunk",
+      "valid": true,
+      "input": "fixtures/valid-opaque-finite-output.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-data-anon-turn-payload-conversationId",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-data-anon-turn-payload-conversationId.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-data-anon-turn-payload-turnsLeft",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-data-anon-turn-payload-turnsLeft.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-data-artifact-payload-artifactId",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-data-artifact-payload-artifactId.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-data-artifact-payload-name",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-data-artifact-payload-name.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-data-artifact-payload-mediaType",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-data-artifact-payload-mediaType.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-data-artifact-payload-url",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-data-artifact-payload-url.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-data-artifact-payload-digest",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-data-artifact-payload-digest.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-data-auth-prompt-payload-promptId",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-data-auth-prompt-payload-promptId.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-data-auth-prompt-payload-provider",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-data-auth-prompt-payload-provider.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-data-auth-prompt-payload-message",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-data-auth-prompt-payload-message.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-data-conversation-id-payload-conversationId",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-data-conversation-id-payload-conversationId.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-data-exec-output-payload-toolCallId",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-data-exec-output-payload-toolCallId.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-data-exec-output-payload-stream",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-data-exec-output-payload-stream.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-data-exec-output-payload-text",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-data-exec-output-payload-text.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-data-patch-payload-toolCallId",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-data-patch-payload-toolCallId.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-data-patch-payload-path",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-data-patch-payload-path.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-data-patch-payload-diff",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-data-patch-payload-diff.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-data-patch-payload-operation",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-data-patch-payload-operation.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-data-permission-scope-payload-approvalId",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-data-permission-scope-payload-approvalId.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-data-permission-scope-payload-scope",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-data-permission-scope-payload-scope.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-data-plan-payload-entries",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-data-plan-payload-entries.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-data-plan-entry-content",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-data-plan-entry-content.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-data-plan-entry-priority",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-data-plan-entry-priority.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-data-plan-entry-status",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-data-plan-entry-status.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-data-session-status-payload-sessionId",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-data-session-status-payload-sessionId.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-data-session-status-payload-status",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-data-session-status-payload-status.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-data-status-payload-event",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-data-status-payload-event.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-data-status-payload-summary",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-data-status-payload-summary.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-data-task-payload-taskId",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-data-task-payload-taskId.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-data-task-payload-status",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-data-task-payload-status.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-data-teaser-gate-payload-conversationId",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-data-teaser-gate-payload-conversationId.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-data-teaser-gate-payload-remainingChars",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-data-teaser-gate-payload-remainingChars.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-data-teaser-tail-payload-text",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-data-teaser-tail-payload-text.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-data-usage-payload-inputTokens",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-data-usage-payload-inputTokens.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-data-usage-payload-outputTokens",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-data-usage-payload-outputTokens.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "missing-data-usage-payload-model",
+      "kind": "chunk",
+      "valid": false,
+      "input": "fixtures/missing-data-usage-payload-model.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "synthetic-codex-mcp-failed",
+      "kind": "chunk",
+      "valid": true,
+      "input": "fixtures/synthetic-codex-mcp-failed.json",
+      "source": "synthetic"
+    },
+    {
+      "id": "synthetic-codex-mcp-failed-result",
+      "kind": "chunk",
+      "valid": true,
+      "input": "fixtures/synthetic-codex-mcp-failed-result.json",
+      "source": "synthetic"
+    }
+  ]
+}

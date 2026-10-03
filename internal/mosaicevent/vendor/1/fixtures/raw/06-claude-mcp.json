@@ -1,0 +1,564 @@
+[
+  {
+    "sourceIndex": 0,
+    "direction": "out",
+    "frame": {
+      "message": {
+        "content": "Call the mcp__archivist__explain_defaults tool once with no arguments and reply with only the first line of its output.",
+        "role": "user"
+      },
+      "type": "user"
+    }
+  },
+  {
+    "sourceIndex": 5,
+    "direction": "in",
+    "frame": {
+      "type": "stream_event",
+      "event": {
+        "type": "message_start",
+        "message": {
+          "model": "claude-sonnet-5",
+          "id": "msg_011Cfb19NmvHKCRf1Hv3CfSh",
+          "type": "message",
+          "role": "assistant",
+          "content": [],
+          "container": null,
+          "stop_reason": null,
+          "stop_sequence": null,
+          "stop_details": null,
+          "usage": {
+            "input_tokens": 2,
+            "cache_creation_input_tokens": 7371,
+            "cache_read_input_tokens": 7742,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 7371
+            },
+            "output_tokens": 33,
+            "service_tier": "standard",
+            "inference_geo": "not_available"
+          },
+          "input_transformations": [],
+          "diagnostics": null,
+          "context_management": null
+        }
+      },
+      "session_id": "fixture-id-1",
+      "parent_tool_use_id": null,
+      "uuid": "fixture-id-2",
+      "ttft_ms": 1489
+    }
+  },
+  {
+    "sourceIndex": 6,
+    "direction": "in",
+    "frame": {
+      "type": "stream_event",
+      "event": {
+        "type": "content_block_start",
+        "index": 0,
+        "content_block": {
+          "type": "tool_use",
+          "id": "toolu_013heAwuXMuFndnNnPuSMzTr",
+          "name": "mcp__archivist__explain_defaults",
+          "input": {},
+          "caller": {
+            "type": "direct"
+          }
+        }
+      },
+      "session_id": "fixture-id-1",
+      "parent_tool_use_id": null,
+      "uuid": "fixture-id-3"
+    }
+  },
+  {
+    "sourceIndex": 7,
+    "direction": "in",
+    "frame": {
+      "type": "stream_event",
+      "event": {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {
+          "type": "input_json_delta",
+          "partial_json": ""
+        }
+      },
+      "session_id": "fixture-id-1",
+      "parent_tool_use_id": null,
+      "uuid": "fixture-id-4"
+    }
+  },
+  {
+    "sourceIndex": 8,
+    "direction": "in",
+    "frame": {
+      "type": "assistant",
+      "message": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011Cfb19NmvHKCRf1Hv3CfSh",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "toolu_013heAwuXMuFndnNnPuSMzTr",
+            "name": "mcp__archivist__explain_defaults",
+            "input": {},
+            "caller": {
+              "type": "direct"
+            }
+          }
+        ],
+        "container": null,
+        "stop_reason": null,
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 2,
+          "cache_creation_input_tokens": 7371,
+          "cache_read_input_tokens": 7742,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 7371
+          },
+          "output_tokens": 33,
+          "service_tier": "standard",
+          "inference_geo": "not_available"
+        },
+        "input_transformations": [],
+        "diagnostics": null,
+        "context_management": null
+      },
+      "parent_tool_use_id": null,
+      "session_id": "fixture-id-1",
+      "uuid": "fixture-id-5",
+      "timestamp": "2026-10-01T05:57:32.454Z",
+      "request_id": "req_011Cfb19NRaHt8dj1KuFDqXd",
+      "wire_tool_inputs": {
+        "toolu_013heAwuXMuFndnNnPuSMzTr": {}
+      },
+      "tool_use_meta": [
+        {
+          "id": "toolu_013heAwuXMuFndnNnPuSMzTr",
+          "display_name": "Explain Defaults",
+          "server_display_name": "archivist"
+        }
+      ]
+    }
+  },
+  {
+    "sourceIndex": 9,
+    "direction": "in",
+    "frame": {
+      "type": "stream_event",
+      "event": {
+        "type": "content_block_stop",
+        "index": 0
+      },
+      "session_id": "fixture-id-1",
+      "parent_tool_use_id": null,
+      "uuid": "fixture-id-6"
+    }
+  },
+  {
+    "sourceIndex": 10,
+    "direction": "in",
+    "frame": {
+      "type": "stream_event",
+      "event": {
+        "type": "message_delta",
+        "delta": {
+          "stop_reason": "tool_use",
+          "stop_sequence": null,
+          "stop_details": null,
+          "container": null
+        },
+        "usage": {
+          "input_tokens": 2,
+          "cache_creation_input_tokens": 7371,
+          "cache_read_input_tokens": 7742,
+          "output_tokens": 37,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "iterations": [
+            {
+              "input_tokens": 2,
+              "output_tokens": 37,
+              "cache_read_input_tokens": 7742,
+              "cache_creation_input_tokens": 7371,
+              "cache_creation": {
+                "ephemeral_5m_input_tokens": 0,
+                "ephemeral_1h_input_tokens": 7371
+              },
+              "type": "message"
+            }
+          ]
+        },
+        "context_management": {
+          "applied_edits": []
+        }
+      },
+      "session_id": "fixture-id-1",
+      "parent_tool_use_id": null,
+      "uuid": "fixture-id-7"
+    }
+  },
+  {
+    "sourceIndex": 11,
+    "direction": "in",
+    "frame": {
+      "type": "stream_event",
+      "event": {
+        "type": "message_stop"
+      },
+      "session_id": "fixture-id-1",
+      "parent_tool_use_id": null,
+      "uuid": "fixture-id-8"
+    }
+  },
+  {
+    "sourceIndex": 12,
+    "direction": "in",
+    "frame": {
+      "type": "user",
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "tool_use_id": "toolu_013heAwuXMuFndnNnPuSMzTr",
+            "type": "tool_result",
+            "content": [
+              {
+                "type": "text",
+                "text": "DEFAULT DATE WINDOW\n\n  When you pin a row to an issuer (issuer_key) without specifying date_from\n  / date_to, archivist fills \"Last 6 months\" automatically:\n\n    date_to   = today (UTC)\n    date_from = today minus 6 calendar months\n    label     = \"Last 6 months\"\n\n  This matches the web Table Mode default (Story 33.43).\n\nRECOMMENDED WINDOWS\n\n  Use case            Window\n  ------------------  ----------------------------------------\n  Recent filings      Last 6 months  (the default, fits most)\n  Annual cycle        Last 12 months\n  Multi-year compare  Up to 2 years  (hard cap, see below)\n\nHARD CAP (cascade rule)\n\n  Issuer-locked rows without a filing-type filter are capped at a\n  730-day (~2 year) date span. Longer spans are rejected at spec-\n  parse time (exit code 8). Add a formtype filter to scan farther\n  back, or shrink the window.\n\n  See 'archivist explain cascade' for the full rule.\n\nCASCADE PATTERN (filing types)\n\n  The same narrowing pattern that ties issuer to date defaults also\n  ties issuer to FILING TYPES. SEC issuers file SEC types (10-K,\n  10-Q, 8-K, etc.); SEDAR issuers file SEDAR types (MD&A, AIF, etc.).\n  archivist rejects invalid type-for-issuer combinations at spec-parse\n  time via the same cascade validator.\n"
+              }
+            ]
+          }
+        ]
+      },
+      "parent_tool_use_id": null,
+      "session_id": "fixture-id-1",
+      "uuid": "fixture-id-9",
+      "timestamp": "2026-10-01T05:57:32.466Z",
+      "tool_use_result": [
+        {
+          "type": "text",
+          "text": "DEFAULT DATE WINDOW\n\n  When you pin a row to an issuer (issuer_key) without specifying date_from\n  / date_to, archivist fills \"Last 6 months\" automatically:\n\n    date_to   = today (UTC)\n    date_from = today minus 6 calendar months\n    label     = \"Last 6 months\"\n\n  This matches the web Table Mode default (Story 33.43).\n\nRECOMMENDED WINDOWS\n\n  Use case            Window\n  ------------------  ----------------------------------------\n  Recent filings      Last 6 months  (the default, fits most)\n  Annual cycle        Last 12 months\n  Multi-year compare  Up to 2 years  (hard cap, see below)\n\nHARD CAP (cascade rule)\n\n  Issuer-locked rows without a filing-type filter are capped at a\n  730-day (~2 year) date span. Longer spans are rejected at spec-\n  parse time (exit code 8). Add a formtype filter to scan farther\n  back, or shrink the window.\n\n  See 'archivist explain cascade' for the full rule.\n\nCASCADE PATTERN (filing types)\n\n  The same narrowing pattern that ties issuer to date defaults also\n  ties issuer to FILING TYPES. SEC issuers file SEC types (10-K,\n  10-Q, 8-K, etc.); SEDAR issuers file SEDAR types (MD&A, AIF, etc.).\n  archivist rejects invalid type-for-issuer combinations at spec-parse\n  time via the same cascade validator.\n"
+        }
+      ]
+    }
+  },
+  {
+    "sourceIndex": 15,
+    "direction": "in",
+    "frame": {
+      "type": "stream_event",
+      "event": {
+        "type": "message_start",
+        "message": {
+          "model": "claude-sonnet-5",
+          "id": "msg_011Cfb19VLofGszo6UcsNLZU",
+          "type": "message",
+          "role": "assistant",
+          "content": [],
+          "container": null,
+          "stop_reason": null,
+          "stop_sequence": null,
+          "stop_details": null,
+          "usage": {
+            "input_tokens": 2,
+            "cache_creation_input_tokens": 590,
+            "cache_read_input_tokens": 15113,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 590
+            },
+            "output_tokens": 8,
+            "service_tier": "standard",
+            "inference_geo": "not_available"
+          },
+          "input_transformations": [],
+          "diagnostics": null,
+          "context_management": null
+        }
+      },
+      "session_id": "fixture-id-1",
+      "parent_tool_use_id": null,
+      "uuid": "fixture-id-10",
+      "ttft_ms": 1453
+    }
+  },
+  {
+    "sourceIndex": 16,
+    "direction": "in",
+    "frame": {
+      "type": "stream_event",
+      "event": {
+        "type": "content_block_start",
+        "index": 0,
+        "content_block": {
+          "type": "text",
+          "text": ""
+        }
+      },
+      "session_id": "fixture-id-1",
+      "parent_tool_use_id": null,
+      "uuid": "fixture-id-11"
+    }
+  },
+  {
+    "sourceIndex": 17,
+    "direction": "in",
+    "frame": {
+      "type": "stream_event",
+      "event": {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {
+          "type": "text_delta",
+          "text": "DEFAULT DAT"
+        }
+      },
+      "session_id": "fixture-id-1",
+      "parent_tool_use_id": null,
+      "uuid": "fixture-id-12"
+    }
+  },
+  {
+    "sourceIndex": 18,
+    "direction": "in",
+    "frame": {
+      "type": "stream_event",
+      "event": {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {
+          "type": "text_delta",
+          "text": "E WINDOW"
+        }
+      },
+      "session_id": "fixture-id-1",
+      "parent_tool_use_id": null,
+      "uuid": "fixture-id-13"
+    }
+  },
+  {
+    "sourceIndex": 19,
+    "direction": "in",
+    "frame": {
+      "type": "assistant",
+      "message": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011Cfb19VLofGszo6UcsNLZU",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "DEFAULT DATE WINDOW"
+          }
+        ],
+        "container": null,
+        "stop_reason": null,
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 2,
+          "cache_creation_input_tokens": 590,
+          "cache_read_input_tokens": 15113,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 590
+          },
+          "output_tokens": 8,
+          "service_tier": "standard",
+          "inference_geo": "not_available"
+        },
+        "input_transformations": [],
+        "diagnostics": null,
+        "context_management": null
+      },
+      "parent_tool_use_id": null,
+      "session_id": "fixture-id-1",
+      "uuid": "fixture-id-14",
+      "timestamp": "2026-10-01T05:57:33.978Z",
+      "request_id": "req_011Cfb19UyibLkHmZz4ushXf"
+    }
+  },
+  {
+    "sourceIndex": 20,
+    "direction": "in",
+    "frame": {
+      "type": "stream_event",
+      "event": {
+        "type": "content_block_stop",
+        "index": 0
+      },
+      "session_id": "fixture-id-1",
+      "parent_tool_use_id": null,
+      "uuid": "fixture-id-15"
+    }
+  },
+  {
+    "sourceIndex": 21,
+    "direction": "in",
+    "frame": {
+      "type": "stream_event",
+      "event": {
+        "type": "message_delta",
+        "delta": {
+          "stop_reason": "end_turn",
+          "stop_sequence": null,
+          "stop_details": null,
+          "container": null
+        },
+        "usage": {
+          "input_tokens": 2,
+          "cache_creation_input_tokens": 590,
+          "cache_read_input_tokens": 15113,
+          "output_tokens": 16,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "iterations": [
+            {
+              "input_tokens": 2,
+              "output_tokens": 16,
+              "cache_read_input_tokens": 15113,
+              "cache_creation_input_tokens": 590,
+              "cache_creation": {
+                "ephemeral_5m_input_tokens": 0,
+                "ephemeral_1h_input_tokens": 590
+              },
+              "type": "message"
+            }
+          ]
+        },
+        "context_management": {
+          "applied_edits": []
+        }
+      },
+      "session_id": "fixture-id-1",
+      "parent_tool_use_id": null,
+      "uuid": "fixture-id-16"
+    }
+  },
+  {
+    "sourceIndex": 22,
+    "direction": "in",
+    "frame": {
+      "type": "stream_event",
+      "event": {
+        "type": "message_stop"
+      },
+      "session_id": "fixture-id-1",
+      "parent_tool_use_id": null,
+      "uuid": "fixture-id-17"
+    }
+  },
+  {
+    "sourceIndex": 23,
+    "direction": "in",
+    "frame": {
+      "duration_api_ms": 3065,
+      "stop_reason": "end_turn",
+      "session_id": "fixture-id-1",
+      "total_cost_usd": 0.036953,
+      "usage": {
+        "input_tokens": 4,
+        "cache_creation_input_tokens": 7961,
+        "cache_read_input_tokens": 22855,
+        "output_tokens": 53,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "server_tool_use": {
+          "web_search_requests": 0,
+          "web_fetch_requests": 0
+        },
+        "service_tier": "standard",
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 7961,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "inference_geo": "not_available",
+        "iterations": [
+          {
+            "input_tokens": 2,
+            "output_tokens": 16,
+            "cache_read_input_tokens": 15113,
+            "cache_creation_input_tokens": 590,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 590
+            },
+            "type": "message"
+          }
+        ],
+        "speed": "standard"
+      },
+      "modelUsage": {
+        "claude-sonnet-5": {
+          "inputTokens": 4,
+          "outputTokens": 53,
+          "cacheReadInputTokens": 22855,
+          "cacheCreationInputTokens": 7961,
+          "webSearchRequests": 0,
+          "costUSD": 0.036953,
+          "contextWindow": 1000000,
+          "maxOutputTokens": 64000,
+          "thinkingTokens": 0,
+          "canonicalModel": "claude-sonnet-5",
+          "provider": "firstParty",
+          "costBasis": "list"
+        }
+      },
+      "permission_denials": [],
+      "terminal_reason": "completed",
+      "fast_mode_state": "off",
+      "fast_mode_disabled_reason": "sdk_opt_in_required",
+      "subagent_stats": {
+        "spawned": 0,
+        "requested": {
+          "background": 0,
+          "foreground": 0,
+          "unset": 0
+        },
+        "started_in_background": 0,
+        "max_depth": 0,
+        "spawned_by_subagents": 0,
+        "completed": 0,
+        "failed": 0,
+        "killed": {
+          "parent": 0,
+          "user": 0,
+          "system": 0
+        },
+        "refused": {
+          "depth_limit": 0,
+          "concurrency_limit": 0,
+          "budget": 0
+        },
+        "by_type": {}
+      },
+      "is_error": false,
+      "num_turns": 2,
+      "subtype": "success",
+      "api_error_status": null,
+      "result": "DEFAULT DATE WINDOW",
+      "ttft_ms": 1579,
+      "type": "result",
+      "duration_ms": 3127,
+      "uuid": "fixture-id-18",
+      "ttft_stream_ms": 1543,
+      "time_to_request_ms": 55,
+      "first_content_frame_ms": 1544,
+      "queued_turn_count": 0,
+      "result_index": 0
+    }
+  }
+]

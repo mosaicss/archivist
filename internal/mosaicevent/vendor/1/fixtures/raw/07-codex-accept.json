@@ -1,0 +1,411 @@
+[
+  {
+    "sourceIndex": 16,
+    "direction": "in",
+    "frame": {
+      "method": "turn/started",
+      "params": {
+        "threadId": "fixture-id-1",
+        "turn": {
+          "id": "fixture-id-2",
+          "items": [],
+          "itemsView": "notLoaded",
+          "status": "inProgress",
+          "error": null,
+          "startedAt": 1790834259,
+          "completedAt": null,
+          "durationMs": null
+        }
+      },
+      "emittedAtMs": 1790834259933
+    }
+  },
+  {
+    "sourceIndex": 21,
+    "direction": "in",
+    "frame": {
+      "method": "item/started",
+      "params": {
+        "item": {
+          "type": "userMessage",
+          "id": "fixture-id-3",
+          "clientId": null,
+          "content": [
+            {
+              "type": "text",
+              "text": "Run exactly this shell command in the current directory: touch spike-78-3.txt && echo spike-78-3 . Do not run any other command. Then reply with the command output, or say it was declined.",
+              "text_elements": []
+            }
+          ]
+        },
+        "threadId": "fixture-id-1",
+        "turnId": "fixture-id-2",
+        "startedAtMs": 1790834261342
+      },
+      "emittedAtMs": 1790834261342
+    }
+  },
+  {
+    "sourceIndex": 22,
+    "direction": "in",
+    "frame": {
+      "method": "item/completed",
+      "params": {
+        "item": {
+          "type": "userMessage",
+          "id": "fixture-id-3",
+          "clientId": null,
+          "content": [
+            {
+              "type": "text",
+              "text": "Run exactly this shell command in the current directory: touch spike-78-3.txt && echo spike-78-3 . Do not run any other command. Then reply with the command output, or say it was declined.",
+              "text_elements": []
+            }
+          ]
+        },
+        "threadId": "fixture-id-1",
+        "turnId": "fixture-id-2",
+        "completedAtMs": 1790834261342
+      },
+      "emittedAtMs": 1790834261345
+    }
+  },
+  {
+    "sourceIndex": 24,
+    "direction": "in",
+    "frame": {
+      "method": "item/started",
+      "params": {
+        "item": {
+          "type": "commandExecution",
+          "id": "exec-fixture-id-4",
+          "pluginId": null,
+          "scriptPath": null,
+          "command": "/bin/bash -lc 'touch spike-78-3.txt && echo spike-78-3'",
+          "cwd": "/fixture/workdir",
+          "processId": null,
+          "source": "agent",
+          "status": "inProgress",
+          "commandActions": [
+            {
+              "type": "unknown",
+              "command": "touch spike-78-3.txt && echo spike-78-3"
+            }
+          ],
+          "aggregatedOutput": null,
+          "exitCode": null,
+          "durationMs": null
+        },
+        "threadId": "fixture-id-1",
+        "turnId": "fixture-id-2",
+        "startedAtMs": 1790834263747
+      },
+      "emittedAtMs": 1790834263747
+    }
+  },
+  {
+    "sourceIndex": 25,
+    "direction": "in",
+    "frame": {
+      "method": "item/commandExecution/requestApproval",
+      "id": 0,
+      "params": {
+        "kind": "command",
+        "threadId": "fixture-id-1",
+        "turnId": "fixture-id-2",
+        "itemId": "exec-fixture-id-4",
+        "startedAtMs": 1790834263747,
+        "environmentId": "local",
+        "command": "/bin/bash -lc 'touch spike-78-3.txt && echo spike-78-3'",
+        "cwd": "/fixture/workdir",
+        "commandActions": [
+          {
+            "type": "unknown",
+            "command": "touch spike-78-3.txt && echo spike-78-3"
+          }
+        ],
+        "proposedExecpolicyAmendment": [
+          "touch",
+          "spike-78-3.txt"
+        ],
+        "availableDecisions": [
+          "accept",
+          {
+            "acceptWithExecpolicyAmendment": {
+              "execpolicy_amendment": [
+                "touch",
+                "spike-78-3.txt"
+              ]
+            }
+          },
+          "cancel"
+        ]
+      }
+    }
+  },
+  {
+    "sourceIndex": 26,
+    "direction": "out",
+    "frame": {
+      "id": 0,
+      "result": {
+        "decision": "accept"
+      },
+      "jsonrpc": "2.0"
+    }
+  },
+  {
+    "sourceIndex": 29,
+    "direction": "in",
+    "frame": {
+      "method": "item/completed",
+      "params": {
+        "item": {
+          "type": "commandExecution",
+          "id": "exec-fixture-id-4",
+          "pluginId": null,
+          "scriptPath": null,
+          "command": "/bin/bash -lc 'touch spike-78-3.txt && echo spike-78-3'",
+          "cwd": "/fixture/workdir",
+          "processId": "56168",
+          "source": "unifiedExecStartup",
+          "status": "completed",
+          "commandActions": [
+            {
+              "type": "unknown",
+              "command": "touch spike-78-3.txt && echo spike-78-3"
+            }
+          ],
+          "aggregatedOutput": "spike-78-3\n",
+          "exitCode": 0,
+          "durationMs": 0
+        },
+        "threadId": "fixture-id-1",
+        "turnId": "fixture-id-2",
+        "completedAtMs": 1790834263799
+      },
+      "emittedAtMs": 1790834263801
+    }
+  },
+  {
+    "sourceIndex": 30,
+    "direction": "in",
+    "frame": {
+      "method": "thread/tokenUsage/updated",
+      "params": {
+        "threadId": "fixture-id-1",
+        "turnId": "fixture-id-2",
+        "tokenUsage": {
+          "total": {
+            "totalTokens": 16652,
+            "inputTokens": 16571,
+            "cachedInputTokens": 11008,
+            "cacheWriteInputTokens": 0,
+            "outputTokens": 81,
+            "reasoningOutputTokens": 0
+          },
+          "last": {
+            "totalTokens": 16652,
+            "inputTokens": 16571,
+            "cachedInputTokens": 11008,
+            "cacheWriteInputTokens": 0,
+            "outputTokens": 81,
+            "reasoningOutputTokens": 0
+          },
+          "modelContextWindow": 258400
+        }
+      },
+      "emittedAtMs": 1790834263808
+    }
+  },
+  {
+    "sourceIndex": 32,
+    "direction": "in",
+    "frame": {
+      "method": "item/started",
+      "params": {
+        "item": {
+          "type": "agentMessage",
+          "id": "msg_0d36447e64126e62016abdf658c0e487d18c79a5879e95e5b2",
+          "text": "",
+          "phase": "final_answer",
+          "memoryCitation": null,
+          "delivery": null,
+          "questions": null
+        },
+        "threadId": "fixture-id-1",
+        "turnId": "fixture-id-2",
+        "startedAtMs": 1790834264769
+      },
+      "emittedAtMs": 1790834264769
+    }
+  },
+  {
+    "sourceIndex": 33,
+    "direction": "in",
+    "frame": {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "fixture-id-1",
+        "turnId": "fixture-id-2",
+        "itemId": "msg_0d36447e64126e62016abdf658c0e487d18c79a5879e95e5b2",
+        "delta": "sp"
+      },
+      "emittedAtMs": 1790834264769
+    }
+  },
+  {
+    "sourceIndex": 34,
+    "direction": "in",
+    "frame": {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "fixture-id-1",
+        "turnId": "fixture-id-2",
+        "itemId": "msg_0d36447e64126e62016abdf658c0e487d18c79a5879e95e5b2",
+        "delta": "ike"
+      },
+      "emittedAtMs": 1790834264792
+    }
+  },
+  {
+    "sourceIndex": 35,
+    "direction": "in",
+    "frame": {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "fixture-id-1",
+        "turnId": "fixture-id-2",
+        "itemId": "msg_0d36447e64126e62016abdf658c0e487d18c79a5879e95e5b2",
+        "delta": "-"
+      },
+      "emittedAtMs": 1790834264812
+    }
+  },
+  {
+    "sourceIndex": 36,
+    "direction": "in",
+    "frame": {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "fixture-id-1",
+        "turnId": "fixture-id-2",
+        "itemId": "msg_0d36447e64126e62016abdf658c0e487d18c79a5879e95e5b2",
+        "delta": "78"
+      },
+      "emittedAtMs": 1790834264834
+    }
+  },
+  {
+    "sourceIndex": 37,
+    "direction": "in",
+    "frame": {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "fixture-id-1",
+        "turnId": "fixture-id-2",
+        "itemId": "msg_0d36447e64126e62016abdf658c0e487d18c79a5879e95e5b2",
+        "delta": "-"
+      },
+      "emittedAtMs": 1790834264834
+    }
+  },
+  {
+    "sourceIndex": 38,
+    "direction": "in",
+    "frame": {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "fixture-id-1",
+        "turnId": "fixture-id-2",
+        "itemId": "msg_0d36447e64126e62016abdf658c0e487d18c79a5879e95e5b2",
+        "delta": "3"
+      },
+      "emittedAtMs": 1790834264856
+    }
+  },
+  {
+    "sourceIndex": 39,
+    "direction": "in",
+    "frame": {
+      "method": "item/completed",
+      "params": {
+        "item": {
+          "type": "agentMessage",
+          "id": "msg_0d36447e64126e62016abdf658c0e487d18c79a5879e95e5b2",
+          "text": "spike-78-3",
+          "phase": "final_answer",
+          "memoryCitation": null,
+          "delivery": null,
+          "questions": null
+        },
+        "threadId": "fixture-id-1",
+        "turnId": "fixture-id-2",
+        "completedAtMs": 1790834264975
+      },
+      "emittedAtMs": 1790834264979
+    }
+  },
+  {
+    "sourceIndex": 40,
+    "direction": "in",
+    "frame": {
+      "method": "thread/tokenUsage/updated",
+      "params": {
+        "threadId": "fixture-id-1",
+        "turnId": "fixture-id-2",
+        "tokenUsage": {
+          "total": {
+            "totalTokens": 33344,
+            "inputTokens": 33253,
+            "cachedInputTokens": 27136,
+            "cacheWriteInputTokens": 0,
+            "outputTokens": 91,
+            "reasoningOutputTokens": 0
+          },
+          "last": {
+            "totalTokens": 16692,
+            "inputTokens": 16682,
+            "cachedInputTokens": 16128,
+            "cacheWriteInputTokens": 0,
+            "outputTokens": 10,
+            "reasoningOutputTokens": 0
+          },
+          "modelContextWindow": 258400
+        }
+      },
+      "emittedAtMs": 1790834264983
+    }
+  },
+  {
+    "sourceIndex": 43,
+    "direction": "in",
+    "frame": {
+      "method": "turn/completed",
+      "params": {
+        "threadId": "fixture-id-1",
+        "turn": {
+          "id": "fixture-id-2",
+          "items": [
+            {
+              "type": "agentMessage",
+              "id": "msg_0d36447e64126e62016abdf658c0e487d18c79a5879e95e5b2",
+              "text": "spike-78-3",
+              "phase": "final_answer",
+              "memoryCitation": null,
+              "delivery": null,
+              "questions": null
+            }
+          ],
+          "itemsView": "summary",
+          "status": "completed",
+          "error": null,
+          "startedAt": 1790834259,
+          "completedAt": 1790834264,
+          "durationMs": 5065
+        }
+      },
+      "emittedAtMs": 1790834264987
+    }
+  }
+]

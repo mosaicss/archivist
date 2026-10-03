@@ -1,0 +1,9 @@
+[
+  {
+    "type": "data-session-status",
+    "data": {
+      "sessionId": "fixture",
+      "status": "starting"
+    }
+  }
+]

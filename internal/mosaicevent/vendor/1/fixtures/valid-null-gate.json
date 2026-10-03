@@ -1,0 +1,10 @@
+[
+  {
+    "type": "data-teaser-gate",
+    "data": {
+      "conversationId": "x",
+      "remainingChars": null
+    },
+    "transient": true
+  }
+]

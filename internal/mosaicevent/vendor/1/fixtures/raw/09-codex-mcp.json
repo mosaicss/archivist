@@ -1,0 +1,348 @@
+[
+  {
+    "sourceIndex": 15,
+    "direction": "in",
+    "frame": {
+      "method": "turn/started",
+      "params": {
+        "threadId": "fixture-id-1",
+        "turn": {
+          "id": "fixture-id-2",
+          "items": [],
+          "itemsView": "notLoaded",
+          "status": "inProgress",
+          "error": null,
+          "startedAt": 1790834285,
+          "completedAt": null,
+          "durationMs": null
+        }
+      },
+      "emittedAtMs": 1790834285055
+    }
+  },
+  {
+    "sourceIndex": 21,
+    "direction": "in",
+    "frame": {
+      "method": "item/started",
+      "params": {
+        "item": {
+          "type": "userMessage",
+          "id": "fixture-id-3",
+          "clientId": null,
+          "content": [
+            {
+              "type": "text",
+              "text": "Call the archivist MCP tool explain_defaults once with no arguments. Do not run shell commands. Reply with only the first line of the tool output.",
+              "text_elements": []
+            }
+          ]
+        },
+        "threadId": "fixture-id-1",
+        "turnId": "fixture-id-2",
+        "startedAtMs": 1790834286244
+      },
+      "emittedAtMs": 1790834286244
+    }
+  },
+  {
+    "sourceIndex": 22,
+    "direction": "in",
+    "frame": {
+      "method": "item/completed",
+      "params": {
+        "item": {
+          "type": "userMessage",
+          "id": "fixture-id-3",
+          "clientId": null,
+          "content": [
+            {
+              "type": "text",
+              "text": "Call the archivist MCP tool explain_defaults once with no arguments. Do not run shell commands. Reply with only the first line of the tool output.",
+              "text_elements": []
+            }
+          ]
+        },
+        "threadId": "fixture-id-1",
+        "turnId": "fixture-id-2",
+        "completedAtMs": 1790834286244
+      },
+      "emittedAtMs": 1790834286246
+    }
+  },
+  {
+    "sourceIndex": 23,
+    "direction": "in",
+    "frame": {
+      "method": "thread/tokenUsage/updated",
+      "params": {
+        "threadId": "fixture-id-1",
+        "turnId": "fixture-id-2",
+        "tokenUsage": {
+          "total": {
+            "totalTokens": 15096,
+            "inputTokens": 15051,
+            "cachedInputTokens": 11008,
+            "cacheWriteInputTokens": 0,
+            "outputTokens": 45,
+            "reasoningOutputTokens": 0
+          },
+          "last": {
+            "totalTokens": 15096,
+            "inputTokens": 15051,
+            "cachedInputTokens": 11008,
+            "cacheWriteInputTokens": 0,
+            "outputTokens": 45,
+            "reasoningOutputTokens": 0
+          },
+          "modelContextWindow": 258400
+        }
+      },
+      "emittedAtMs": 1790834287823
+    }
+  },
+  {
+    "sourceIndex": 25,
+    "direction": "in",
+    "frame": {
+      "method": "item/started",
+      "params": {
+        "item": {
+          "type": "mcpToolCall",
+          "id": "exec-fixture-id-4",
+          "server": "archivist",
+          "tool": "explain_defaults",
+          "status": "inProgress",
+          "arguments": {},
+          "appContext": null,
+          "mcpAppUi": null,
+          "pluginId": null,
+          "readOnlyHint": true,
+          "result": null,
+          "error": null,
+          "durationMs": null
+        },
+        "threadId": "fixture-id-1",
+        "turnId": "fixture-id-2",
+        "startedAtMs": 1790834289533
+      },
+      "emittedAtMs": 1790834289534
+    }
+  },
+  {
+    "sourceIndex": 26,
+    "direction": "in",
+    "frame": {
+      "method": "item/completed",
+      "params": {
+        "item": {
+          "type": "mcpToolCall",
+          "id": "exec-fixture-id-4",
+          "server": "archivist",
+          "tool": "explain_defaults",
+          "status": "completed",
+          "arguments": {},
+          "appContext": null,
+          "mcpAppUi": null,
+          "pluginId": null,
+          "readOnlyHint": true,
+          "result": {
+            "content": [
+              {
+                "type": "text",
+                "text": "DEFAULT DATE WINDOW\n\n  When you pin a row to an issuer (issuer_key) without specifying date_from\n  / date_to, archivist fills \"Last 6 months\" automatically:\n\n    date_to   = today (UTC)\n    date_from = today minus 6 calendar months\n    label     = \"Last 6 months\"\n\n  This matches the web Table Mode default (Story 33.43).\n\nRECOMMENDED WINDOWS\n\n  Use case            Window\n  ------------------  ----------------------------------------\n  Recent filings      Last 6 months  (the default, fits most)\n  Annual cycle        Last 12 months\n  Multi-year compare  Up to 2 years  (hard cap, see below)\n\nHARD CAP (cascade rule)\n\n  Issuer-locked rows without a filing-type filter are capped at a\n  730-day (~2 year) date span. Longer spans are rejected at spec-\n  parse time (exit code 8). Add a formtype filter to scan farther\n  back, or shrink the window.\n\n  See 'archivist explain cascade' for the full rule.\n\nCASCADE PATTERN (filing types)\n\n  The same narrowing pattern that ties issuer to date defaults also\n  ties issuer to FILING TYPES. SEC issuers file SEC types (10-K,\n  10-Q, 8-K, etc.); SEDAR issuers file SEDAR types (MD&A, AIF, etc.).\n  archivist rejects invalid type-for-issuer combinations at spec-parse\n  time via the same cascade validator.\n"
+              }
+            ],
+            "structuredContent": null,
+            "_meta": null
+          },
+          "error": null,
+          "durationMs": 2
+        },
+        "threadId": "fixture-id-1",
+        "turnId": "fixture-id-2",
+        "completedAtMs": 1790834289536
+      },
+      "emittedAtMs": 1790834289537
+    }
+  },
+  {
+    "sourceIndex": 27,
+    "direction": "in",
+    "frame": {
+      "method": "thread/tokenUsage/updated",
+      "params": {
+        "threadId": "fixture-id-1",
+        "turnId": "fixture-id-2",
+        "tokenUsage": {
+          "total": {
+            "totalTokens": 30518,
+            "inputTokens": 30417,
+            "cachedInputTokens": 25088,
+            "cacheWriteInputTokens": 0,
+            "outputTokens": 101,
+            "reasoningOutputTokens": 0
+          },
+          "last": {
+            "totalTokens": 15422,
+            "inputTokens": 15366,
+            "cachedInputTokens": 14080,
+            "cacheWriteInputTokens": 0,
+            "outputTokens": 56,
+            "reasoningOutputTokens": 0
+          },
+          "modelContextWindow": 258400
+        }
+      },
+      "emittedAtMs": 1790834289571
+    }
+  },
+  {
+    "sourceIndex": 29,
+    "direction": "in",
+    "frame": {
+      "method": "item/started",
+      "params": {
+        "item": {
+          "type": "agentMessage",
+          "id": "msg_067d85434e8815df016abdf6725b4087d1afa1def941df71e9",
+          "text": "",
+          "phase": "final_answer",
+          "memoryCitation": null,
+          "delivery": null,
+          "questions": null
+        },
+        "threadId": "fixture-id-1",
+        "turnId": "fixture-id-2",
+        "startedAtMs": 1790834290371
+      },
+      "emittedAtMs": 1790834290371
+    }
+  },
+  {
+    "sourceIndex": 30,
+    "direction": "in",
+    "frame": {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "fixture-id-1",
+        "turnId": "fixture-id-2",
+        "itemId": "msg_067d85434e8815df016abdf6725b4087d1afa1def941df71e9",
+        "delta": "DEFAULT"
+      },
+      "emittedAtMs": 1790834290372
+    }
+  },
+  {
+    "sourceIndex": 31,
+    "direction": "in",
+    "frame": {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "fixture-id-1",
+        "turnId": "fixture-id-2",
+        "itemId": "msg_067d85434e8815df016abdf6725b4087d1afa1def941df71e9",
+        "delta": " DATE"
+      },
+      "emittedAtMs": 1790834290391
+    }
+  },
+  {
+    "sourceIndex": 32,
+    "direction": "in",
+    "frame": {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "fixture-id-1",
+        "turnId": "fixture-id-2",
+        "itemId": "msg_067d85434e8815df016abdf6725b4087d1afa1def941df71e9",
+        "delta": " WINDOW"
+      },
+      "emittedAtMs": 1790834290413
+    }
+  },
+  {
+    "sourceIndex": 33,
+    "direction": "in",
+    "frame": {
+      "method": "item/completed",
+      "params": {
+        "item": {
+          "type": "agentMessage",
+          "id": "msg_067d85434e8815df016abdf6725b4087d1afa1def941df71e9",
+          "text": "DEFAULT DATE WINDOW",
+          "phase": "final_answer",
+          "memoryCitation": null,
+          "delivery": null,
+          "questions": null
+        },
+        "threadId": "fixture-id-1",
+        "turnId": "fixture-id-2",
+        "completedAtMs": 1790834290525
+      },
+      "emittedAtMs": 1790834290528
+    }
+  },
+  {
+    "sourceIndex": 34,
+    "direction": "in",
+    "frame": {
+      "method": "thread/tokenUsage/updated",
+      "params": {
+        "threadId": "fixture-id-1",
+        "turnId": "fixture-id-2",
+        "tokenUsage": {
+          "total": {
+            "totalTokens": 45973,
+            "inputTokens": 45865,
+            "cachedInputTokens": 40192,
+            "cacheWriteInputTokens": 0,
+            "outputTokens": 108,
+            "reasoningOutputTokens": 0
+          },
+          "last": {
+            "totalTokens": 15455,
+            "inputTokens": 15448,
+            "cachedInputTokens": 15104,
+            "cacheWriteInputTokens": 0,
+            "outputTokens": 7,
+            "reasoningOutputTokens": 0
+          },
+          "modelContextWindow": 258400
+        }
+      },
+      "emittedAtMs": 1790834290551
+    }
+  },
+  {
+    "sourceIndex": 37,
+    "direction": "in",
+    "frame": {
+      "method": "turn/completed",
+      "params": {
+        "threadId": "fixture-id-1",
+        "turn": {
+          "id": "fixture-id-2",
+          "items": [
+            {
+              "type": "agentMessage",
+              "id": "msg_067d85434e8815df016abdf6725b4087d1afa1def941df71e9",
+              "text": "DEFAULT DATE WINDOW",
+              "phase": "final_answer",
+              "memoryCitation": null,
+              "delivery": null,
+              "questions": null
+            }
+          ],
+          "itemsView": "summary",
+          "status": "completed",
+          "error": null,
+          "startedAt": 1790834285,
+          "completedAt": 1790834290,
+          "durationMs": 5523
+        }
+      },
+      "emittedAtMs": 1790834290554
+    }
+  }
+]

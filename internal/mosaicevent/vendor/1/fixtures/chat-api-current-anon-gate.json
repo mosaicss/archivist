@@ -1,0 +1,182 @@
+[
+  {
+    "type": "start",
+    "messageId": "chat-api-current-anon-gate",
+    "messageMetadata": {
+      "schemaVersion": "mosaic-event/1"
+    }
+  },
+  {
+    "type": "data-conversation-id",
+    "data": {
+      "conversationId": "fixture-conversation"
+    },
+    "transient": true
+  },
+  {
+    "type": "text-start",
+    "id": "anon-answer-3"
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-3",
+    "delta": "Public "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-3",
+    "delta": "answer "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-3",
+    "delta": "[cite:1] "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-3",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-3",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-3",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-3",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-3",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-3",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-3",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-3",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-3",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-3",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-3",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-3",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-3",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-3",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-3",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-3",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-3",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-3",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-3",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-3",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-3",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-3",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-3",
+    "delta": "visible "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-3",
+    "delta": "words "
+  },
+  {
+    "type": "text-delta",
+    "id": "anon-answer-3",
+    "delta": "visible "
+  },
+  {
+    "type": "text-end",
+    "id": "anon-answer-3"
+  },
+  {
+    "type": "data-teaser-tail",
+    "transient": true,
+    "data": {
+      "text": "words visible words visible words visible words visible words visible words visible words visible words visible words visible words visible words visible words visible words visible words visible words visible words visible words visible words visible words visible words visible words visible words visible words visible words visible words visible words visible words visible words visible words visible words visible words visible words visible words visible words visible words visible words visible words visible words visible words visible words visible words visible words visible words "
+    }
+  },
+  {
+    "type": "data-teaser-gate",
+    "transient": true,
+    "data": {
+      "conversationId": "fixture-conversation",
+      "remainingChars": null
+    }
+  },
+  {
+    "type": "finish"
+  }
+]

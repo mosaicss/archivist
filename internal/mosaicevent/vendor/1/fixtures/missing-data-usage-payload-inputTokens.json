@@ -1,0 +1,9 @@
+[
+  {
+    "type": "data-usage",
+    "data": {
+      "outputTokens": 0,
+      "model": "fixture"
+    }
+  }
+]

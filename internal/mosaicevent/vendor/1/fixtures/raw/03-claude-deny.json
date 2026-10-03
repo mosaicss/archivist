@@ -1,0 +1,773 @@
+[
+  {
+    "sourceIndex": 0,
+    "direction": "out",
+    "frame": {
+      "message": {
+        "content": "Remember the codeword spike-kiwi-783. Then run exactly this shell command with the Bash tool in the current directory: touch spike-78-3.txt && echo spike-78-3 . Reply with the command output only.",
+        "role": "user"
+      },
+      "type": "user"
+    }
+  },
+  {
+    "sourceIndex": 5,
+    "direction": "in",
+    "frame": {
+      "type": "stream_event",
+      "event": {
+        "type": "message_start",
+        "message": {
+          "model": "claude-sonnet-5",
+          "id": "msg_011Cfb17FxbKJjTwAVjJgYwd",
+          "type": "message",
+          "role": "assistant",
+          "content": [],
+          "container": null,
+          "stop_reason": null,
+          "stop_sequence": null,
+          "stop_details": null,
+          "usage": {
+            "input_tokens": 2,
+            "cache_creation_input_tokens": 7611,
+            "cache_read_input_tokens": 11857,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 7611
+            },
+            "output_tokens": 16,
+            "service_tier": "standard",
+            "inference_geo": "not_available"
+          },
+          "input_transformations": [],
+          "diagnostics": null,
+          "context_management": null
+        }
+      },
+      "session_id": "fixture-id-1",
+      "parent_tool_use_id": null,
+      "uuid": "fixture-id-2",
+      "ttft_ms": 1382
+    }
+  },
+  {
+    "sourceIndex": 6,
+    "direction": "in",
+    "frame": {
+      "type": "stream_event",
+      "event": {
+        "type": "content_block_start",
+        "index": 0,
+        "content_block": {
+          "type": "tool_use",
+          "id": "toolu_01UFWSuco2YjpWfNKgFuYVTs",
+          "name": "Bash",
+          "input": {},
+          "caller": {
+            "type": "direct"
+          }
+        }
+      },
+      "session_id": "fixture-id-1",
+      "parent_tool_use_id": null,
+      "uuid": "fixture-id-3"
+    }
+  },
+  {
+    "sourceIndex": 7,
+    "direction": "in",
+    "frame": {
+      "type": "stream_event",
+      "event": {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {
+          "type": "input_json_delta",
+          "partial_json": ""
+        }
+      },
+      "session_id": "fixture-id-1",
+      "parent_tool_use_id": null,
+      "uuid": "fixture-id-4"
+    }
+  },
+  {
+    "sourceIndex": 8,
+    "direction": "in",
+    "frame": {
+      "type": "stream_event",
+      "event": {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {
+          "type": "input_json_delta",
+          "partial_json": "{\"command\": \"touch spike-"
+        }
+      },
+      "session_id": "fixture-id-1",
+      "parent_tool_use_id": null,
+      "uuid": "fixture-id-5"
+    }
+  },
+  {
+    "sourceIndex": 9,
+    "direction": "in",
+    "frame": {
+      "type": "stream_event",
+      "event": {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {
+          "type": "input_json_delta",
+          "partial_json": "78-3.txt && ech"
+        }
+      },
+      "session_id": "fixture-id-1",
+      "parent_tool_use_id": null,
+      "uuid": "fixture-id-6"
+    }
+  },
+  {
+    "sourceIndex": 10,
+    "direction": "in",
+    "frame": {
+      "type": "stream_event",
+      "event": {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {
+          "type": "input_json_delta",
+          "partial_json": "o spike-78-3"
+        }
+      },
+      "session_id": "fixture-id-1",
+      "parent_tool_use_id": null,
+      "uuid": "fixture-id-7"
+    }
+  },
+  {
+    "sourceIndex": 11,
+    "direction": "in",
+    "frame": {
+      "type": "stream_event",
+      "event": {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {
+          "type": "input_json_delta",
+          "partial_json": "\", \"description\": \"Create"
+        }
+      },
+      "session_id": "fixture-id-1",
+      "parent_tool_use_id": null,
+      "uuid": "fixture-id-8"
+    }
+  },
+  {
+    "sourceIndex": 12,
+    "direction": "in",
+    "frame": {
+      "type": "stream_event",
+      "event": {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {
+          "type": "input_json_delta",
+          "partial_json": " mar"
+        }
+      },
+      "session_id": "fixture-id-1",
+      "parent_tool_use_id": null,
+      "uuid": "fixture-id-9"
+    }
+  },
+  {
+    "sourceIndex": 13,
+    "direction": "in",
+    "frame": {
+      "type": "stream_event",
+      "event": {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {
+          "type": "input_json_delta",
+          "partial_json": "ker file and ech"
+        }
+      },
+      "session_id": "fixture-id-1",
+      "parent_tool_use_id": null,
+      "uuid": "fixture-id-10"
+    }
+  },
+  {
+    "sourceIndex": 14,
+    "direction": "in",
+    "frame": {
+      "type": "stream_event",
+      "event": {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {
+          "type": "input_json_delta",
+          "partial_json": "o text"
+        }
+      },
+      "session_id": "fixture-id-1",
+      "parent_tool_use_id": null,
+      "uuid": "fixture-id-11"
+    }
+  },
+  {
+    "sourceIndex": 15,
+    "direction": "in",
+    "frame": {
+      "type": "stream_event",
+      "event": {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {
+          "type": "input_json_delta",
+          "partial_json": "\"}"
+        }
+      },
+      "session_id": "fixture-id-1",
+      "parent_tool_use_id": null,
+      "uuid": "fixture-id-12"
+    }
+  },
+  {
+    "sourceIndex": 16,
+    "direction": "in",
+    "frame": {
+      "type": "assistant",
+      "message": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011Cfb17FxbKJjTwAVjJgYwd",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "toolu_01UFWSuco2YjpWfNKgFuYVTs",
+            "name": "Bash",
+            "input": {
+              "command": "touch spike-78-3.txt && echo spike-78-3",
+              "description": "Create marker file and echo text"
+            },
+            "caller": {
+              "type": "direct"
+            }
+          }
+        ],
+        "container": null,
+        "stop_reason": null,
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 2,
+          "cache_creation_input_tokens": 7611,
+          "cache_read_input_tokens": 11857,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 7611
+          },
+          "output_tokens": 16,
+          "service_tier": "standard",
+          "inference_geo": "not_available"
+        },
+        "input_transformations": [],
+        "diagnostics": null,
+        "context_management": null
+      },
+      "parent_tool_use_id": null,
+      "session_id": "fixture-id-1",
+      "uuid": "fixture-id-13",
+      "timestamp": "2026-10-01T05:57:04.142Z",
+      "request_id": "req_011Cfb17FbztE8FWe3Nqt3Pw",
+      "wire_tool_inputs": {
+        "toolu_01UFWSuco2YjpWfNKgFuYVTs": {
+          "command": "touch spike-78-3.txt && echo spike-78-3",
+          "description": "Create marker file and echo text"
+        }
+      }
+    }
+  },
+  {
+    "sourceIndex": 17,
+    "direction": "in",
+    "frame": {
+      "type": "stream_event",
+      "event": {
+        "type": "content_block_stop",
+        "index": 0
+      },
+      "session_id": "fixture-id-1",
+      "parent_tool_use_id": null,
+      "uuid": "fixture-id-14"
+    }
+  },
+  {
+    "sourceIndex": 18,
+    "direction": "in",
+    "frame": {
+      "type": "control_request",
+      "request_id": "fixture-id-15",
+      "request": {
+        "subtype": "can_use_tool",
+        "tool_name": "Bash",
+        "display_name": "Bash",
+        "input": {
+          "command": "touch spike-78-3.txt && echo spike-78-3",
+          "description": "Create marker file and echo text"
+        },
+        "description": "Create marker file and echo text",
+        "permission_suggestions": [
+          {
+            "type": "addRules",
+            "rules": [
+              {
+                "toolName": "Bash",
+                "ruleContent": "touch spike-78-3.txt && echo spike-78-3"
+              }
+            ],
+            "behavior": "allow",
+            "destination": "localSettings"
+          },
+          {
+            "type": "addDirectories",
+            "directories": [
+              "/fixture/workdir"
+            ],
+            "destination": "session"
+          },
+          {
+            "type": "setMode",
+            "mode": "acceptEdits",
+            "destination": "session"
+          }
+        ],
+        "blocked_path": "/fixture/workdir",
+        "tool_use_id": "toolu_01UFWSuco2YjpWfNKgFuYVTs"
+      }
+    }
+  },
+  {
+    "sourceIndex": 19,
+    "direction": "out",
+    "frame": {
+      "response": {
+        "request_id": "fixture-id-15",
+        "response": {
+          "behavior": "deny",
+          "message": "Denied by the 78.3 spike harness."
+        },
+        "subtype": "success"
+      },
+      "type": "control_response"
+    }
+  },
+  {
+    "sourceIndex": 20,
+    "direction": "in",
+    "frame": {
+      "type": "stream_event",
+      "event": {
+        "type": "message_delta",
+        "delta": {
+          "stop_reason": "tool_use",
+          "stop_sequence": null,
+          "stop_details": null,
+          "container": null
+        },
+        "usage": {
+          "input_tokens": 2,
+          "cache_creation_input_tokens": 7611,
+          "cache_read_input_tokens": 11857,
+          "output_tokens": 95,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "iterations": [
+            {
+              "input_tokens": 2,
+              "output_tokens": 95,
+              "cache_read_input_tokens": 11857,
+              "cache_creation_input_tokens": 7611,
+              "cache_creation": {
+                "ephemeral_5m_input_tokens": 0,
+                "ephemeral_1h_input_tokens": 7611
+              },
+              "type": "message"
+            }
+          ]
+        },
+        "context_management": {
+          "applied_edits": []
+        }
+      },
+      "session_id": "fixture-id-1",
+      "parent_tool_use_id": null,
+      "uuid": "fixture-id-16"
+    }
+  },
+  {
+    "sourceIndex": 21,
+    "direction": "in",
+    "frame": {
+      "type": "stream_event",
+      "event": {
+        "type": "message_stop"
+      },
+      "session_id": "fixture-id-1",
+      "parent_tool_use_id": null,
+      "uuid": "fixture-id-17"
+    }
+  },
+  {
+    "sourceIndex": 22,
+    "direction": "in",
+    "frame": {
+      "type": "user",
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "content": "Denied by the 78.3 spike harness.",
+            "is_error": true,
+            "tool_use_id": "toolu_01UFWSuco2YjpWfNKgFuYVTs"
+          }
+        ]
+      },
+      "parent_tool_use_id": null,
+      "session_id": "fixture-id-1",
+      "uuid": "fixture-id-18",
+      "timestamp": "2026-10-01T05:57:04.161Z",
+      "tool_use_result": "Error: Denied by the 78.3 spike harness.",
+      "tool_result_meta": [
+        {
+          "id": "toolu_01UFWSuco2YjpWfNKgFuYVTs",
+          "non_execution_kind": "permission-rule"
+        }
+      ]
+    }
+  },
+  {
+    "sourceIndex": 25,
+    "direction": "in",
+    "frame": {
+      "type": "stream_event",
+      "event": {
+        "type": "message_start",
+        "message": {
+          "model": "claude-sonnet-5",
+          "id": "msg_011Cfb17QQqMxA9t5Dpcke6x",
+          "type": "message",
+          "role": "assistant",
+          "content": [],
+          "container": null,
+          "stop_reason": null,
+          "stop_sequence": null,
+          "stop_details": null,
+          "usage": {
+            "input_tokens": 2,
+            "cache_creation_input_tokens": 161,
+            "cache_read_input_tokens": 19468,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 161
+            },
+            "output_tokens": 8,
+            "service_tier": "standard",
+            "inference_geo": "not_available"
+          },
+          "input_transformations": [],
+          "diagnostics": null,
+          "context_management": null
+        }
+      },
+      "session_id": "fixture-id-1",
+      "parent_tool_use_id": null,
+      "uuid": "fixture-id-19",
+      "ttft_ms": 1020
+    }
+  },
+  {
+    "sourceIndex": 26,
+    "direction": "in",
+    "frame": {
+      "type": "stream_event",
+      "event": {
+        "type": "content_block_start",
+        "index": 0,
+        "content_block": {
+          "type": "text",
+          "text": ""
+        }
+      },
+      "session_id": "fixture-id-1",
+      "parent_tool_use_id": null,
+      "uuid": "fixture-id-20"
+    }
+  },
+  {
+    "sourceIndex": 27,
+    "direction": "in",
+    "frame": {
+      "type": "stream_event",
+      "event": {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {
+          "type": "text_delta",
+          "text": "Denied by the 78."
+        }
+      },
+      "session_id": "fixture-id-1",
+      "parent_tool_use_id": null,
+      "uuid": "fixture-id-21"
+    }
+  },
+  {
+    "sourceIndex": 28,
+    "direction": "in",
+    "frame": {
+      "type": "stream_event",
+      "event": {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {
+          "type": "text_delta",
+          "text": "3 spike harness."
+        }
+      },
+      "session_id": "fixture-id-1",
+      "parent_tool_use_id": null,
+      "uuid": "fixture-id-22"
+    }
+  },
+  {
+    "sourceIndex": 29,
+    "direction": "in",
+    "frame": {
+      "type": "assistant",
+      "message": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011Cfb17QQqMxA9t5Dpcke6x",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "Denied by the 78.3 spike harness."
+          }
+        ],
+        "container": null,
+        "stop_reason": null,
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 2,
+          "cache_creation_input_tokens": 161,
+          "cache_read_input_tokens": 19468,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 161
+          },
+          "output_tokens": 8,
+          "service_tier": "standard",
+          "inference_geo": "not_available"
+        },
+        "input_transformations": [],
+        "diagnostics": null,
+        "context_management": null
+      },
+      "parent_tool_use_id": null,
+      "session_id": "fixture-id-1",
+      "uuid": "fixture-id-23",
+      "timestamp": "2026-10-01T05:57:05.263Z",
+      "request_id": "req_011Cfb17Q4kJTvXu1e4SVa4S"
+    }
+  },
+  {
+    "sourceIndex": 30,
+    "direction": "in",
+    "frame": {
+      "type": "stream_event",
+      "event": {
+        "type": "content_block_stop",
+        "index": 0
+      },
+      "session_id": "fixture-id-1",
+      "parent_tool_use_id": null,
+      "uuid": "fixture-id-24"
+    }
+  },
+  {
+    "sourceIndex": 31,
+    "direction": "in",
+    "frame": {
+      "type": "stream_event",
+      "event": {
+        "type": "message_delta",
+        "delta": {
+          "stop_reason": "end_turn",
+          "stop_sequence": null,
+          "stop_details": null,
+          "container": null
+        },
+        "usage": {
+          "input_tokens": 2,
+          "cache_creation_input_tokens": 161,
+          "cache_read_input_tokens": 19468,
+          "output_tokens": 17,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "iterations": [
+            {
+              "input_tokens": 2,
+              "output_tokens": 17,
+              "cache_read_input_tokens": 19468,
+              "cache_creation_input_tokens": 161,
+              "cache_creation": {
+                "ephemeral_5m_input_tokens": 0,
+                "ephemeral_1h_input_tokens": 161
+              },
+              "type": "message"
+            }
+          ]
+        },
+        "context_management": {
+          "applied_edits": []
+        }
+      },
+      "session_id": "fixture-id-1",
+      "parent_tool_use_id": null,
+      "uuid": "fixture-id-25"
+    }
+  },
+  {
+    "sourceIndex": 32,
+    "direction": "in",
+    "frame": {
+      "type": "stream_event",
+      "event": {
+        "type": "message_stop"
+      },
+      "session_id": "fixture-id-1",
+      "parent_tool_use_id": null,
+      "uuid": "fixture-id-26"
+    }
+  },
+  {
+    "sourceIndex": 33,
+    "direction": "in",
+    "frame": {
+      "duration_api_ms": 3086,
+      "stop_reason": "end_turn",
+      "session_id": "fixture-id-1",
+      "total_cost_usd": 0.038481,
+      "usage": {
+        "input_tokens": 4,
+        "cache_creation_input_tokens": 7772,
+        "cache_read_input_tokens": 31325,
+        "output_tokens": 112,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "server_tool_use": {
+          "web_search_requests": 0,
+          "web_fetch_requests": 0
+        },
+        "service_tier": "standard",
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 7772,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "inference_geo": "not_available",
+        "iterations": [
+          {
+            "input_tokens": 2,
+            "output_tokens": 17,
+            "cache_read_input_tokens": 19468,
+            "cache_creation_input_tokens": 161,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 161
+            },
+            "type": "message"
+          }
+        ],
+        "speed": "standard"
+      },
+      "modelUsage": {
+        "claude-sonnet-5": {
+          "inputTokens": 4,
+          "outputTokens": 112,
+          "cacheReadInputTokens": 31325,
+          "cacheCreationInputTokens": 7772,
+          "webSearchRequests": 0,
+          "costUSD": 0.038481,
+          "contextWindow": 1000000,
+          "maxOutputTokens": 64000,
+          "thinkingTokens": 0,
+          "canonicalModel": "claude-sonnet-5",
+          "provider": "firstParty",
+          "costBasis": "list"
+        }
+      },
+      "permission_denials": [
+        {
+          "tool_name": "Bash",
+          "tool_use_id": "toolu_01UFWSuco2YjpWfNKgFuYVTs",
+          "tool_input": {
+            "command": "touch spike-78-3.txt && echo spike-78-3",
+            "description": "Create marker file and echo text"
+          }
+        }
+      ],
+      "terminal_reason": "completed",
+      "fast_mode_state": "off",
+      "fast_mode_disabled_reason": "sdk_opt_in_required",
+      "subagent_stats": {
+        "spawned": 0,
+        "requested": {
+          "background": 0,
+          "foreground": 0,
+          "unset": 0
+        },
+        "started_in_background": 0,
+        "max_depth": 0,
+        "spawned_by_subagents": 0,
+        "completed": 0,
+        "failed": 0,
+        "killed": {
+          "parent": 0,
+          "user": 0,
+          "system": 0
+        },
+        "refused": {
+          "depth_limit": 0,
+          "concurrency_limit": 0,
+          "budget": 0
+        },
+        "by_type": {}
+      },
+      "is_error": false,
+      "num_turns": 2,
+      "subtype": "success",
+      "api_error_status": null,
+      "result": "Denied by the 78.3 spike harness.",
+      "ttft_ms": 2021,
+      "type": "result",
+      "duration_ms": 3161,
+      "uuid": "fixture-id-27",
+      "ttft_stream_ms": 1451,
+      "time_to_request_ms": 70,
+      "first_content_frame_ms": 1451,
+      "queued_turn_count": 0,
+      "result_index": 0
+    }
+  }
+]

@@ -1,0 +1,14 @@
+[
+  {
+    "kind": "event",
+    "schemaVersion": "mosaic-event/1",
+    "seq": 1,
+    "ts": 0,
+    "correlationId": "finite-producer",
+    "origin": "chat-api",
+    "type": "finish",
+    "payload": {
+      "type": "finish"
+    }
+  }
+]

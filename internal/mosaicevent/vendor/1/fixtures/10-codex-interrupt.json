@@ -1,0 +1,13 @@
+[
+  {
+    "type": "start",
+    "messageId": "fixture-id-2",
+    "messageMetadata": {
+      "schemaVersion": "mosaic-event/1"
+    }
+  },
+  {
+    "type": "abort",
+    "reason": "interrupted"
+  }
+]

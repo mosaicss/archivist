@@ -1,0 +1,157 @@
+[
+  {
+    "type": "start",
+    "messageId": "claude-turn-1",
+    "messageMetadata": {
+      "schemaVersion": "mosaic-event/1"
+    }
+  },
+  {
+    "type": "tool-input-start",
+    "toolCallId": "toolu_01V2W3NNSxooAXTCUUhcyMmf",
+    "toolName": "Bash"
+  },
+  {
+    "type": "tool-input-delta",
+    "toolCallId": "toolu_01V2W3NNSxooAXTCUUhcyMmf",
+    "inputTextDelta": ""
+  },
+  {
+    "type": "tool-input-delta",
+    "toolCallId": "toolu_01V2W3NNSxooAXTCUUhcyMmf",
+    "inputTextDelta": "{\"command\": \"touch sp"
+  },
+  {
+    "type": "tool-input-delta",
+    "toolCallId": "toolu_01V2W3NNSxooAXTCUUhcyMmf",
+    "inputTextDelta": "ike"
+  },
+  {
+    "type": "tool-input-delta",
+    "toolCallId": "toolu_01V2W3NNSxooAXTCUUhcyMmf",
+    "inputTextDelta": "-78"
+  },
+  {
+    "type": "tool-input-delta",
+    "toolCallId": "toolu_01V2W3NNSxooAXTCUUhcyMmf",
+    "inputTextDelta": "-3.txt && echo"
+  },
+  {
+    "type": "tool-input-delta",
+    "toolCallId": "toolu_01V2W3NNSxooAXTCUUhcyMmf",
+    "inputTextDelta": " spike-78-3"
+  },
+  {
+    "type": "tool-input-delta",
+    "toolCallId": "toolu_01V2W3NNSxooAXTCUUhcyMmf",
+    "inputTextDelta": "\", \"description\": \"Create file"
+  },
+  {
+    "type": "tool-input-delta",
+    "toolCallId": "toolu_01V2W3NNSxooAXTCUUhcyMmf",
+    "inputTextDelta": " and ech"
+  },
+  {
+    "type": "tool-input-delta",
+    "toolCallId": "toolu_01V2W3NNSxooAXTCUUhcyMmf",
+    "inputTextDelta": "o text"
+  },
+  {
+    "type": "tool-input-delta",
+    "toolCallId": "toolu_01V2W3NNSxooAXTCUUhcyMmf",
+    "inputTextDelta": "\"}"
+  },
+  {
+    "type": "tool-input-available",
+    "toolCallId": "toolu_01V2W3NNSxooAXTCUUhcyMmf",
+    "toolName": "Bash",
+    "input": {
+      "command": "touch spike-78-3.txt && echo spike-78-3",
+      "description": "Create file and echo text"
+    }
+  },
+  {
+    "type": "tool-approval-request",
+    "approvalId": "fixture-id-16",
+    "toolCallId": "toolu_01V2W3NNSxooAXTCUUhcyMmf",
+    "approvalDescriptor": {
+      "subtype": "can_use_tool",
+      "tool_name": "Bash",
+      "display_name": "Bash",
+      "input": {
+        "command": "touch spike-78-3.txt && echo spike-78-3",
+        "description": "Create file and echo text"
+      },
+      "description": "Create file and echo text",
+      "permission_suggestions": [
+        {
+          "type": "addRules",
+          "rules": [
+            {
+              "toolName": "Bash",
+              "ruleContent": "touch spike-78-3.txt && echo spike-78-3"
+            }
+          ],
+          "behavior": "allow",
+          "destination": "localSettings"
+        },
+        {
+          "type": "addDirectories",
+          "directories": [
+            "/fixture/workdir"
+          ],
+          "destination": "session"
+        },
+        {
+          "type": "setMode",
+          "mode": "acceptEdits",
+          "destination": "session"
+        }
+      ],
+      "blocked_path": "/fixture/workdir",
+      "tool_use_id": "toolu_01V2W3NNSxooAXTCUUhcyMmf"
+    }
+  },
+  {
+    "type": "tool-approval-response",
+    "approvalId": "fixture-id-16",
+    "approved": true
+  },
+  {
+    "type": "tool-output-available",
+    "toolCallId": "toolu_01V2W3NNSxooAXTCUUhcyMmf",
+    "output": "spike-78-3"
+  },
+  {
+    "type": "text-start",
+    "id": "msg_011Cfb16emkw9bv7tE8BwRng:0"
+  },
+  {
+    "type": "text-delta",
+    "id": "msg_011Cfb16emkw9bv7tE8BwRng:0",
+    "delta": "sp"
+  },
+  {
+    "type": "text-delta",
+    "id": "msg_011Cfb16emkw9bv7tE8BwRng:0",
+    "delta": "ike-78-3"
+  },
+  {
+    "type": "text-end",
+    "id": "msg_011Cfb16emkw9bv7tE8BwRng:0"
+  },
+  {
+    "type": "data-usage",
+    "data": {
+      "inputTokens": 39084,
+      "outputTokens": 101,
+      "cachedInputTokens": 31325,
+      "reasoningTokens": 0,
+      "model": "claude-sonnet-5"
+    }
+  },
+  {
+    "type": "finish",
+    "finishReason": "stop"
+  }
+]

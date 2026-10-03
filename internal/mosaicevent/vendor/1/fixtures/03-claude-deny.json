@@ -1,0 +1,153 @@
+[
+  {
+    "type": "start",
+    "messageId": "claude-turn-1",
+    "messageMetadata": {
+      "schemaVersion": "mosaic-event/1"
+    }
+  },
+  {
+    "type": "tool-input-start",
+    "toolCallId": "toolu_01UFWSuco2YjpWfNKgFuYVTs",
+    "toolName": "Bash"
+  },
+  {
+    "type": "tool-input-delta",
+    "toolCallId": "toolu_01UFWSuco2YjpWfNKgFuYVTs",
+    "inputTextDelta": ""
+  },
+  {
+    "type": "tool-input-delta",
+    "toolCallId": "toolu_01UFWSuco2YjpWfNKgFuYVTs",
+    "inputTextDelta": "{\"command\": \"touch spike-"
+  },
+  {
+    "type": "tool-input-delta",
+    "toolCallId": "toolu_01UFWSuco2YjpWfNKgFuYVTs",
+    "inputTextDelta": "78-3.txt && ech"
+  },
+  {
+    "type": "tool-input-delta",
+    "toolCallId": "toolu_01UFWSuco2YjpWfNKgFuYVTs",
+    "inputTextDelta": "o spike-78-3"
+  },
+  {
+    "type": "tool-input-delta",
+    "toolCallId": "toolu_01UFWSuco2YjpWfNKgFuYVTs",
+    "inputTextDelta": "\", \"description\": \"Create"
+  },
+  {
+    "type": "tool-input-delta",
+    "toolCallId": "toolu_01UFWSuco2YjpWfNKgFuYVTs",
+    "inputTextDelta": " mar"
+  },
+  {
+    "type": "tool-input-delta",
+    "toolCallId": "toolu_01UFWSuco2YjpWfNKgFuYVTs",
+    "inputTextDelta": "ker file and ech"
+  },
+  {
+    "type": "tool-input-delta",
+    "toolCallId": "toolu_01UFWSuco2YjpWfNKgFuYVTs",
+    "inputTextDelta": "o text"
+  },
+  {
+    "type": "tool-input-delta",
+    "toolCallId": "toolu_01UFWSuco2YjpWfNKgFuYVTs",
+    "inputTextDelta": "\"}"
+  },
+  {
+    "type": "tool-input-available",
+    "toolCallId": "toolu_01UFWSuco2YjpWfNKgFuYVTs",
+    "toolName": "Bash",
+    "input": {
+      "command": "touch spike-78-3.txt && echo spike-78-3",
+      "description": "Create marker file and echo text"
+    }
+  },
+  {
+    "type": "tool-approval-request",
+    "approvalId": "fixture-id-15",
+    "toolCallId": "toolu_01UFWSuco2YjpWfNKgFuYVTs",
+    "approvalDescriptor": {
+      "subtype": "can_use_tool",
+      "tool_name": "Bash",
+      "display_name": "Bash",
+      "input": {
+        "command": "touch spike-78-3.txt && echo spike-78-3",
+        "description": "Create marker file and echo text"
+      },
+      "description": "Create marker file and echo text",
+      "permission_suggestions": [
+        {
+          "type": "addRules",
+          "rules": [
+            {
+              "toolName": "Bash",
+              "ruleContent": "touch spike-78-3.txt && echo spike-78-3"
+            }
+          ],
+          "behavior": "allow",
+          "destination": "localSettings"
+        },
+        {
+          "type": "addDirectories",
+          "directories": [
+            "/fixture/workdir"
+          ],
+          "destination": "session"
+        },
+        {
+          "type": "setMode",
+          "mode": "acceptEdits",
+          "destination": "session"
+        }
+      ],
+      "blocked_path": "/fixture/workdir",
+      "tool_use_id": "toolu_01UFWSuco2YjpWfNKgFuYVTs"
+    }
+  },
+  {
+    "type": "tool-approval-response",
+    "approvalId": "fixture-id-15",
+    "approved": false,
+    "reason": "Denied by the 78.3 spike harness."
+  },
+  {
+    "type": "tool-output-error",
+    "toolCallId": "toolu_01UFWSuco2YjpWfNKgFuYVTs",
+    "errorText": "Denied by the 78.3 spike harness."
+  },
+  {
+    "type": "text-start",
+    "id": "msg_011Cfb17QQqMxA9t5Dpcke6x:0"
+  },
+  {
+    "type": "text-delta",
+    "id": "msg_011Cfb17QQqMxA9t5Dpcke6x:0",
+    "delta": "Denied by the 78."
+  },
+  {
+    "type": "text-delta",
+    "id": "msg_011Cfb17QQqMxA9t5Dpcke6x:0",
+    "delta": "3 spike harness."
+  },
+  {
+    "type": "text-end",
+    "id": "msg_011Cfb17QQqMxA9t5Dpcke6x:0"
+  },
+  {
+    "type": "data-usage",
+    "data": {
+      "inputTokens": 39101,
+      "outputTokens": 112,
+      "cachedInputTokens": 31325,
+      "reasoningTokens": 0,
+      "model": "claude-sonnet-5"
+    }
+  },
+  {
+    "type": "finish",
+    "finishReason": "stop"
+  }
+]

@@ -1,0 +1,86 @@
+[
+  {
+    "type": "start",
+    "messageId": "fixture-id-2",
+    "messageMetadata": {
+      "schemaVersion": "mosaic-event/1"
+    }
+  },
+  {
+    "type": "data-usage",
+    "data": {
+      "inputTokens": 15051,
+      "outputTokens": 45,
+      "cachedInputTokens": 11008,
+      "reasoningTokens": 0,
+      "model": "codex-captured"
+    }
+  },
+  {
+    "type": "tool-input-available",
+    "toolCallId": "exec-fixture-id-4",
+    "toolName": "archivist.explain_defaults",
+    "input": {}
+  },
+  {
+    "type": "tool-output-available",
+    "toolCallId": "exec-fixture-id-4",
+    "output": {
+      "content": [
+        {
+          "type": "text",
+          "text": "DEFAULT DATE WINDOW\n\n  When you pin a row to an issuer (issuer_key) without specifying date_from\n  / date_to, archivist fills \"Last 6 months\" automatically:\n\n    date_to   = today (UTC)\n    date_from = today minus 6 calendar months\n    label     = \"Last 6 months\"\n\n  This matches the web Table Mode default (Story 33.43).\n\nRECOMMENDED WINDOWS\n\n  Use case            Window\n  ------------------  ----------------------------------------\n  Recent filings      Last 6 months  (the default, fits most)\n  Annual cycle        Last 12 months\n  Multi-year compare  Up to 2 years  (hard cap, see below)\n\nHARD CAP (cascade rule)\n\n  Issuer-locked rows without a filing-type filter are capped at a\n  730-day (~2 year) date span. Longer spans are rejected at spec-\n  parse time (exit code 8). Add a formtype filter to scan farther\n  back, or shrink the window.\n\n  See 'archivist explain cascade' for the full rule.\n\nCASCADE PATTERN (filing types)\n\n  The same narrowing pattern that ties issuer to date defaults also\n  ties issuer to FILING TYPES. SEC issuers file SEC types (10-K,\n  10-Q, 8-K, etc.); SEDAR issuers file SEDAR types (MD&A, AIF, etc.).\n  archivist rejects invalid type-for-issuer combinations at spec-parse\n  time via the same cascade validator.\n"
+        }
+      ],
+      "structuredContent": null,
+      "_meta": null
+    }
+  },
+  {
+    "type": "data-usage",
+    "data": {
+      "inputTokens": 30417,
+      "outputTokens": 101,
+      "cachedInputTokens": 25088,
+      "reasoningTokens": 0,
+      "model": "codex-captured"
+    }
+  },
+  {
+    "type": "text-start",
+    "id": "msg_067d85434e8815df016abdf6725b4087d1afa1def941df71e9"
+  },
+  {
+    "type": "text-delta",
+    "id": "msg_067d85434e8815df016abdf6725b4087d1afa1def941df71e9",
+    "delta": "DEFAULT"
+  },
+  {
+    "type": "text-delta",
+    "id": "msg_067d85434e8815df016abdf6725b4087d1afa1def941df71e9",
+    "delta": " DATE"
+  },
+  {
+    "type": "text-delta",
+    "id": "msg_067d85434e8815df016abdf6725b4087d1afa1def941df71e9",
+    "delta": " WINDOW"
+  },
+  {
+    "type": "text-end",
+    "id": "msg_067d85434e8815df016abdf6725b4087d1afa1def941df71e9"
+  },
+  {
+    "type": "data-usage",
+    "data": {
+      "inputTokens": 45865,
+      "outputTokens": 108,
+      "cachedInputTokens": 40192,
+      "reasoningTokens": 0,
+      "model": "codex-captured"
+    }
+  },
+  {
+    "type": "finish",
+    "finishReason": "stop"
+  }
+]
