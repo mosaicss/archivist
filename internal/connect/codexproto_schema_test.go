@@ -5,7 +5,10 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -15,8 +18,11 @@ import (
 //
 // Regenerate (after `codex app-server generate-json-schema --experimental --out DIR`):
 //
-//	go test ./internal/connect/ -run TestCodexProtoMatchesSchema -codex-schema-src=DIR
-var codexSchemaSrc = flag.String("codex-schema-src", "", "regenerate testdata/codex-schema.json from this generate-json-schema output")
+//	go test ./internal/connect/ -run TestCodexProtoMatchesSchema -codex-schema-src=DIR -codex-schema-version=X.Y.Z
+var (
+	codexSchemaSrc     = flag.String("codex-schema-src", "", "regenerate testdata/codex-schema.json from this generate-json-schema output")
+	codexSchemaVersion = flag.String("codex-schema-version", "", "codex-cli version that produced -codex-schema-src (required with it)")
+)
 
 const codexSchemaFile = "testdata/codex-schema.json"
 
@@ -44,7 +50,10 @@ var codexSchemaDefs = []string{
 
 var codexMethodUnions = []string{"ClientRequest", "ClientNotification", "ServerRequest", "ServerNotification"}
 
-func regenerateCodexSchema(t *testing.T, dir string) {
+func regenerateCodexSchema(t *testing.T, dir, version string) {
+	if version == "" {
+		t.Fatal("-codex-schema-version is required with -codex-schema-src")
+	}
 	load := func(name string) map[string]any {
 		var v map[string]any
 		b, err := os.ReadFile(filepath.Join(dir, name))
@@ -84,7 +93,7 @@ func regenerateCodexSchema(t *testing.T, dir string) {
 		sort.Strings(names)
 		methods[n] = names
 	}
-	b, _ := json.MarshalIndent(map[string]any{"source": "codex-cli 0.160.0 generate-json-schema --experimental",
+	b, _ := json.MarshalIndent(map[string]any{"source": "codex-cli " + version + " generate-json-schema --experimental",
 		"definitions": out, "methods": methods}, "", " ")
 	if err := os.WriteFile(codexSchemaFile, append(b, '\n'), 0o644); err != nil {
 		t.Fatal(err)
@@ -107,6 +116,32 @@ func variants(d any) []map[string]any {
 	return out
 }
 
+// jsonFields maps each json-tagged field of struct type t to its struct
+// type (pointer and slice element types unwrapped) or nil.
+func jsonFields(t reflect.Type) map[string]reflect.Type {
+	for t.Kind() == reflect.Pointer || t.Kind() == reflect.Slice {
+		t = t.Elem()
+	}
+	out := map[string]reflect.Type{}
+	for i := range t.NumField() {
+		f := t.Field(i)
+		name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
+		if name == "" || name == "-" {
+			continue
+		}
+		ft := f.Type
+		for ft.Kind() == reflect.Pointer || ft.Kind() == reflect.Slice {
+			ft = ft.Elem()
+		}
+		if ft.Kind() == reflect.Struct {
+			out[name] = ft
+		} else {
+			out[name] = nil
+		}
+	}
+	return out
+}
+
 func enumOf(m map[string]any) []string {
 	var out []string
 	list, _ := m["enum"].([]any)
@@ -120,7 +155,7 @@ func enumOf(m map[string]any) []string {
 
 func TestCodexProtoMatchesSchema(t *testing.T) {
 	if *codexSchemaSrc != "" {
-		regenerateCodexSchema(t, *codexSchemaSrc)
+		regenerateCodexSchema(t, *codexSchemaSrc, *codexSchemaVersion)
 	}
 	b, err := os.ReadFile(codexSchemaFile)
 	if err != nil {
@@ -179,52 +214,98 @@ func TestCodexProtoMatchesSchema(t *testing.T) {
 		}
 		return set
 	}
+	// Fields the adapter sends or reads through map literals and raw maps
+	// (the codexproto structs are checked by reflection below).
 	fields := map[string][]string{
-		// sent
-		"InitializeParams":                        {"clientInfo", "capabilities"},
-		"ClientInfo":                              {"name", "title", "version"},
-		"InitializeCapabilities":                  {"experimentalApi", "requestAttestation"},
 		"GetAccountParams":                        {"refreshToken"},
 		"ModelListParams":                         {"cursor"},
-		"ThreadStartParams":                       {"model", "cwd", "approvalPolicy", "approvalsReviewer", "sandbox", "config", "ephemeral"},
-		"ThreadResumeParams":                      {"threadId", "model", "cwd", "approvalPolicy", "approvalsReviewer", "sandbox", "config", "excludeTurns"},
-		"TurnStartParams":                         {"threadId", "input"},
-		"TurnInterruptParams":                     {"threadId", "turnId"},
-		"ThreadBackgroundTerminalsCleanParams":    {"threadId"},
 		"CommandExecutionRequestApprovalResponse": {"decision"},
 		"FileChangeRequestApprovalResponse":       {"decision"},
 		"McpServerElicitationRequestResponse":     {"action", "content", "_meta"},
 		"PermissionsRequestApprovalResponse":      {"permissions", "scope"},
 		"ToolRequestUserInputResponse":            {"answers"},
-		// read
-		"InitializeResponse":                    {"codexHome"},
-		"GetAccountResponse":                    {"account", "requiresOpenaiAuth"},
-		"ModelListResponse":                     {"data", "nextCursor"},
-		"Model":                                 {"id", "model", "isDefault", "hidden"},
-		"ThreadStartResponse":                   {"thread", "model", "modelProvider", "cwd", "instructionSources", "approvalPolicy", "approvalsReviewer", "sandbox", "reasoningEffort"},
-		"ThreadResumeResponse":                  {"thread", "model", "modelProvider", "cwd", "instructionSources", "approvalPolicy", "approvalsReviewer", "sandbox", "reasoningEffort"},
-		"Thread":                                {"id"},
-		"TurnStartResponse":                     {"turn"},
-		"Turn":                                  {"id", "status", "error"},
-		"TurnStartedNotification":               {"threadId", "turn"},
-		"TurnCompletedNotification":             {"threadId", "turn"},
-		"ItemStartedNotification":               {"item", "threadId", "turnId"},
-		"ItemCompletedNotification":             {"item", "threadId", "turnId"},
-		"AgentMessageDeltaNotification":         {"itemId", "delta"},
-		"ReasoningSummaryTextDeltaNotification": {"itemId", "delta"},
-		"TurnPlanUpdatedNotification":           {"plan"},
-		"TurnPlanStep":                          {"step", "status"},
-		"ThreadTokenUsageUpdatedNotification":   {"tokenUsage"},
-		"ThreadTokenUsage":                      {"total"},
-		"TokenUsageBreakdown":                   {"inputTokens", "outputTokens", "cachedInputTokens", "reasoningOutputTokens"},
-		"McpServerStatusUpdatedNotification":    {"threadId", "name", "status", "error"},
-		"AccountUpdatedNotification":            {"authMode"},
-		"ServerRequestResolvedNotification":     {"threadId", "requestId"},
-		"ErrorNotification":                     {"willRetry"},
-		"FileUpdateChange":                      {"path", "diff", "kind"},
-		"CommandExecutionRequestApprovalParams": {"kind", "threadId", "turnId", "itemId", "command", "cwd", "reason", "availableDecisions"},
-		"FileChangeRequestApprovalParams":       {"threadId", "turnId", "itemId", "reason", "grantRoot"},
-		"McpServerElicitationRequestParams":     {"serverName", "turnId", "mode", "_meta"},
+		"AgentMessageDeltaNotification":           {"itemId", "delta"},
+		"ReasoningSummaryTextDeltaNotification":   {"itemId", "delta"},
+		"TurnPlanUpdatedNotification":             {"plan"},
+		"TurnPlanStep":                            {"step", "status"},
+		"ThreadTokenUsageUpdatedNotification":     {"tokenUsage"},
+		"ThreadTokenUsage":                        {"total"},
+		"TokenUsageBreakdown":                     {"inputTokens", "outputTokens", "cachedInputTokens", "reasoningOutputTokens"},
+		"ErrorNotification":                       {"willRetry"},
+		"FileUpdateChange":                        {"path", "diff", "kind"},
+		"CommandExecutionRequestApprovalParams":   {"command", "cwd", "reason", "availableDecisions"},
+		"FileChangeRequestApprovalParams":         {"reason", "grantRoot"},
+	}
+	// Every json-tagged field of each codexproto struct (nested structs
+	// included) must exist in the schema definition it maps to.
+	type structMap struct {
+		v      any
+		defs   []string
+		nested map[string]string   // field -> definition of its struct ("" = open JSON, unchecked)
+		only   map[string][]string // definition -> the only fields sent to it (shared structs)
+	}
+	threadFields := []string{"model", "cwd", "approvalPolicy", "approvalsReviewer", "sandbox", "config"}
+	for _, m := range []structMap{
+		{v: codexInitializeParams{}, defs: []string{"InitializeParams"},
+			nested: map[string]string{"clientInfo": "ClientInfo", "capabilities": "InitializeCapabilities"}},
+		{v: codexInitializeResult{}, defs: []string{"InitializeResponse"}},
+		{v: codexAccountRead{}, defs: []string{"GetAccountResponse"}, nested: map[string]string{"account": "Account"}},
+		{v: codexModelList{}, defs: []string{"ModelListResponse"}, nested: map[string]string{"data": "Model"}},
+		{v: codexThreadParams{}, defs: []string{"ThreadStartParams", "ThreadResumeParams"}, only: map[string][]string{
+			"ThreadStartParams":  append([]string{"ephemeral"}, threadFields...),
+			"ThreadResumeParams": append([]string{"threadId", "excludeTurns"}, threadFields...)}},
+		{v: codexThreadResult{}, defs: []string{"ThreadStartResponse", "ThreadResumeResponse"},
+			nested: map[string]string{"thread": "Thread", "sandbox": "SandboxPolicy"}},
+		{v: codexTurnStartParams{}, defs: []string{"TurnStartParams"}, nested: map[string]string{"input": "UserInput"}},
+		{v: codexTurnRef{}, defs: []string{"TurnInterruptParams"}},
+		{v: codexThreadRef{}, defs: []string{"ThreadBackgroundTerminalsCleanParams"}},
+		{v: codexTurnResult{}, defs: []string{"TurnStartResponse", "TurnStartedNotification", "TurnCompletedNotification"},
+			nested: map[string]string{"turn": "Turn"}},
+		{v: codexMCPStatus{}, defs: []string{"McpServerStatusUpdatedNotification"}},
+		{v: codexAccountUpdated{}, defs: []string{"AccountUpdatedNotification"}},
+		{v: codexItemEnvelope{}, defs: []string{"ItemStartedNotification", "ItemCompletedNotification"}},
+		{v: codexItemHead{}, defs: []string{"ThreadItem"}},
+		{v: codexApprovalHead{}, defs: []string{"CommandExecutionRequestApprovalParams", "FileChangeRequestApprovalParams"}},
+		{v: codexElicitation{}, defs: []string{"McpServerElicitationRequestParams"}, nested: map[string]string{"_meta": ""}},
+		{v: codexResolved{}, defs: []string{"ServerRequestResolvedNotification"}},
+	} {
+		tags := jsonFields(reflect.TypeOf(m.v))
+		if m.only != nil {
+			for name := range tags {
+				listed := false
+				for _, fs := range m.only {
+					listed = listed || slices.Contains(fs, name)
+				}
+				if !listed {
+					t.Errorf("%T field %q is sent to no definition", m.v, name)
+				}
+			}
+		}
+		for _, d := range m.defs {
+			have := fieldsOf(d, "")
+			for name, sub := range tags {
+				if only, ok := m.only[d]; ok && !slices.Contains(only, name) {
+					continue
+				}
+				if !have[name] {
+					t.Errorf("%T field %q is not in %s", m.v, name, d)
+				}
+				def, ok := m.nested[name]
+				if sub == nil || (ok && def == "") {
+					continue
+				}
+				if !ok {
+					t.Errorf("%T field %q is a struct with no schema mapping", m.v, name)
+					continue
+				}
+				subHave := fieldsOf(def, "")
+				for f := range jsonFields(sub) {
+					if !subHave[f] {
+						t.Errorf("%T field %q.%q is not in %s", m.v, name, f, def)
+					}
+				}
+			}
+		}
 	}
 	for name, want := range fields {
 		have := fieldsOf(name, "")

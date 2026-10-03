@@ -369,11 +369,16 @@ func TestE2ELiveCodex(t *testing.T) {
 		turn("Use your shell tool to run exactly this command in the current directory (the user approves or declines it in their interface): mktemp; touch sandbox-7817.txt; touch " + outside + "; echo finished-7817 . Do not run any other command. Reply with only its output.")
 		answer("sandbox", "allow", "allow_once")
 		s.waitTurns(n, turnTimeout)
-		rec, _ := os.ReadFile(filepath.Join(home, ".archivist", "connect", "sessions", sid+".json"))
+		rec, err := os.ReadFile(filepath.Join(home, ".archivist", "connect", "sessions", sid+".json"))
+		if err != nil {
+			t.Fatalf("session record: %v", err)
+		}
 		var r struct {
 			Cwd string `json:"cwd"`
 		}
-		_ = json.Unmarshal(rec, &r)
+		if err := json.Unmarshal(rec, &r); err != nil || r.Cwd == "" {
+			t.Fatalf("session record has no cwd (%v): %s", err, rec)
+		}
 		_, inErr := os.Stat(filepath.Join(r.Cwd, "sandbox-7817.txt"))
 		_, outErr := os.Stat(outside)
 		tmpEntries, _ := os.ReadDir(filepath.Join(r.Cwd, ".tmp"))

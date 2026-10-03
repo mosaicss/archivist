@@ -518,6 +518,7 @@ func TestDetectCodexLogin(t *testing.T) {
 		{nil, "Logged in using ChatGPT\n", true, true},                      // codex-cli 0.160.0 (stderr, read combined)
 		{nil, "", false, false},                                             // nothing printed: not a ChatGPT login
 		{nil, "Logged in using an API key - sk-proj-***ABCD", false, false}, // API key login: not usable
+		{nil, "WARNING: proceeding, even though we could not create PATH aliases\nLogged in using ChatGPT", true, true}, // warning line first
 		{errors.New("exit status 1"), "Not logged in", false, false},
 		{nil, "Not logged in", false, false},
 		{errors.New("signal: killed"), "", false, false},
@@ -545,6 +546,18 @@ func TestDetectCodexLogin(t *testing.T) {
 				t.Errorf("codex probe env %v lacks the owner CODEX_HOME", env)
 			}
 		}
+	}
+	// An old version with an API key login reports the version first, and
+	// the key never reaches Login or Problem.
+	old := func(_ context.Context, _ []string, _ string, bin string, args ...string) ([]byte, error) {
+		if strings.Join(args, " ") == "--version" {
+			return []byte("codex-cli 0.159.2"), nil
+		}
+		return []byte("Logged in using an API key - sk-proj-AbCdEfGhIjKlMnOpQrStUvWx"), nil
+	}
+	d0 := DetectWith(context.Background(), DetectOptions{LookPath: look, Run: old, RunCombined: old, Dir: "/", CodexHome: owner})
+	if !strings.Contains(d0.Codex.Problem, "older than the supported floor") || strings.Contains(d0.Codex.Login+d0.Codex.Problem, "AbCdEfGh") {
+		t.Errorf("old version with API key: problem %q login %q", d0.Codex.Problem, d0.Codex.Login)
 	}
 	// Without an owner home (Detect) Codex is reported but never available.
 	d := Detect(context.Background(), look, runner(nil, "Logged in using ChatGPT"), nil, "/")

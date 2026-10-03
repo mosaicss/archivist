@@ -220,13 +220,14 @@ func detectCodex(ctx context.Context, o DetectOptions) CodexInfo {
 		runLogin = o.Run
 	}
 	out, loginErr := runLogin(ctx, env, o.Dir, path, "login", "status")
-	c.Login = firstLine(string(out))
+	c.Login = loginLine(string(out))
+	apiLogin := false
 	switch {
 	case loginErr != nil || strings.Contains(c.Login, "Not logged in"):
 	case strings.Contains(c.Login, "ChatGPT"):
 		c.LoggedIn = true
 	case c.Login != "":
-		c.Problem = fmt.Sprintf("Codex reports %q; archivist connect only drives a ChatGPT login (run 'codex login' and sign in with ChatGPT)", c.Login)
+		apiLogin = true
 	}
 	if c.Home != "" {
 		if st, err := os.Stat(filepath.Join(c.Home, "auth.json")); err == nil && st.Mode().IsRegular() {
@@ -234,11 +235,12 @@ func detectCodex(ctx context.Context, o DetectOptions) CodexInfo {
 		}
 	}
 	switch {
-	case c.Problem != "":
 	case c.Version == "":
 		c.Problem = "could not read the Codex version"
 	case !c.VersionOK:
 		c.Problem = fmt.Sprintf("Codex %s is older than the supported floor %s; update Codex", c.Version, CodexFloor)
+	case apiLogin:
+		c.Problem = fmt.Sprintf("Codex reports %q; archivist connect only drives a ChatGPT login (run 'codex login' and sign in with ChatGPT)", c.Login)
 	case !c.LoggedIn:
 		c.Problem = "Codex is not logged in; run 'codex login' and sign in with ChatGPT"
 	case c.Home == "":
@@ -247,6 +249,18 @@ func detectCodex(ctx context.Context, o DetectOptions) CodexInfo {
 		c.Problem = fmt.Sprintf("no auth.json in %s; run 'codex login' and sign in with ChatGPT", c.Home)
 	}
 	return c
+}
+
+// loginLine is the status line of `codex login status` output (other
+// lines, such as warnings, are ignored), scrubbed for logs and --check.
+func loginLine(out string) string {
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "Logged in") || strings.Contains(line, "Not logged in") {
+			return Scrub(truncateString(line, 200))
+		}
+	}
+	return ""
 }
 
 // OwnerCodexHome is the owner's Codex home: the daemon's CODEX_HOME when it

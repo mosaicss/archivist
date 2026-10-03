@@ -1246,3 +1246,51 @@ func TestThreadGoneMatchesOnlyMissingThread(t *testing.T) {
 		}
 	}
 }
+
+// ─── coordinator review rows (2) ────────────────────────────────────────────
+
+func TestCodexConnectionClosedDuringMCPWaitStaysResumable(t *testing.T) {
+	h := newCodexHarness(t, map[string]any{"closeBeforeMCP": true})
+	h.start()
+	sid := h.startCodexSession("echo never")
+	h.relay.waitStatus(t, sid, "failed", 1)
+	if errs := h.errorTexts(sid); len(errs) != 1 || !strings.Contains(errs[0], "connection to codex closed") {
+		t.Fatalf("errors %v", errs)
+	}
+	if rec := h.record(sid); rec.Status != "active" || rec.CodexThreadID == "" {
+		t.Fatalf("record %+v: a closed connection must leave the session resumable", rec)
+	}
+	pid := codexRuns(t, h.home)[0].PID
+	waitFor(t, 10*time.Second, "codex killed", func() bool { return gone(pid) })
+}
+
+func TestCodexMCPApprovalAfterCompletedCallHasOwnID(t *testing.T) {
+	h := newCodexHarness(t, nil)
+	h.start()
+	sid := h.startCodexSession("mcplate")
+	req := h.approve(sid, 1, "deny", "user", "")
+	h.waitFinishes(sid, 1)
+	if req["toolCallId"] != req["approvalId"] {
+		t.Fatalf("an approval after a completed MCP call was attached to it: %v", req)
+	}
+}
+
+func TestClaudeOrphansReapedWhenDaemonIsSubreaper(t *testing.T) {
+	h := newCodexHarness(t, nil) // Codex configured: the daemon is the subreaper
+	h.start()
+	if !h.d.reaping {
+		t.Skip("child subreaper unavailable on this platform")
+	}
+	sid := h.startSession("orphanexit")
+	h.waitFinishes(sid, 1)
+	b, err := os.ReadFile(filepath.Join(h.home, ".fakeclaude", "orphanexit.pid"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid, _ := strconv.Atoi(strings.TrimSpace(string(b)))
+	// The orphan exits after 0.3 s; the session's reap timer must reap it
+	// while the session still runs (a zombie still answers signal 0).
+	waitFor(t, 10*time.Second, "orphan reaped", func() bool { return pid > 0 && gone(pid) })
+	h.command(sid, "stop_session")
+	h.relay.waitStatus(t, sid, "completed", 1)
+}

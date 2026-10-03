@@ -32,12 +32,15 @@
 //	garbage          print a non-JSON stdout line, then finish
 //	exit             start streaming, then exit 3 mid-turn
 //	stdin            ask a kind:"writeStdin" command approval
+//	mcplate          complete an mcpToolCall, then ask an MCP tool approval
 //
 // config.json also sets mcpFail (archivist reports failed),
 // handshakeAccount (an account/updated before MCP ready) and
 // turnStartDelayMs (a slow turn/start reply), lateExtraMCP (another MCP
 // server reports after archivist is ready, at the first turn) and
-// resumeError (thread/resume answers this JSON-RPC error message).
+// resumeError (thread/resume answers this JSON-RPC error message) and
+// closeBeforeMCP (stdout closes before the MCP startup status; the
+// process stays alive).
 // Replies to requests the fake no longer waits for are recorded in
 // late-replies.jsonl.
 package main
@@ -76,6 +79,7 @@ type config struct {
 	HandshakeAccount   string   `json:"handshakeAccount"`
 	TurnStartDelayMs   int      `json:"turnStartDelayMs"`
 	LateExtraMCP       bool     `json:"lateExtraMCP"`
+	CloseBeforeMCP     bool     `json:"closeBeforeMCP"`
 	ResumeError        string   `json:"resumeError"`
 }
 
@@ -223,9 +227,18 @@ func (s *server) run() {
 			delete(s.waits, id)
 			s.mu.Unlock()
 			if ch == nil {
-				f, _ := os.OpenFile(filepath.Join(base, "late-replies.jsonl"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
-				_, _ = f.Write(append(append([]byte(nil), sc.Bytes()...), '\n'))
-				_ = f.Close()
+				// A lost record would hide a late reply: fail loudly instead.
+				f, err := os.OpenFile(filepath.Join(base, "late-replies.jsonl"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+				if err == nil {
+					_, err = f.Write(append(append([]byte(nil), sc.Bytes()...), '\n'))
+					if cerr := f.Close(); err == nil {
+						err = cerr
+					}
+				}
+				if err != nil {
+					fmt.Fprintln(os.Stderr, "fakecodex: late reply not recorded:", err)
+					os.Exit(4)
+				}
 			}
 			if ch != nil {
 				if len(m.Error) > 0 {
@@ -396,6 +409,13 @@ func (s *server) startMCP() {
 		notify("mcpServer/startupStatus/updated", map[string]any{"threadId": s.threadID, "name": name, "status": st,
 			"error": errText, "failureReason": nil})
 	}
+	if cfg.CloseBeforeMCP {
+		outMu.Lock()
+		_ = stdout.Flush()
+		_ = os.Stdout.Close()
+		outMu.Unlock()
+		return
+	}
 	if cfg.ExtraMCP {
 		status("codex_apps", "starting", nil)
 	}
@@ -547,6 +567,18 @@ func (s *server) turn(turn, text string, stop <-chan struct{}) {
 		t.fileChange(arg)
 	case "mcp":
 		t.mcpCall()
+	case "mcplate":
+		t.itemN++
+		id := fmt.Sprintf("mcp-%s-%d", turn[:8], t.itemN)
+		item := map[string]any{"type": "mcpToolCall", "id": id, "server": "archivist", "tool": "search", "status": "inProgress",
+			"arguments": map[string]any{}, "result": nil, "error": nil}
+		t.item("item/started", item)
+		item["status"], item["result"] = "completed", map[string]any{"content": []any{}}
+		t.item("item/completed", item)
+		r := s.ask("mcpServer/elicitation/request", t.with("serverName", "archivist", "mode", "form", "message", "Allow?",
+			"requestedSchema", map[string]any{"type": "object", "properties": map[string]any{}},
+			"_meta", map[string]any{"codex_approval_kind": "mcp_tool_call", "tool_name": "search"}))
+		t.say("mcplate: " + decisionOf(r))
 	case "stdin":
 		t.itemN++
 		id := fmt.Sprintf("exec-%s-%d", turn[:8], t.itemN)

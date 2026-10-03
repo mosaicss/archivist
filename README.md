@@ -253,9 +253,8 @@ For each "My Codex" session the daemon:
 - refuses the session (error plus a failed status, Codex stopped, nothing
   else sent) unless Codex reports the session home, a ChatGPT account, the
   `openai` provider, the untrusted approval policy reviewed by the user, the
-  workspace-write sandbox without network, extra roots, `/tmp` or `$TMPDIR`,
-  in the session directory, no instruction
-  files, and the archivist MCP server ready with no other MCP server. A later
+  workspace-write sandbox without network, extra roots, `/tmp` or `$TMPDIR`
+  (TMPDIR points inside the session directory), no instruction files, and the archivist MCP server ready with no other MCP server. A later
   switch away from the ChatGPT login ends the session the same way;
 - turns command, file change and archivist tool approvals into workspace
   cards. Your answer maps one to one onto Codex's choices: allow once is
