@@ -292,6 +292,8 @@ At most four harness processes run at once. A new session or a resume on a
 full daemon parks the least recently active idle session (no turn running, no
 approval open): its process stops and a `disconnected` status says the next
 message resumes it. When every session is busy, the new one is refused.
+The session-bound mode (`connect --session`) serves one session and never
+parks it.
 
 The session home is kept while the session can resume and removed when the
 session stops, fails or is found inactive at the next start.
