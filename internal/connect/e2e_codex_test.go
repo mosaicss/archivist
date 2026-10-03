@@ -373,6 +373,9 @@ func TestE2ELiveCodex(t *testing.T) {
 		turn("Run exactly the same shell command again: touch session-7817.txt . Do not run any other command. Reply with only done.")
 		s.waitTurns(n, turnTimeout)
 		ledger(fmt.Sprintf("accept for session: approval requests after the repeat %d (want 2)", len(s.of("tool-approval-request"))))
+		if len(s.of("tool-approval-request")) != 2 {
+			t.Errorf("accept for session: the identical command asked again")
+		}
 	}
 	if !restartOnly {
 		turn("Use your shell tool to run exactly this command in the current directory (the user approves or declines it in their interface): touch decline-7817.txt . Do not run any other command. Reply with only done.")
@@ -387,6 +390,9 @@ func TestE2ELiveCodex(t *testing.T) {
 		answer("cancel", "deny", "reject_always")
 		s.waitTurns(n, turnTimeout)
 		ledger(fmt.Sprintf("decisions %v; aborts %d; interrupted statuses %d", s.reasons(), len(s.of("abort")), s.countStatus("interrupted")))
+		if r := s.reasons(); len(r) < 3 || strings.Join(r[len(r)-3:], ",") != "decline,decline,cancel" || s.countStatus("interrupted") < 1 {
+			t.Errorf("decline/timeout/cancel decisions %v", r)
+		}
 
 		turn("Create a new file named notes-7817.txt containing the single line hello, by editing files (apply_patch), not with a shell command. Reply with only done.")
 		reqs := len(s.of("tool-approval-request"))
@@ -408,6 +414,9 @@ func TestE2ELiveCodex(t *testing.T) {
 		time.Sleep(3 * time.Second)
 		left := countProcs("sleep 120")
 		ledger(fmt.Sprintf("interrupt mid-command: aborts %d, interrupted statuses %d, sleep 120 processes left %d", len(s.of("abort")), s.countStatus("interrupted"), left))
+		if left != 0 {
+			t.Errorf("interrupt left %d sleep 120 processes", left)
+		}
 
 		turn("Reply with only the word alive.")
 		s.waitTurns(n, turnTimeout)

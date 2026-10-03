@@ -65,6 +65,8 @@ type codexThreadParams struct {
 	Sandbox           string         `json:"sandbox"`
 	Config            map[string]any `json:"config,omitempty"`
 	Ephemeral         *bool          `json:"ephemeral,omitempty"`
+	// ExcludeTurns (resume) returns thread metadata without its history.
+	ExcludeTurns bool `json:"excludeTurns,omitempty"`
 }
 
 // codexThreadResult is the thread/start and thread/resume response.

@@ -54,6 +54,12 @@ func jsonrpcFrame(line []byte) bool {
 	if hasID && !validRPCID(id) {
 		return false
 	}
+	if e, ok := f["error"]; ok {
+		var obj map[string]json.RawMessage
+		if s := string(bytes.TrimSpace(e)); s != "null" && (json.Unmarshal(e, &obj) != nil || obj == nil) {
+			return false // jsonrpc2 closes the connection on a non-object error
+		}
+	}
 	if m, ok := f["method"]; ok {
 		var method string
 		_, hasResult := f["result"]
@@ -68,13 +74,19 @@ func jsonrpcFrame(line []byte) bool {
 	return hasID && (hasResult || hasError)
 }
 
+// validRPCID accepts the ids jsonrpc2 handles: strings and integers in
+// 0..MaxInt64 (null would turn a request into a notification).
 func validRPCID(raw json.RawMessage) bool {
+	t := string(bytes.TrimSpace(raw))
+	if t == "null" {
+		return false
+	}
 	var s string
 	if json.Unmarshal(raw, &s) == nil {
 		return true
 	}
-	_, err := strconv.ParseUint(string(bytes.TrimSpace(raw)), 10, 64)
-	return err == nil
+	n, err := strconv.ParseInt(t, 10, 64)
+	return err == nil && n >= 0
 }
 
 // codexEvent is one Codex message for the session loop: a notification, a

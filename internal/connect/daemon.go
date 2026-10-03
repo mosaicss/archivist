@@ -152,6 +152,11 @@ func (d *Daemon) Run(ctx context.Context) error {
 	user.onConnect = func(l *live) {
 		det := d.detect(ctx)
 		caps := det.Capabilities()
+		// Available only for a harness this daemon drives (fixed at
+		// startup): a later login is reported, not offered.
+		for i := range caps {
+			caps[i].Available = caps[i].Available && d.agentUsable(caps[i].Agent)
+		}
 		l.Send(capabilitiesFrame(caps))
 		d.log.Printf("capabilities reported: %+v", caps)
 	}

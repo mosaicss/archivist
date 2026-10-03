@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -137,7 +138,8 @@ func (s *session) codexHome(resume bool) (string, error) {
 	}
 	ownerAuth := filepath.Join(owner, "auth.json")
 	if st, err := os.Stat(ownerAuth); err != nil || !st.Mode().IsRegular() {
-		return "", &proofError{fmt.Sprintf("no Codex login file at %s; run 'codex login' and sign in with ChatGPT", ownerAuth)}
+		// Transient (the owner may log in again): a resumable session stays so.
+		return "", fmt.Errorf("no Codex login file at %s; run 'codex login' and sign in with ChatGPT", ownerAuth)
 	}
 	if _, err := os.Stat(home); err != nil {
 		if resume {
@@ -182,7 +184,23 @@ type codexRun struct {
 	interruptWanted bool
 	// mcpItem is the latest in-progress mcpToolCall item (approval cards).
 	mcpItem string
+	// turnSeq numbers turn/start calls; a late reply of an older call is
+	// ignored (call results are queued apart from notifications).
+	turnSeq int
+	// started is the turn whose start chunk was sent (a repeated
+	// turn/started is not a new turn).
+	started string
 	pending map[string]*codexPending
+}
+
+// disconnected reports a closed JSON-RPC connection.
+func (c *codexRun) disconnected() bool {
+	select {
+	case <-c.rpc.conn.DisconnectNotify():
+		return true
+	default:
+		return false
+	}
 }
 
 // codexPending is a server approval request waiting for the relay.
@@ -270,6 +288,9 @@ func (s *session) codexHandshake(ctx context.Context, home, threadID string) err
 		params.Config = map[string]any{"model_reasoning_effort": s.d.codex.Effort}
 	}
 	var th codexThreadResult
+	if threadID != "" {
+		params.ExcludeTurns = true // no history in the reply (a long thread could exceed a line)
+	}
 	if threadID == "" {
 		persist := false
 		params.Ephemeral = &persist
@@ -321,6 +342,9 @@ func threadProblem(th codexThreadResult, cwd, resumed string) string {
 	}
 	if th.ApprovalsReviewer != "user" {
 		problems = append(problems, fmt.Sprintf("approvals reviewer %q, not \"user\"", th.ApprovalsReviewer))
+	}
+	if th.Cwd != "" && !samePath(th.Cwd, cwd) {
+		problems = append(problems, fmt.Sprintf("thread cwd %q, not the session directory", th.Cwd))
 	}
 	if th.Sandbox.Type != "workspaceWrite" {
 		problems = append(problems, fmt.Sprintf("sandbox %q, not \"workspaceWrite\"", th.Sandbox.Type))
@@ -378,6 +402,9 @@ func (s *session) codexAwaitMCP(ctx context.Context) error {
 		select {
 		case <-c.rpc.q.wake:
 		case <-ctx.Done():
+			if !errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				return ctx.Err() // the daemon is stopping: not a proof failure
+			}
 			return &proofError{"the archivist MCP server did not report ready"}
 		case <-s.procDone:
 			return errors.New("codex exited during startup")
@@ -440,9 +467,16 @@ func samePath(a, b string) bool {
 // codexSendUser starts a turn; the start chunk follows turn/started.
 func (s *session) codexSendUser(text string) {
 	c := s.cx
+	if c.disconnected() {
+		// Codex is gone; the exit path reports the unsent message.
+		s.queue = append(s.queue, text)
+		return
+	}
+	c.turnSeq++
 	c.rpc.dispatch("turn/start", codexTurnStartParams{ThreadID: c.threadID,
-		Input: []codexTextInput{{Type: "text", Text: text, TextElements: []any{}}}}, "turn/start")
+		Input: []codexTextInput{{Type: "text", Text: text, TextElements: []any{}}}}, "turn/start:"+strconv.Itoa(c.turnSeq))
 	c.turnID = ""
+	c.interruptWanted = false
 	s.turnActive = true
 }
 
@@ -491,12 +525,20 @@ func (s *session) codexEvent(ev codexEvent) {
 
 func (s *session) codexCallDone(ev codexEvent) {
 	c := s.cx
-	switch ev.Call {
+	call := ev.Call
+	if seq, ok := strings.CutPrefix(call, "turn/start:"); ok {
+		if seq != strconv.Itoa(c.turnSeq) {
+			return // a reply to an earlier turn/start: that turn is settled
+		}
+		call = "turn/start"
+	}
+	switch call {
 	case "turn/start":
 		if ev.Err != nil {
 			s.log.Printf("turn/start failed: %v", ev.Err)
 			s.emitError(Scrub("Codex did not start the turn: " + ev.Err.Error()))
 			s.turnActive = false
+			c.interruptWanted = false
 			s.stopInterruptTimer()
 			s.nextQueued()
 			return
@@ -532,9 +574,13 @@ func (s *session) codexNotification(ev codexEvent) {
 		}
 		return
 	case "turn/started":
-		s.lastUsage = nil
 		var r codexTurnResult
 		if json.Unmarshal(ev.Params, &r) == nil && r.Turn.ID != "" {
+			if r.Turn.ID == c.started {
+				return // repeated: the turn's start chunk was sent already
+			}
+			c.started = r.Turn.ID
+			s.lastUsage = nil
 			c.turnID = r.Turn.ID
 			if c.interruptWanted {
 				s.codexInterrupt()
@@ -564,8 +610,14 @@ func (s *session) codexNotification(ev codexEvent) {
 		return
 	case "mcpServer/startupStatus/updated":
 		var st codexMCPStatus
-		if json.Unmarshal(ev.Params, &st) == nil && st.Status != "ready" {
-			s.log.Printf("codex MCP server %q is %s", st.Name, st.Status)
+		if json.Unmarshal(ev.Params, &st) == nil {
+			if st.Name != "archivist" {
+				s.failProof(fmt.Sprintf("Codex started an MCP server other than archivist (%q)", st.Name))
+				return
+			}
+			if st.Status != "ready" {
+				s.log.Printf("codex MCP server %q is %s", st.Name, st.Status)
+			}
 		}
 		return
 	}
@@ -620,11 +672,14 @@ func (s *session) codexServerRequest(ev codexEvent) {
 			return
 		}
 		approvalID, _ := chunks[0]["approvalId"].(string)
-		c.pending[approvalID] = &codexPending{id: ev.ID, kind: kind, toolCallID: h.ItemID}
 		if s.proc != nil {
 			s.proc.Snapshot()
 		}
-		s.emitCodex(chunks...)
+		if !s.emitApproval(chunks[0]) {
+			reply(map[string]any{"decision": "decline"})
+			return
+		}
+		c.pending[approvalID] = &codexPending{id: ev.ID, kind: kind, toolCallID: h.ItemID}
 	case "mcpServer/elicitation/request":
 		var e codexElicitation
 		_ = json.Unmarshal(ev.Params, &e)
@@ -647,9 +702,12 @@ func (s *session) codexServerRequest(ev codexEvent) {
 			reply(map[string]any{"action": "decline", "content": nil, "_meta": nil})
 			return
 		}
+		if !s.emitApproval(Chunk{"type": "tool-approval-request", "approvalId": approvalID, "toolCallId": toolCallID,
+			"approvalDescriptor": descriptor}) {
+			reply(map[string]any{"action": "decline", "content": nil, "_meta": nil})
+			return
+		}
 		c.pending[approvalID] = &codexPending{id: ev.ID, kind: "mcp", toolCallID: toolCallID}
-		s.emitCodex(Chunk{"type": "tool-approval-request", "approvalId": approvalID, "toolCallId": toolCallID,
-			"approvalDescriptor": descriptor})
 	case "item/tool/requestUserInput":
 		s.log.Printf("codex asked for user input; answered with no answers")
 		reply(map[string]any{"answers": map[string]any{}})
@@ -699,7 +757,6 @@ func (s *session) codexAnswerApproval(in *Inbound) {
 			result = map[string]any{"action": "accept", "content": map[string]any{}, "_meta": nil}
 		case "acceptForSession":
 			result = map[string]any{"action": "accept", "content": map[string]any{}, "_meta": map[string]any{"persist": "session"}}
-			decision = "accept"
 		default:
 			result = map[string]any{"action": decision, "content": nil, "_meta": nil}
 		}
@@ -716,6 +773,18 @@ func (s *session) codexAnswerApproval(in *Inbound) {
 		}
 		s.emit(Chunk{"type": "data-permission-scope", "data": data})
 	}
+}
+
+// emitApproval queues an approval card; false means the card could not be
+// sent (it does not fit a relay frame even reduced), so the request is
+// declined instead of waiting for an answer that cannot come.
+func (s *session) emitApproval(c Chunk) bool {
+	s.flushCoalesced()
+	if s.outbox.Emit(c) == 0 {
+		s.log.Printf("approval card %v could not be sent; declined", c["approvalId"])
+		return false
+	}
+	return true
 }
 
 // emitCodex sends translated chunks, holding data-usage back so a turn

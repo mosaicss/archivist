@@ -31,6 +31,11 @@
 //	account          report an account/updated switch to API key auth
 //	garbage          print a non-JSON stdout line, then finish
 //	exit             start streaming, then exit 3 mid-turn
+//	stdin            ask a kind:"writeStdin" command approval
+//
+// config.json also sets mcpFail (archivist reports failed),
+// handshakeAccount (an account/updated before MCP ready) and
+// turnStartDelayMs (a slow turn/start reply).
 package main
 
 import (
@@ -63,6 +68,9 @@ type config struct {
 	InstructionSources []string `json:"instructionSources"`
 	ExtraMCP           bool     `json:"extraMCP"`
 	MCPApproval        bool     `json:"mcpApproval"`
+	MCPFail            bool     `json:"mcpFail"`
+	HandshakeAccount   string   `json:"handshakeAccount"`
+	TurnStartDelayMs   int      `json:"turnStartDelayMs"`
 }
 
 var (
@@ -324,6 +332,9 @@ func (s *server) handle(id json.RawMessage, method string, params json.RawMessag
 		s.interrupt = make(chan struct{})
 		turn, stop := s.turnID, s.interrupt
 		s.mu.Unlock()
+		if cfg.TurnStartDelayMs > 0 {
+			time.Sleep(time.Duration(cfg.TurnStartDelayMs) * time.Millisecond)
+		}
 		reply(id, map[string]any{"turn": map[string]any{"id": turn, "items": []any{}, "status": "inProgress", "error": nil}})
 		go s.turn(turn, text, stop)
 	case "turn/interrupt":
@@ -366,6 +377,13 @@ func (s *server) startMCP() {
 		return
 	}
 	status("archivist", "starting", nil)
+	if cfg.HandshakeAccount != "" {
+		notify("account/updated", map[string]any{"authMode": cfg.HandshakeAccount, "planType": nil})
+	}
+	if cfg.MCPFail {
+		status("archivist", "failed", "fake startup failure")
+		return
+	}
 	var command string
 	var args, enabled []string
 	_ = json.Unmarshal([]byte(s.overrides["mcp_servers.archivist.command"]), &command)
@@ -498,6 +516,12 @@ func (s *server) turn(turn, text string, stop <-chan struct{}) {
 		t.fileChange(arg)
 	case "mcp":
 		t.mcpCall()
+	case "stdin":
+		t.itemN++
+		id := fmt.Sprintf("exec-%s-%d", turn[:8], t.itemN)
+		r := s.ask("item/commandExecution/requestApproval", t.with("kind", "writeStdin", "itemId", id,
+			"startedAtMs", time.Now().UnixMilli(), "environmentId", "local", "approvalId", "stdin-1", "reason", "write to a running command"))
+		t.say("stdin: " + decisionOf(r))
 	case "elicit":
 		r := s.ask("mcpServer/elicitation/request", t.with("serverName", "archivist", "mode", "form", "message", "Pick one",
 			"requestedSchema", map[string]any{"type": "object", "properties": map[string]any{}}, "_meta", nil))
@@ -651,6 +675,7 @@ func (t *turnCtx) mcpCall() {
 			"message", "Allow archivist search?", "requestedSchema", map[string]any{"type": "object", "properties": map[string]any{}},
 			"_meta", map[string]any{"codex_approval_kind": "mcp_tool_call", "persist": []any{"session", "always"},
 				"tool_name": "search", "tool_params": args}))
+		_ = os.WriteFile(filepath.Join(base, "elicitation-reply.json"), r, 0o600)
 		if decisionOf(r) != "accept" {
 			item["status"] = "failed"
 			item["error"] = map[string]any{"message": "user rejected MCP tool call"}

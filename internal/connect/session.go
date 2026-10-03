@@ -177,6 +177,11 @@ func (s *session) run(ctx context.Context, prompt string) {
 			s.refreshToken(ctx)
 		case <-s.codexWake():
 			s.drainCodex()
+		case <-s.codexGone():
+			// The JSON-RPC connection closed (protocol error or EOF) while
+			// the process may still run: treat it as the process ending.
+			s.log.Printf("codex connection closed")
+			s.processExited()
 		case <-timerC(s.snapTimer):
 			s.snapshot()
 		}
@@ -191,6 +196,14 @@ func (s *session) codexWake() <-chan struct{} {
 	return s.cx.rpc.q.wake
 }
 
+// codexGone is closed when the Codex JSON-RPC connection ends.
+func (s *session) codexGone() <-chan struct{} {
+	if s.cx == nil {
+		return nil
+	}
+	return s.cx.rpc.conn.DisconnectNotify()
+}
+
 // snapshot records the harness's descendants (periodic, Codex).
 func (s *session) snapshot() {
 	s.snapTimer = nil
@@ -198,6 +211,7 @@ func (s *session) snapshot() {
 		return
 	}
 	s.proc.Snapshot()
+	reapZombies()
 	s.snapTimer = time.NewTimer(codexSnapshotEvery)
 }
 
@@ -470,6 +484,9 @@ func (s *session) processExited() {
 		case <-time.After(2 * time.Second):
 		}
 		s.drainCodex()
+		if s.proc != nil && len(s.queue) > 0 {
+			s.emitError(fmt.Sprintf("Codex exited before %d queued message(s) were sent; send them again.", len(s.queue)))
+		}
 	}
 	if s.proc == nil {
 		return
@@ -807,17 +824,20 @@ func (s *session) linkEnded(err error) {
 		s.d.store.RemoveRunDir(s.id)
 	default:
 		var fatal *FatalError
-		if errors.As(err, &fatal) {
+		isFatal := errors.As(err, &fatal)
+		if isFatal {
 			s.log.Printf("session socket stopped: %v", err)
 			s.rec.Status = "failed"
 			s.save()
 			removeSessionCwd(s.rec.Cwd)
-			if s.isCodex() {
-				s.d.store.RemoveCodexHome(s.id)
-			}
 		}
 		s.stopping = true
 		s.stopProcess(false)
+		// Only once Codex is gone: a running Codex could recreate the home
+		// (and, without the link, write a separate login there).
+		if isFatal && s.isCodex() {
+			s.d.store.RemoveCodexHome(s.id)
+		}
 		s.revokeToken()
 		s.d.store.RemoveRunDir(s.id)
 	}

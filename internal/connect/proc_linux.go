@@ -90,6 +90,12 @@ func sweepOrphans(owner *Proc, all bool) {
 			if e.pgid == selfPG || procRegistry.live[e.pid] != nil {
 				continue
 			}
+			if strings.HasPrefix(e.stat, "Z") {
+				// A dead orphan: reaping it harms no session, whoever owned it.
+				var ws syscall.WaitStatus
+				_, _ = syscall.Wait4(e.pid, &ws, syscall.WNOHANG, nil)
+				continue
+			}
 			if !takeAll && !owner.owns(e) {
 				continue
 			}
@@ -126,9 +132,10 @@ func sweepOrphans(owner *Proc, all bool) {
 }
 
 // owns reports whether an orphan is attributable to p: a descendant seen
-// in a snapshot, or a member of p's process group.
+// in a snapshot, or a member of p's process group or of a group led by a
+// process p tracked.
 func (p *Proc) owns(e psEntry) bool {
-	return p != nil && (p.isTracked(e.id) || e.pgid == p.PID())
+	return p != nil && (p.isTracked(e.id) || p.ownsGroup(e.pgid))
 }
 
 // subtree returns root and every descendant in the snapshot.
@@ -149,3 +156,17 @@ func subtree(root psEntry, children map[int][]psEntry) []psEntry {
 // SweepAllOrphans kills and reaps every orphan reparented to the daemon
 // (daemon exit, after every session stopped).
 func SweepAllOrphans() { sweepOrphans(nil, true) }
+
+// reapZombies reaps dead orphans adopted by the daemon (outside its own
+// process group and the harness registry), whoever they belonged to.
+func reapZombies() {
+	self, selfPG := os.Getpid(), syscall.Getpgrp()
+	procRegistry.mu.Lock()
+	defer procRegistry.mu.Unlock()
+	for _, e := range psTable() {
+		if e.ppid == self && e.pgid != selfPG && procRegistry.live[e.pid] == nil && strings.HasPrefix(e.stat, "Z") {
+			var ws syscall.WaitStatus
+			_, _ = syscall.Wait4(e.pid, &ws, syscall.WNOHANG, nil)
+		}
+	}
+}

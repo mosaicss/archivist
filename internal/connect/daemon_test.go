@@ -51,6 +51,7 @@ type harness struct {
 	// codex drives the fake Codex too (Story 78.17); codexModel and
 	// codexEffort are its local flags.
 	codex       bool
+	codexOff    bool // detect Codex as usable but leave the adapter unconfigured
 	codexModel  string
 	codexEffort string
 	d           *Daemon
@@ -103,7 +104,7 @@ func (h *harness) start() {
 		return "", exec.ErrNotFound
 	}
 	var codexCfg CodexConfig
-	if h.codex {
+	if h.codex && !h.codexOff {
 		codexCfg = CodexConfig{Bin: testCodexBinary(h.t), Version: "0.160.0", Model: h.codexModel, Effort: h.codexEffort,
 			OwnerHome: h.codexOwner(), Executable: archivistBin, BaseURL: h.api.srv.URL}
 	}

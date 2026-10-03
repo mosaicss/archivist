@@ -202,6 +202,39 @@ func (p *Proc) CloseStdin() {
 // grandchildren.
 func (p *Proc) Snapshot() {
 	p.track(descendants(p.PID()))
+	p.prune()
+}
+
+// prune forgets tracked processes that no longer exist (or whose pid now
+// names another process), so stops stay fast in long sessions.
+func (p *Proc) prune() {
+	live := liveIDs()
+	if live == nil {
+		return
+	}
+	p.trackMu.Lock()
+	defer p.trackMu.Unlock()
+	for id := range p.tracked {
+		if !live[id] {
+			delete(p.tracked, id)
+		}
+	}
+}
+
+// ownsGroup reports whether pgid is p's group or the group of a process p
+// tracked (a detached command that made itself a group leader).
+func (p *Proc) ownsGroup(pgid int) bool {
+	if pgid == p.PID() {
+		return true
+	}
+	p.trackMu.Lock()
+	defer p.trackMu.Unlock()
+	for id := range p.tracked {
+		if id.pid == pgid {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *Proc) track(ids []procID) {
@@ -260,6 +293,7 @@ func (p *Proc) killGroup(tracked []procID) {
 	pgid := p.PID()
 	tracked = append(tracked, descendants(pgid)...)
 	p.track(tracked)
+	p.prune()
 	tracked = p.trackedIDs()
 	if groupAlive(pgid) {
 		signalGroup(pgid, sigTerm)

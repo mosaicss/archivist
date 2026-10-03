@@ -137,6 +137,19 @@ func fit(c Chunk, wrap func(Chunk) ([]byte, error)) (pieces []Chunk, notes []str
 		reduced["input"] = truncateValue(c["input"])
 	case "tool-approval-request":
 		reduced["approvalDescriptor"] = reduceDescriptor(c["approvalDescriptor"])
+	case "data-patch":
+		// A diff too large for one frame is cut with the marker (the path
+		// and operation stay, so the change is still visible).
+		if d, ok := c["data"].(map[string]any); ok {
+			nd := copyChunk(d)
+			if diff, ok := d["diff"].(string); ok {
+				nd["diff"] = truncateString(diff, previewBytes)
+			}
+			if path, ok := d["path"].(string); ok {
+				nd["path"] = truncateString(path, 1000)
+			}
+			reduced["data"] = nd
+		}
 	default:
 		return nil, nil, fmt.Errorf("%v chunk of %d bytes exceeds the relay frame", c["type"], len(raw))
 	}
@@ -183,12 +196,32 @@ func reduceDescriptor(v any) any {
 	}
 	out := map[string]any{}
 	for _, k := range []string{"subtype", "tool_name", "display_name", "tool_use_id", "blocked_path",
-		"kind", "threadId", "turnId", "itemId", "approvalId", "serverName", "availableDecisions"} {
+		"kind", "threadId", "turnId", "itemId", "approvalId", "serverName"} {
 		if x, ok := d[k]; ok {
 			out[k] = x
 		}
 	}
-	for _, k := range []string{"description", "command", "cwd", "reason", "message"} {
+	// Codex decisions: the plain names only (amendment proposals can carry
+	// the whole command again).
+	if decisions, ok := d["availableDecisions"].([]any); ok {
+		names := []any{}
+		for _, x := range decisions {
+			if s, ok := x.(string); ok {
+				names = append(names, s)
+			}
+		}
+		out["availableDecisions"] = names
+	}
+	if meta, ok := d["_meta"].(map[string]any); ok {
+		m := map[string]any{}
+		for _, k := range []string{"codex_approval_kind", "tool_name"} {
+			if s, ok := meta[k].(string); ok {
+				m[k] = truncateString(s, 200)
+			}
+		}
+		out["_meta"] = m
+	}
+	for _, k := range []string{"description", "command", "cwd", "reason", "message", "grantRoot"} {
 		if s, ok := d[k].(string); ok {
 			out[k] = truncateString(s, 2000)
 		}
@@ -200,7 +233,8 @@ func reduceDescriptor(v any) any {
 		paths := []any{}
 		for _, c := range changes {
 			if m, ok := c.(map[string]any); ok && len(paths) < 200 {
-				paths = append(paths, map[string]any{"path": m["path"], "kind": m["kind"]})
+				path, _ := m["path"].(string)
+				paths = append(paths, map[string]any{"path": truncateString(path, 300), "kind": m["kind"]})
 			}
 		}
 		out["changes"] = paths

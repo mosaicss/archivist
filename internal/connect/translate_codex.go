@@ -219,9 +219,11 @@ func (t *CodexTranslator) fileDescriptor(p map[string]json.RawMessage) map[strin
 	var itemID string
 	_ = json.Unmarshal(p["itemId"], &itemID)
 	d["itemId"] = itemID
-	var reason *string
-	if json.Unmarshal(p["reason"], &reason) == nil && reason != nil {
-		d["reason"] = *reason
+	for _, k := range []string{"reason", "grantRoot"} {
+		var v *string
+		if json.Unmarshal(p[k], &v) == nil && v != nil {
+			d[k] = *v
+		}
 	}
 	if raw, ok := t.files[itemID]; ok {
 		var changes any

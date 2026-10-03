@@ -59,6 +59,26 @@ func startTime(pid int) string {
 	return strings.Join(strings.Fields(string(out)), " ")
 }
 
+// liveIDs is every current process identity (pid and start time) from one
+// ps call; nil when ps fails.
+func liveIDs() map[procID]bool {
+	out, err := exec.Command("ps", "-A", "-o", "pid=,lstart=").Output()
+	if err != nil {
+		return nil
+	}
+	live := map[procID]bool{}
+	for _, line := range bytes.Split(out, []byte("\n")) {
+		f := strings.Fields(string(line))
+		if len(f) < 2 {
+			continue
+		}
+		if pid, err := strconv.Atoi(f[0]); err == nil {
+			live[procID{pid: pid, start: strings.Join(f[1:], " ")}] = true
+		}
+	}
+	return live
+}
+
 // descendants lists every live descendant of root (any process group) with
 // its start time, via ps so it works on Linux and macOS. Errors yield nil.
 func descendants(root int) []procID {

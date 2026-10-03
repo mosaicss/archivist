@@ -403,8 +403,13 @@ func TestCodexSessionLifecycle(t *testing.T) {
 	// Two usage reports in one turn: only the last reaches the relay.
 	h.message(sid, "usage")
 	h.waitFinishes(sid, 3)
-	if n := len(h.relay.eventsOf(sid, "data-usage")); n != 3 {
-		t.Fatalf("usage events %d, want one per turn", n)
+	usage := h.relay.eventsOf(sid, "data-usage")
+	if len(usage) != 3 {
+		t.Fatalf("usage events %d, want one per turn", len(usage))
+	}
+	// The fake reports 10 then 20 input tokens in the usage turn: the last wins.
+	if got := usage[2]["payload"].(map[string]any)["data"].(map[string]any)["inputTokens"]; got != float64(20) {
+		t.Fatalf("usage turn reported inputTokens %v, want the last report (20)", got)
 	}
 
 	// Stop: completed, home, cwd and token gone, no process left.
@@ -826,4 +831,221 @@ func TestCodexStartRefusalsAndSweep(t *testing.T) {
 		_, err := os.Stat(home)
 		return os.IsNotExist(err)
 	})
+}
+
+// ─── review rows ────────────────────────────────────────────────────────────
+
+func TestCodexCapabilityOnlyWhenDriven(t *testing.T) {
+	h := newCodexHarness(t, nil)
+	h.codexOff = true
+	h.start()
+	caps := h.relay.lastCaps()
+	if len(caps) != 2 || caps[1].Agent != "codex" || caps[1].Available || !caps[1].LoggedIn {
+		t.Fatalf("an undriven Codex was offered: %+v", caps)
+	}
+}
+
+func TestCodexStaleTurnStartReplyIgnored(t *testing.T) {
+	c := &codexRun{turnSeq: 2, pending: map[string]*codexPending{}}
+	s := &session{cx: c}
+	s.codexCallDone(codexEvent{Call: "turn/start:1", Result: json.RawMessage(`{"turn":{"id":"old-turn"}}`)})
+	if c.turnID != "" {
+		t.Fatalf("a stale turn/start reply set turn %q", c.turnID)
+	}
+}
+
+func TestJSONRPCFrameFilterRejectsWhatClosesTheConn(t *testing.T) {
+	for _, line := range []string{
+		`{"id":null,"method":"item/commandExecution/requestApproval","params":{}}`,
+		`{"id":9223372036854775808,"method":"x"}`,
+		`{"id":1,"error":"boom"}`,
+	} {
+		if jsonrpcFrame([]byte(line)) {
+			t.Errorf("%s accepted", line)
+		}
+	}
+	if !jsonrpcFrame([]byte(`{"id":9223372036854775807,"method":"x"}`)) {
+		t.Error("max int64 id refused")
+	}
+}
+
+func TestOversizedCodexCardsAndPatchesFit(t *testing.T) {
+	o := newTestOutbox(t)
+	big := strings.Repeat("echo x; ", 20000)
+	card := Chunk{"type": "tool-approval-request", "approvalId": "t:approval:1", "toolCallId": "exec-1",
+		"approvalDescriptor": map[string]any{"kind": "command", "command": big, "cwd": "/w",
+			"availableDecisions": []any{"accept", map[string]any{"acceptWithExecpolicyAmendment": map[string]any{"execpolicy_amendment": []any{big}}}, "cancel"},
+			"commandActions":     []any{map[string]any{"command": big}}}}
+	if o.Emit(card) != 1 {
+		t.Fatal("an oversized command card was dropped")
+	}
+	patch := Chunk{"type": "data-patch", "data": map[string]any{"toolCallId": "p1", "path": "/w/a", "diff": strings.Repeat("+x\n", 40000), "operation": "add"}}
+	if o.Emit(patch) != 1 {
+		t.Fatal("an oversized patch was dropped")
+	}
+	raw := o.After(0)
+	if len(raw) != 2 || !strings.Contains(string(raw[1].raw), "truncated by archivist connect") {
+		t.Fatalf("outbox %d", len(raw))
+	}
+}
+
+func TestCodexMoreServerRequestRows(t *testing.T) {
+	h := newCodexHarness(t, map[string]any{"mcpApproval": true})
+	h.start()
+	// kind:"writeStdin" takes the command approval path.
+	sid := h.startCodexSession("stdin")
+	req := h.approve(sid, 1, "allow", "user", "")
+	h.waitFinishes(sid, 1)
+	if req["approvalDescriptor"].(map[string]any)["kind"] != "writeStdin" || !strings.Contains(h.relay.text(sid), "stdin: accept") {
+		t.Fatalf("writeStdin row: %v %q", req, h.relay.text(sid))
+	}
+	// MCP allow for session: accept with a session-only persist, never "always".
+	h.message(sid, "mcp")
+	h.approve(sid, 2, "allow", "user", "allow_always")
+	h.waitFinishes(sid, 2)
+	b, _ := os.ReadFile(filepath.Join(h.home, ".fakecodex", "elicitation-reply.json"))
+	if !strings.Contains(string(b), `"action":"accept"`) || !strings.Contains(string(b), `"persist":"session"`) || strings.Contains(string(b), "always") {
+		t.Fatalf("mcp allow for session reply %s", b)
+	}
+	// MCP deny for session: cancel.
+	h.message(sid, "mcp")
+	h.approve(sid, 3, "deny", "user", "reject_always")
+	h.waitFinishes(sid, 3)
+	b, _ = os.ReadFile(filepath.Join(h.home, ".fakecodex", "elicitation-reply.json"))
+	if !strings.Contains(string(b), `"action":"cancel"`) {
+		t.Fatalf("mcp deny for session reply %s", b)
+	}
+	reasons := []string{}
+	for _, r := range h.relay.eventsOf(sid, "tool-approval-response") {
+		reasons = append(reasons, r["payload"].(map[string]any)["reason"].(string))
+	}
+	if strings.Join(reasons, ",") != "accept,acceptForSession,cancel" {
+		t.Fatalf("decisions %v", reasons)
+	}
+}
+
+func TestCodexInterruptBeforeTurnStartReply(t *testing.T) {
+	h := newCodexHarness(t, map[string]any{"turnStartDelayMs": 700})
+	h.start()
+	sid := h.startCodexSession("echo first")
+	h.waitFinishes(sid, 1)
+	h.message(sid, "slow")
+	time.Sleep(150 * time.Millisecond) // turn/start sent, its reply still pending
+	h.command(sid, "interrupt")
+	h.waitFinishes(sid, 2)
+	if len(h.relay.eventsOf(sid, "abort")) != 1 {
+		t.Fatalf("deferred interrupt did not end the turn: %v", h.payloadTypes(sid))
+	}
+	h.message(sid, "echo next")
+	h.waitFinishes(sid, 3)
+	if len(h.relay.eventsOf(sid, "abort")) != 1 || !strings.Contains(h.relay.text(sid), "next") {
+		t.Fatal("the interrupt carried over to the next turn")
+	}
+}
+
+func TestCodexHandshakeProofRows(t *testing.T) {
+	for name, cfg := range map[string]map[string]any{
+		"account switch during handshake": {"handshakeAccount": "apikey"},
+		"archivist MCP failed":            {"mcpFail": true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newCodexHarness(t, cfg)
+			h.start()
+			sid := h.startCodexSession("echo must not run")
+			h.relay.waitStatus(t, sid, "failed", 1)
+			if types := strings.Join(h.payloadTypes(sid), " "); types != "data-session-status error data-session-status" {
+				t.Fatalf("events %s", types)
+			}
+		})
+	}
+}
+
+func TestCodexResumeEdgeRows(t *testing.T) {
+	h := newCodexHarness(t, nil)
+	h.start()
+	sid := h.startCodexSession("echo one")
+	h.waitFinishes(sid, 1)
+	home := filepath.Join(h.home, ".archivist", "connect", "codex-home", sid)
+	if err := h.stop(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Owner logged out: the resume fails but the session stays resumable.
+	ownerAuth := filepath.Join(h.codexOwner(), "auth.json")
+	saved, _ := os.ReadFile(ownerAuth)
+	_ = os.Remove(ownerAuth)
+	h.start()
+	h.message(sid, "echo two")
+	h.relay.waitStatus(t, sid, "failed", 1)
+	if h.record(sid).Status != "active" {
+		t.Fatal("a logged-out owner ended a resumable session")
+	}
+	if _, err := os.Stat(home); err != nil {
+		t.Fatal("home removed after a transient failure")
+	}
+	_ = os.WriteFile(ownerAuth, saved, 0o600)
+	h.message(sid, "echo three")
+	waitFor(t, 20*time.Second, "resumed", func() bool { return strings.Contains(h.relay.text(sid), "three") })
+	if err := h.stop(); err != nil {
+		t.Fatal(err)
+	}
+
+	// The auth link replaced by a regular file: fail closed.
+	link := filepath.Join(home, "auth.json")
+	_ = os.Remove(link)
+	_ = os.WriteFile(link, []byte(`{"copy":true}`), 0o600)
+	h.start()
+	h.message(sid, "echo four")
+	h.relay.waitStatus(t, sid, "failed", 2)
+	if errs := h.errorTexts(sid); !strings.Contains(errs[len(errs)-1], "not a link to the owner's login") {
+		t.Fatalf("errors %v", errs)
+	}
+	if err := h.stop(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Missing rollout with the home present: start a new session.
+	h2 := newCodexHarness(t, nil)
+	h2.start()
+	sid2 := h2.startCodexSession("echo one")
+	h2.waitFinishes(sid2, 1)
+	thread2 := h2.record(sid2).CodexThreadID
+	if err := h2.stop(); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.Remove(filepath.Join(h2.home, ".archivist", "connect", "codex-home", sid2, "sessions", thread2+".json"))
+	h2.start()
+	h2.message(sid2, "echo two")
+	waitFor(t, 20*time.Second, "failed", func() bool { return h2.record(sid2).Status == "failed" })
+	if errs := h2.errorTexts(sid2); len(errs) != 1 || !strings.Contains(errs[0], "could not resume the thread") {
+		t.Fatalf("errors %v", errs)
+	}
+}
+
+func TestCodexOrphanAttributionWithTwoSessions(t *testing.T) {
+	h := newCodexHarness(t, nil)
+	h.start()
+	a := h.startCodexSession("grandchild")
+	h.waitFinishes(a, 1)
+	grandA := readPID(t, filepath.Join(h.home, ".fakecodex", "grandchild.pid"))
+	_ = os.Remove(filepath.Join(h.home, ".fakecodex", "grandchild.pid"))
+	b := h.startCodexSession("grandchild")
+	h.waitFinishes(b, 1)
+	grandB := readPID(t, filepath.Join(h.home, ".fakecodex", "grandchild.pid"))
+	// Stopping A kills A's detached child, never B's.
+	h.command(a, "stop_session")
+	h.relay.waitStatus(t, a, "completed", 1)
+	waitFor(t, 15*time.Second, "A's grandchild killed", func() bool { return gone(grandA) })
+	time.Sleep(300 * time.Millisecond)
+	if gone(grandB) {
+		t.Fatal("stopping session A killed session B's process")
+	}
+	h.message(b, "echo still running")
+	h.waitFinishes(b, 2)
+	if err := h.stop(); err != nil {
+		t.Fatal(err)
+	}
+	if !gone(grandB) {
+		t.Fatal("B's grandchild survived Ctrl-C")
+	}
 }

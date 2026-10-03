@@ -11,3 +11,5 @@ func sweepOrphans(owner *Proc, all bool) {}
 
 // SweepAllOrphans is a no-op where the daemon cannot adopt orphans.
 func SweepAllOrphans() {}
+
+func reapZombies() {}
