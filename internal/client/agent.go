@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"net/url"
 )
 
@@ -80,6 +82,60 @@ func (c *Client) GetAgentSession(ctx context.Context, sessionID string) (*AgentS
 	var out AgentSession
 	if err := c.doJSON(ctx, http.MethodGet, "/agent-sessions/"+url.PathEscape(sessionID), nil, http.StatusOK, &out); err != nil {
 		return nil, err
+	}
+	return &out, nil
+}
+
+// Artifact is POST /artifacts' 201 body (Story 78.18).
+type Artifact struct {
+	ArtifactID string `json:"artifactId"`
+	OwnerID    string `json:"ownerId"`
+	SessionID  string `json:"sessionId"`
+	Name       string `json:"name"`
+	MediaType  string `json:"mediaType"`
+	Size       int64  `json:"size"`
+	Digest     string `json:"digest"`
+	CreatedAt  int64  `json:"createdAt"`
+}
+
+// PublishArtifact uploads one session artifact (POST /artifacts) as
+// multipart/form-data with exactly two fields: sessionId and file. The file
+// part carries name and mediaType as its Content-Type. It makes exactly one
+// attempt: a network error, 429 or 5xx is returned, never retried.
+func (c *Client) PublishArtifact(ctx context.Context, sessionID, name, mediaType string, data []byte) (*Artifact, error) {
+	var body bytes.Buffer
+	w := multipart.NewWriter(&body)
+	if err := w.WriteField("sessionId", sessionID); err != nil {
+		return nil, fmt.Errorf("encode request: %w", err)
+	}
+	h := textproto.MIMEHeader{}
+	h.Set("Content-Disposition", multipart.FileContentDisposition("file", name))
+	h.Set("Content-Type", mediaType)
+	part, err := w.CreatePart(h)
+	if err != nil {
+		return nil, fmt.Errorf("encode request: %w", err)
+	}
+	if _, err := part.Write(data); err != nil {
+		return nil, fmt.Errorf("encode request: %w", err)
+	}
+	if err := w.Close(); err != nil {
+		return nil, fmt.Errorf("encode request: %w", err)
+	}
+	// No retry: a retried POST /artifacts could publish a duplicate artifact.
+	resp, err := c.doAs(ctx, http.MethodPost, "/artifacts", &body, w.FormDataContentType(), false)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusCreated {
+		return nil, ParseAPIError(resp)
+	}
+	var out Artifact
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&out); err != nil {
+		return nil, fmt.Errorf("decode POST /artifacts response: %w", err)
+	}
+	if out.ArtifactID == "" || out.Digest == "" {
+		return nil, fmt.Errorf("artifact response is incomplete")
 	}
 	return &out, nil
 }

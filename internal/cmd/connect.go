@@ -253,6 +253,7 @@ func runConnect(cmd *cobra.Command, version string, check bool, f connectFlags) 
 		Log:        log,
 		Detect:     detect,
 		AppVersion: version,
+		ChatAPIURL: api.BaseURL,
 	}
 	if f.session != nil {
 		cfg.Claude, cfg.Codex = sessionConfigs(det, f, exe, baseURL)

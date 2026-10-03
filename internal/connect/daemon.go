@@ -42,6 +42,9 @@ type Config struct {
 	Environ func() []string
 	// TempDir is the parent of per-session working directories ("" = system).
 	TempDir string
+	// ChatAPIURL is the chat-api base URL data-artifact read urls hang off
+	// ("" = ARCHIVIST_BASE_URL or the production endpoint).
+	ChatAPIURL string
 	// Dial overrides the websocket dialer (tests).
 	Dial func(ctx context.Context, u string, opts *websocket.DialOptions) (*websocket.Conn, *http.Response, error)
 	// SignIn names the harness ("claude" or "codex") that is installed but
@@ -66,6 +69,7 @@ type Daemon struct {
 	runner      Runner
 	environ     func() []string
 	tempDir     string
+	chatAPIURL  string
 	dial        func(ctx context.Context, u string, opts *websocket.DialOptions) (*websocket.Conn, *http.Response, error)
 	// sandbox is the session-bound mode (RunSession, Story 78.22): no user
 	// socket, and a failed session ends the daemon.
@@ -97,7 +101,7 @@ func New(cfg Config) (*Daemon, error) {
 	d := &Daemon{api: cfg.API, relayURL: cfg.RelayURL, claude: cfg.Claude, codex: cfg.Codex, appVersion: cfg.AppVersion,
 		maxSessions: cfg.MaxSessions,
 		log:         cfg.Log, parser: parser, store: store, detect: cfg.Detect, runner: cfg.Runner,
-		environ: cfg.Environ, tempDir: cfg.TempDir, dial: cfg.Dial, signIn: cfg.SignIn,
+		environ: cfg.Environ, tempDir: cfg.TempDir, dial: cfg.Dial, signIn: cfg.SignIn, chatAPIURL: cfg.ChatAPIURL,
 		sessions: map[string]*session{}, starting: map[string]bool{}, tokens: map[string]bool{}}
 	if d.maxSessions <= 0 {
 		d.maxSessions = DefaultMaxSessions
@@ -107,6 +111,9 @@ func New(cfg Config) (*Daemon, error) {
 	}
 	if d.environ == nil {
 		d.environ = os.Environ
+	}
+	if d.chatAPIURL == "" {
+		d.chatAPIURL = client.ResolveBaseURL()
 	}
 	if d.appVersion == "" {
 		d.appVersion = "dev"
@@ -312,7 +319,7 @@ func (d *Daemon) handleStart(ctx context.Context, l *live, in *Inbound) *session
 		d.refuseStart(ctx, l, in, "The session belongs to another agent.", true)
 		return nil
 	}
-	if !d.reserveSlot() {
+	if !d.acquireSlot(nil) {
 		d.refuseStart(ctx, l, in, fmt.Sprintf("archivist connect already runs %d live sessions.", d.maxSessions), true)
 		return nil
 	}
@@ -408,6 +415,51 @@ func (d *Daemon) reserveSlot() bool {
 	}
 	d.procs++
 	return true
+}
+
+// acquireSlot reserves a live-process slot for a start or resume (self is
+// the resuming session, nil for a new one). On a full daemon it parks the
+// least recently active idle session and takes its slot; when every live
+// session is busy it fails (the caller reports the capacity refusal). The
+// session-bound sandbox mode (RunSession) serves one session and never parks:
+// there is no other session to give way to.
+func (d *Daemon) acquireSlot(self *session) bool {
+	if d.sandbox {
+		return d.reserveSlot()
+	}
+	for range d.maxSessions + 1 {
+		if d.reserveSlot() {
+			return true
+		}
+		victim := d.lruIdle(self)
+		if victim == nil {
+			return false
+		}
+		victim.requestPark()
+	}
+	return d.reserveSlot()
+}
+
+// lruIdle picks (and claims) the least recently active idle session.
+func (d *Daemon) lruIdle(self *session) *session {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.closing {
+		return nil
+	}
+	var best *session
+	for _, s := range d.sessions {
+		if s == self || !s.idle {
+			continue
+		}
+		if best == nil || s.lastActive.Before(best.lastActive) {
+			best = s
+		}
+	}
+	if best != nil {
+		best.idle = false // claimed: a concurrent picker takes another
+	}
+	return best
 }
 
 func (d *Daemon) releaseSlot() {

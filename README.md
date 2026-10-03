@@ -186,7 +186,10 @@ with `--token`).
 tools whose chat-api routes a task token may call: `search`,
 `companies_search`, `read_passage`, `read_section` and `toc`. `companies_get`
 falls back to the full company catalog, which task tokens cannot read, so it
-is left out. `auth login` refuses task tokens.
+is left out. `auth login` refuses task tokens. With `--publish-session <id>`
+and `--publish-dir <dir>` (set by `archivist connect` when the token carries
+the `publish` scope) task mode adds `publish_artifact`, which uploads one file
+from that directory to the session's workspace (see below).
 
 ## Connect your Claude Code or Codex (preview)
 
@@ -273,6 +276,24 @@ For each "My Codex" session the daemon:
   Linux, adopts orphaned ones as child subreaper, then kills and reaps them
   when the session stops, is interrupted past its timeout, crashes or
   Ctrl-C ends the daemon.
+
+Both harnesses also get `publish_artifact`, which publishes one file from the
+session directory to the workspace, where it opens beside the conversation.
+It is never pre-allowed: each call asks for approval through the card
+(Claude's permission prompt, Codex's `approval_mode = "prompt"` for that
+tool) unless you chose "allow for session" for it. It refuses, and
+uploads nothing, for a path outside the session directory or containing
+`..`, any symbolic link, a file that is not regular, empty or over 10 MiB, and
+anything but `.pdf`, `.txt`, `.md`, `.csv` and `.json` whose content matches
+(a PDF header; UTF-8 text without NUL; JSON that parses). A successful call
+adds a `data-artifact` event to the session stream.
+
+At most four harness processes run at once. A new session or a resume on a
+full daemon parks the least recently active idle session (no turn running, no
+approval open): its process stops and a `disconnected` status says the next
+message resumes it. When every session is busy, the new one is refused.
+The session-bound mode (`connect --session`) serves one session and never
+parks it.
 
 The session home is kept while the session can resume and removed when the
 session stops, fails or is found inactive at the next start.

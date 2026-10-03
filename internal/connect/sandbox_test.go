@@ -579,7 +579,7 @@ func TestCACertEnvAllowlist(t *testing.T) {
 			t.Errorf("%s allowed", bad)
 		}
 	}
-	args := strings.Join(codexArgs(CodexConfig{Executable: "/a"}, "/t"), " ")
+	args := strings.Join(codexArgs(CodexConfig{Executable: "/a"}, "/t", nil), " ")
 	for _, k := range CACertKeys {
 		if !strings.Contains(args, `shell_environment_policy.include_only=`) || !strings.Contains(args, `"`+k+`"`) {
 			t.Errorf("codex include_only lacks %s", k)

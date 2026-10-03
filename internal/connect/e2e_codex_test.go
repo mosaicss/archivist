@@ -157,7 +157,7 @@ func TestE2EFakeCodex(t *testing.T) {
 	// MCP row under the task token.
 	msg("mcp")
 	s.waitTurns(9, 30*time.Second)
-	if !strings.Contains(s.text(), "tools: companies_search,read_passage,read_section,search,toc") {
+	if !strings.Contains(s.text(), "tools: companies_search,publish_artifact,read_passage,read_section,search,toc") {
 		t.Fatalf("mcp text %q", s.text())
 	}
 	if b := api.researchBearers(); len(b) != 1 || !strings.HasPrefix(b[0], "Bearer mst_") {

@@ -124,8 +124,9 @@ func (h *harness) start() {
 			}
 			return Detect(ctx, lookPath, ExecRunner, childEnv, h.home)
 		},
-		Environ: func() []string { return env },
-		TempDir: h.tmp,
+		Environ:    func() []string { return env },
+		TempDir:    h.tmp,
+		ChatAPIURL: h.api.srv.URL,
 	})
 	if err != nil {
 		h.t.Fatal(err)
@@ -342,7 +343,7 @@ func TestDaemonSessionLifecycle(t *testing.T) {
 	// MCP: task mode tools only, and the call carries the task token.
 	h.message(sid, "mcp")
 	h.waitFinishes(sid, 8)
-	if !strings.Contains(h.relay.text(sid), "tools: companies_search,read_passage,read_section,search,toc") {
+	if !strings.Contains(h.relay.text(sid), "tools: companies_search,publish_artifact,read_passage,read_section,search,toc") {
 		t.Fatalf("mcp tools text: %q", h.relay.text(sid))
 	}
 	bearers := h.api.researchBearers()
