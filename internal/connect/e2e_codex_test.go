@@ -322,7 +322,25 @@ func TestE2ELiveCodex(t *testing.T) {
 		ledger(fmt.Sprintf("turn %d: %s", n, text))
 		s.send(map[string]any{"kind": "user_message", "correlationId": cmdID("msg"), "sessionId": sid, "text": text})
 	}
-	restartOnly := os.Getenv("CONNECT_E2E_LIVE_ROW") == "restart"
+	// answer resolves the next approval request of the current turn, or
+	// ledgers that the model ended the turn without asking (a model choice,
+	// not a daemon outcome) and lets the run continue.
+	answer := func(what, decision, scope string) bool {
+		want := len(s.of("tool-approval-request")) + 1
+		waitFor(t, turnTimeout, what+": approval request or turn end", func() bool {
+			return len(s.of("tool-approval-request")) >= want || s.turnsDone() >= n
+		})
+		if len(s.of("tool-approval-request")) < want {
+			ledger(what + ": the model ended the turn without requesting approval")
+			return false
+		}
+		s.answer(sid, want, decision, scope)
+		return true
+	}
+	// Rows: "" all; "rest" skips the MCP, accept and accept-for-session turns;
+	// "restart" runs only the codeword, Ctrl-C and resume recall.
+	row := os.Getenv("CONNECT_E2E_LIVE_ROW")
+	restartOnly := row == "restart"
 
 	ledger("app-server start 1 (daemon run 1) / turn 1: proof, isolation, codeword")
 	d := startDaemon(t, archivistBin, daemonEnv, args...)
@@ -333,65 +351,66 @@ func TestE2ELiveCodex(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(evidence, "live-codex-presence.json"), mustJSON(u.lastPresence()), 0o600)
 	n++
 	u.send(t, map[string]any{"kind": "start_session", "correlationId": cmdID("start"), "sessionId": sid, "agent": "codex",
-		"prompt": "Remember the codeword plum-7817 for later in this conversation. Do not run any command. Reply with only OK."})
-	s.waitTurns(1, turnTimeout)
+		"prompt": "Remember the codeword plum-7817 for later in this conversation. Reply with only OK."})
+	s.waitTurns(n, turnTimeout)
 	if st := s.statuses(); len(st) < 2 || st[1] != "running" {
 		t.Fatalf("statuses %v\n%s", st, d.out.String())
 	}
 	ledger(fmt.Sprintf("proof log line present: %v", strings.Contains(d.out.String(), "codex proof ok")))
 
-	if !restartOnly {
+	if !restartOnly && row != "rest" {
 		turn("Call the archivist MCP tool named search exactly once with query \"revenue\". Do not run shell commands. Reply with only the number of results it returned.")
-		s.waitTurns(2, turnTimeout)
+		s.waitTurns(n, turnTimeout)
 		ledger(fmt.Sprintf("research bearers seen by fake chat-api: %d (mst_ prefix: %v)", len(api.researchBearers()), allTask(api.researchBearers())))
 
 		turn("Run exactly this shell command in the current directory: touch accept-7817.txt . Do not run any other command. Reply with only done.")
 		s.answer(sid, 1, "allow", "allow_once")
-		s.waitTurns(3, turnTimeout)
+		s.waitTurns(n, turnTimeout)
 
 		turn("Run exactly this shell command in the current directory: touch session-7817.txt . Do not run any other command. Reply with only done.")
 		s.answer(sid, 2, "allow", "allow_always")
-		s.waitTurns(4, turnTimeout)
+		s.waitTurns(n, turnTimeout)
 		turn("Run exactly the same shell command again: touch session-7817.txt . Do not run any other command. Reply with only done.")
-		s.waitTurns(5, turnTimeout)
+		s.waitTurns(n, turnTimeout)
 		ledger(fmt.Sprintf("accept for session: approval requests after the repeat %d (want 2)", len(s.of("tool-approval-request"))))
+	}
+	if !restartOnly {
+		turn("Use your shell tool to run exactly this command in the current directory (the user approves or declines it in their interface): touch decline-7817.txt . Do not run any other command. Reply with only done.")
+		answer("decline", "deny", "reject_once")
+		s.waitTurns(n, turnTimeout)
 
-		turn("Run exactly this shell command in the current directory: touch decline-7817.txt . Do not run any other command. Reply with only done or declined.")
-		s.answer(sid, len(s.of("tool-approval-request"))+1, "deny", "reject_once")
-		s.waitTurns(6, turnTimeout)
+		turn("Use your shell tool to run exactly this command in the current directory (the user approves or declines it in their interface): touch timeout-7817.txt . Do not run any other command. Reply with only done.")
+		answer("relay timeout", "", "")
+		s.waitTurns(n, turnTimeout)
 
-		turn("Run exactly this shell command in the current directory: touch timeout-7817.txt . Do not run any other command. Reply with only done or declined.")
-		s.answer(sid, len(s.of("tool-approval-request"))+1, "", "")
-		s.waitTurns(7, turnTimeout)
-
-		turn("Run exactly this shell command in the current directory: touch cancel-7817.txt . Do not run any other command. Reply with only done or declined.")
-		s.answer(sid, len(s.of("tool-approval-request"))+1, "deny", "reject_always")
-		s.waitTurns(8, turnTimeout)
+		turn("Use your shell tool to run exactly this command in the current directory (the user approves or declines it in their interface): touch cancel-7817.txt . Do not run any other command. Reply with only done.")
+		answer("cancel", "deny", "reject_always")
+		s.waitTurns(n, turnTimeout)
 		ledger(fmt.Sprintf("decisions %v; aborts %d; interrupted statuses %d", s.reasons(), len(s.of("abort")), s.countStatus("interrupted")))
 
 		turn("Create a new file named notes-7817.txt containing the single line hello, by editing files (apply_patch), not with a shell command. Reply with only done.")
 		reqs := len(s.of("tool-approval-request"))
 		waitFor(t, turnTimeout, "file change approval or turn end", func() bool {
-			return len(s.of("tool-approval-request")) > reqs || s.turnsDone() >= 9
+			return len(s.of("tool-approval-request")) > reqs || s.turnsDone() >= n
 		})
 		if len(s.of("tool-approval-request")) > reqs {
 			s.answer(sid, reqs+1, "allow", "allow_once")
 		}
-		s.waitTurns(9, turnTimeout)
+		s.waitTurns(n, turnTimeout)
 		ledger(fmt.Sprintf("file change: approval requests %d -> %d, data-patch events %d", reqs, len(s.of("tool-approval-request")), len(s.of("data-patch"))))
 
-		turn("Run exactly this shell command in the current directory: sleep 120 && echo slept-7817 . Then reply with its output.")
-		s.answer(sid, len(s.of("tool-approval-request"))+1, "allow", "allow_once")
+		turn("Use your shell tool to run exactly this command in the current directory (the user approves or declines it in their interface): sleep 120 && echo slept-7817 . Then reply with its output.")
+		answer("interrupt mid-command", "allow", "allow_once")
 		time.Sleep(5 * time.Second)
 		ledger(fmt.Sprintf("before interrupt: sleep 120 processes %d", countProcs("sleep 120")))
 		s.send(map[string]any{"kind": "interrupt", "correlationId": cmdID("int"), "sessionId": sid})
-		s.waitTurns(10, time.Minute)
+		s.waitTurns(n, time.Minute)
 		time.Sleep(3 * time.Second)
 		left := countProcs("sleep 120")
 		ledger(fmt.Sprintf("interrupt mid-command: aborts %d, interrupted statuses %d, sleep 120 processes left %d", len(s.of("abort")), s.countStatus("interrupted"), left))
 
 		turn("Reply with only the word alive.")
-		s.waitTurns(11, turnTimeout)
+		s.waitTurns(n, turnTimeout)
 	}
 
 	ledger("Ctrl-C daemon run 1")
