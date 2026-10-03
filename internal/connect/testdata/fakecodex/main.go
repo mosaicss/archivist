@@ -40,7 +40,8 @@
 // server reports after archivist is ready, at the first turn) and
 // resumeError (thread/resume answers this JSON-RPC error message) and
 // closeBeforeMCP (stdout closes before the MCP startup status; the
-// process stays alive).
+// process stays alive, ignoring stdin EOF, until SIGTERM or SIGINT, 60 s
+// cap).
 // Replies to requests the fake no longer waits for are recorded in
 // late-replies.jsonl.
 package main
@@ -264,9 +265,14 @@ func (s *server) run() {
 		// stdin when its JSON-RPC connection ends, and exiting here would let
 		// the process exit race the disconnect in the daemon's MCP wait. Stay
 		// alive until the daemon signals the process group.
+		// Capped like the other waiting scenarios, so a missed kill cannot
+		// leave the fake behind (the test needs it gone within 10 s).
 		sig := make(chan os.Signal, 1)
 		signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT)
-		<-sig
+		select {
+		case <-sig:
+		case <-time.After(60 * time.Second):
+		}
 		os.Exit(1)
 	}
 }
