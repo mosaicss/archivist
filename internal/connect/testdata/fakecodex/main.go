@@ -44,6 +44,9 @@
 // cap).
 // Replies to requests the fake no longer waits for are recorded in
 // late-replies.jsonl.
+// account/login/start (chatgptDeviceCode only) records login-start.json and
+// account/login/cancel records login-cancel.json; config.json "login"
+// chooses the outcome (success, failure, hang).
 package main
 
 import (
@@ -83,6 +86,13 @@ type config struct {
 	LateExtraMCP       bool     `json:"lateExtraMCP"`
 	CloseBeforeMCP     bool     `json:"closeBeforeMCP"`
 	ResumeError        string   `json:"resumeError"`
+	// Login is the device code sign-in outcome (Story 78.22): "success"
+	// (default: auth.json written, then account/login/completed success),
+	// "failure" (completed with an error) or "hang" (never completes).
+	Login string `json:"login"`
+	// VerificationURL overrides the device code link (default
+	// https://auth.openai.com/codex/device).
+	VerificationURL string `json:"verificationUrl"`
 }
 
 var (
@@ -326,6 +336,38 @@ func (s *server) handle(id json.RawMessage, method string, params json.RawMessag
 		}
 		reply(id, map[string]any{"userAgent": "fakecodex/" + cfg.Version, "codexHome": ch, "platformFamily": "unix", "platformOs": "linux"})
 		notify("remoteControl/status/changed", map[string]any{"status": "disabled"})
+	case "account/login/start":
+		_ = os.MkdirAll(base, 0o700)
+		_ = os.WriteFile(filepath.Join(base, "login-start.json"), params, 0o600)
+		if p["type"] != "chatgptDeviceCode" {
+			replyErr(id, -32600, "fakecodex: only chatgptDeviceCode")
+			return
+		}
+		loginID := uuid()
+		link := "https://auth.openai.com/codex/device"
+		if cfg.VerificationURL != "" {
+			link = cfg.VerificationURL
+		}
+		reply(id, map[string]any{"type": "chatgptDeviceCode", "loginId": loginID, "userCode": "FAKE-1234",
+			"verificationUrl": link})
+		go func() {
+			time.Sleep(200 * time.Millisecond)
+			switch cfg.Login {
+			case "hang":
+			case "failure":
+				notify("account/login/completed", map[string]any{"loginId": loginID, "success": false,
+					"error": "device code login is disabled for this account"})
+			default:
+				_ = os.WriteFile(filepath.Join(os.Getenv("CODEX_HOME"), "auth.json"), []byte(`{"auth_mode":"chatgpt"}`), 0o600)
+				notify("account/login/completed", map[string]any{"loginId": loginID, "success": true, "error": nil})
+				notify("account/updated", map[string]any{"authMode": "chatgpt", "planType": "pro"})
+			}
+		}()
+	case "account/login/cancel":
+		_ = os.MkdirAll(base, 0o700)
+		_ = os.WriteFile(filepath.Join(base, "login-cancel.json"), params, 0o600)
+		reply(id, map[string]any{"status": "canceled"})
+		notify("account/login/completed", map[string]any{"loginId": p["loginId"], "success": false, "error": "cancelled"})
 	case "account/read":
 		if _, err := os.Stat(filepath.Join(os.Getenv("CODEX_HOME"), "auth.json")); err != nil {
 			reply(id, map[string]any{"account": nil, "requiresOpenaiAuth": true})

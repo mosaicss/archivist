@@ -51,6 +51,15 @@ ChatGPT. API key logins are refused.
   archivist connect --check     report what was detected, connect nothing
   archivist connect             connect and serve sessions until Ctrl-C
 
+Session-bound mode (a Mosaic cloud sandbox): --session <uuid> --agent
+claude|codex --prompt-file <path>, all three together. It serves only that
+session, on its session socket: no user socket and no capability report. A
+harness that is installed but logged out signs in first: the sign-in link
+(and, for Codex, the device code) appears in the session, and for Claude
+Code the next message is the code to paste. It exits 0 after stop_session
+or the session's end, and non-zero when the sign-in or the subscription
+proof fails.
+
 Exit codes: 0 ok; 1 refused or stopped (feature off, superseded, too old);
 2 bad flag or relay URL; 3 no usable harness (Claude Code not found, or no
 usable Claude Code or Codex); 4 credential or Claude login problem.`
@@ -63,6 +72,7 @@ var (
 func newConnectCmd(version string) *cobra.Command {
 	var check bool
 	var model, effort, codexModel, codexEffort string
+	var sessionID, agent, promptFile string
 	c := &cobra.Command{
 		Use:   "connect",
 		Short: "Drive your own Claude Code or Codex from the Mosaic workspace (preview)",
@@ -90,8 +100,12 @@ func newConnectCmd(version string) *cobra.Command {
 				_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Error: --codex-effort must be one of %s\n", strings.Join(connect.CodexEfforts, ", "))
 				return &ExitError{Code: ExitUsageError}
 			}
+			st, err := sessionStart(cmd.ErrOrStderr(), check, sessionID, agent, promptFile)
+			if err != nil {
+				return err
+			}
 			return runConnect(cmd, version, check, connectFlags{model: model, effort: effort,
-				codexModel: codexModel, codexEffort: codexEffort})
+				codexModel: codexModel, codexEffort: codexEffort, session: st})
 		},
 	}
 	c.Flags().BoolVar(&check, "check", false, "Report detected harnesses and logins, then exit")
@@ -99,6 +113,9 @@ func newConnectCmd(version string) *cobra.Command {
 	c.Flags().StringVar(&effort, "claude-effort", "", "Claude effort for sessions on this machine: low, medium, high, xhigh, max")
 	c.Flags().StringVar(&codexModel, "codex-model", "", "Codex model for sessions on this machine (local setting; default: Codex's default model)")
 	c.Flags().StringVar(&codexEffort, "codex-effort", "", "Codex reasoning effort for sessions on this machine: "+strings.Join(connect.CodexEfforts, ", "))
+	c.Flags().StringVar(&sessionID, "session", "", "Session-bound mode: serve only this session (UUID); needs --agent and --prompt-file")
+	c.Flags().StringVar(&agent, "agent", "", "Session-bound mode: the session's agent, claude or codex")
+	c.Flags().StringVar(&promptFile, "prompt-file", "", "Session-bound mode: file holding the session's first prompt")
 	return c
 }
 
@@ -106,6 +123,50 @@ func newConnectCmd(version string) *cobra.Command {
 type connectFlags struct {
 	model, effort           string
 	codexModel, codexEffort string
+	// session is the session-bound mode's start (nil: the normal daemon).
+	session *connect.SessionStart
+}
+
+// maxPromptFile bounds the prompt file read (the relay limit is 32000
+// UTF-16 units; this only stops a runaway read).
+const maxPromptFile = 1 << 20
+
+// sessionStart validates the session-bound mode flags: none, or all three.
+func sessionStart(stderr io.Writer, check bool, sessionID, agent, promptFile string) (*connect.SessionStart, error) {
+	if sessionID == "" && agent == "" && promptFile == "" {
+		return nil, nil
+	}
+	usage := func(format string, args ...any) (*connect.SessionStart, error) {
+		_, _ = fmt.Fprintf(stderr, "Error: "+format+"\n", args...)
+		return nil, &ExitError{Code: ExitUsageError}
+	}
+	switch {
+	case check:
+		return usage("--check cannot be combined with --session, --agent or --prompt-file")
+	case sessionID == "" || agent == "" || promptFile == "":
+		return usage("--session, --agent and --prompt-file are required together")
+	case !connect.ValidSessionID(sessionID):
+		return usage("--session %q is not a session UUID", sessionID)
+	case agent != "claude" && agent != "codex":
+		return usage("--agent must be claude or codex")
+	}
+	f, err := os.Open(promptFile)
+	if err != nil {
+		return usage("--prompt-file: %v", err)
+	}
+	defer func() { _ = f.Close() }()
+	b, err := io.ReadAll(io.LimitReader(f, maxPromptFile+1))
+	if err != nil {
+		return usage("--prompt-file: %v", err)
+	}
+	prompt := string(b)
+	if strings.TrimSpace(prompt) == "" {
+		return usage("--prompt-file %s is empty", promptFile)
+	}
+	if len(b) > maxPromptFile || !connect.ValidPrompt(prompt) {
+		return usage("--prompt-file %s is longer than 32000 characters", promptFile)
+	}
+	return &connect.SessionStart{SessionID: sessionID, Agent: agent, Prompt: prompt}, nil
 }
 
 func runConnect(cmd *cobra.Command, version string, check bool, f connectFlags) error {
@@ -156,7 +217,12 @@ func runConnect(cmd *cobra.Command, version string, check bool, f connectFlags) 
 	}
 
 	det := detect(cmd.Context())
-	if !det.Claude.Usable() && !det.Codex.Usable() {
+	var signIn string
+	if f.session != nil {
+		if signIn, err = sessionHarness(stderr, det, f.session.Agent); err != nil {
+			return err
+		}
+	} else if !det.Claude.Usable() && !det.Codex.Usable() {
 		_, _ = fmt.Fprintln(stderr, "archivist connect: "+det.Claude.Problem)
 		if det.Codex.Path != "" {
 			_, _ = fmt.Fprintln(stderr, "archivist connect: "+det.Codex.Problem)
@@ -188,13 +254,18 @@ func runConnect(cmd *cobra.Command, version string, check bool, f connectFlags) 
 		Detect:     detect,
 		AppVersion: version,
 	}
-	cfg.Claude, cfg.Codex = harnessConfigs(det, f, exe, baseURL)
-	// Say why an installed harness is not offered.
-	if det.Claude.Path != "" && !det.Claude.Usable() {
-		log.Printf("warning: Claude Code sessions are unavailable: %s", det.Claude.Problem)
-	}
-	if det.Codex.Path != "" && !det.Codex.Usable() {
-		log.Printf("warning: Codex sessions are unavailable: %s", det.Codex.Problem)
+	if f.session != nil {
+		cfg.Claude, cfg.Codex = sessionConfigs(det, f, exe, baseURL)
+		cfg.SignIn = signIn
+	} else {
+		cfg.Claude, cfg.Codex = harnessConfigs(det, f, exe, baseURL)
+		// Say why an installed harness is not offered.
+		if det.Claude.Path != "" && !det.Claude.Usable() {
+			log.Printf("warning: Claude Code sessions are unavailable: %s", det.Claude.Problem)
+		}
+		if det.Codex.Path != "" && !det.Codex.Usable() {
+			log.Printf("warning: Codex sessions are unavailable: %s", det.Codex.Problem)
+		}
 	}
 	d, err := connect.New(cfg)
 	if err != nil {
@@ -204,6 +275,15 @@ func runConnect(cmd *cobra.Command, version string, check bool, f connectFlags) 
 
 	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if f.session != nil {
+		state := "logged in"
+		if signIn != "" {
+			state = "logged out: signing in first"
+		}
+		log.Printf("archivist connect %s: session-bound mode, session %s, agent %s (%s); key fp:%s; relay %s.",
+			version, f.session.SessionID, f.session.Agent, state, auth.Fingerprint(token), relayURL)
+		return connectResult(stderr, log, d, d.RunSession(ctx, *f.session))
+	}
 	var harnesses []string
 	if det.Claude.Usable() {
 		harnesses = append(harnesses, fmt.Sprintf("Claude Code %s at %s (%s login, %s)", det.Claude.Version, det.Claude.Path,
@@ -214,7 +294,11 @@ func runConnect(cmd *cobra.Command, version string, check bool, f connectFlags) 
 	}
 	log.Printf("archivist connect %s: %s; key fp:%s; relay %s. Ctrl-C stops.",
 		version, strings.Join(harnesses, "; "), auth.Fingerprint(token), relayURL)
-	err = d.Run(ctx)
+	return connectResult(stderr, log, d, d.Run(ctx))
+}
+
+// connectResult maps how the daemon ended to the typed exit.
+func connectResult(stderr io.Writer, log *connect.Logger, d *connect.Daemon, err error) error {
 	if left := d.LiveTokens(); len(left) > 0 {
 		log.Printf("warning: %d task token(s) could not be revoked; they expire within 15 minutes", len(left))
 	}
@@ -236,6 +320,63 @@ func runConnect(cmd *cobra.Command, version string, check bool, f connectFlags) 
 		_, _ = fmt.Fprintf(stderr, "archivist connect: %v\n", err)
 		return &ExitError{Code: ExitGenericError}
 	}
+}
+
+// sessionHarness checks the session-bound mode's harness: it must be
+// installed at a supported version; a logged-out one is signed in first
+// (its name is returned). A login of the wrong kind (an API key, a Console
+// login) is refused, never replaced.
+func sessionHarness(stderr io.Writer, det connect.Detection, agent string) (string, error) {
+	refuse := func(msg string, code int) (string, error) {
+		_, _ = fmt.Fprintln(stderr, "archivist connect: "+msg)
+		return "", &ExitError{Code: code}
+	}
+	if agent == "claude" {
+		c := det.Claude
+		switch {
+		case c.Usable():
+			return "", nil
+		case c.ProblemCode == "auth" && c.Auth != nil && !c.Auth.LoggedIn:
+			return "claude", nil
+		}
+		return "", claudeExitWith(stderr, c)
+	}
+	x := det.Codex
+	switch {
+	case x.Path == "":
+		return refuse("Codex (codex) was not found on PATH", ExitNotFound)
+	case x.Usable():
+		return "", nil
+	case x.Version == "" || !x.VersionOK:
+		return refuse(x.Problem, ExitGenericError)
+	case x.APILogin:
+		return refuse(x.Problem, ExitAuthError)
+	case x.Home == "":
+		return refuse(x.Problem, ExitGenericError)
+	}
+	return "codex", nil // not logged in, or no auth.json in the owner's home
+}
+
+// claudeExitWith prints Claude Code's problem and returns its typed exit.
+func claudeExitWith(stderr io.Writer, c connect.ClaudeInfo) error {
+	_, _ = fmt.Fprintln(stderr, "archivist connect: "+c.Problem)
+	return claudeExit(c)
+}
+
+// sessionConfigs is harnessConfigs for the session-bound mode: only the
+// requested harness is configured, and it keeps its Bin when it is
+// installed but logged out (it signs in before the first turn).
+func sessionConfigs(det connect.Detection, f connectFlags, exe, baseURL string) (connect.ClaudeConfig, connect.CodexConfig) {
+	var cl connect.ClaudeConfig
+	var cx connect.CodexConfig
+	if f.session.Agent == "claude" {
+		cl = connect.ClaudeConfig{Bin: det.Claude.Path, Model: f.model, Effort: f.effort,
+			SettingSources: connect.DefaultSettingSources, Executable: exe, BaseURL: baseURL}
+	} else {
+		cx = connect.CodexConfig{Bin: det.Codex.Path, Version: det.Codex.Version, Model: f.codexModel,
+			Effort: f.codexEffort, OwnerHome: det.Codex.Home, Executable: exe, BaseURL: baseURL}
+	}
+	return cl, cx
 }
 
 // harnessConfigs maps detection and local flags to the adapter configs.

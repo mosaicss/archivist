@@ -51,8 +51,10 @@ var (
 )
 
 // codexShellEnv is what Codex passes to the commands it runs
-// (shell_environment_policy include_only), on top of "core".
-var codexShellEnv = []string{"PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "LC_*", "TERM", "TMPDIR", "TZ"}
+// (shell_environment_policy include_only), on top of "core"; the CA bundle
+// keys (CACertKeys) are listed too.
+var codexShellEnv = append([]string{"PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "LC_*", "TERM", "TMPDIR", "TZ"},
+	CACertKeys...)
 
 // tomlValue renders v as a TOML value for -c (JSON strings and arrays of
 // strings are valid TOML).

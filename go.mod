@@ -6,6 +6,7 @@ toolchain go1.27.1
 
 require (
 	github.com/coder/websocket v1.8.15
+	github.com/creack/pty v1.1.24
 	github.com/google/jsonschema-go v0.4.3
 	github.com/grafana/ai-sdk v0.1.0-alpha.1
 	github.com/modelcontextprotocol/go-sdk v1.8.0

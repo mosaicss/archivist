@@ -220,7 +220,7 @@ func TestCodexArgsAreFixed(t *testing.T) {
 		"web_search":                                        `"disabled"`,
 		"history.persistence":                               `"none"`,
 		"shell_environment_policy.inherit":                  `"core"`,
-		"shell_environment_policy.include_only":             `["PATH","HOME","USER","LOGNAME","SHELL","LANG","LC_*","TERM","TMPDIR","TZ"]`,
+		"shell_environment_policy.include_only":             `["PATH","HOME","USER","LOGNAME","SHELL","LANG","LC_*","TERM","TMPDIR","TZ","NODE_EXTRA_CA_CERTS","SSL_CERT_FILE","SSL_CERT_DIR","CURL_CA_BUNDLE","GIT_SSL_CAINFO","REQUESTS_CA_BUNDLE"]`,
 		"sandbox_workspace_write.writable_roots":            "[]",
 		"sandbox_workspace_write.network_access":            "false",
 		"project_root_markers":                              "[]",

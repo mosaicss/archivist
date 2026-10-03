@@ -19,6 +19,20 @@ var allowKeys = map[string]bool{
 	"LANG": true, "TERM": true, "TMPDIR": true,
 }
 
+// CACertKeys name the CA bundle a TLS-intercepting egress (the Cloudflare
+// sandbox's Outbound, Story 78.22) needs every harness to trust. They hold
+// file paths, never credentials, and pass to harness children (and Codex's
+// command environment) like the allowKeys.
+var CACertKeys = []string{
+	"NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE", "SSL_CERT_DIR", "CURL_CA_BUNDLE", "GIT_SSL_CAINFO", "REQUESTS_CA_BUNDLE",
+}
+
+func init() {
+	for _, k := range CACertKeys {
+		allowKeys[k] = true
+	}
+}
+
 // allowPrefixes are copied from the daemon environment when present.
 var allowPrefixes = []string{"LC_", "XDG_"}
 
