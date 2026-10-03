@@ -73,6 +73,11 @@ type session struct {
 	slot       bool            // holds one of the daemon's live-process slots
 	fatal      string          // subscription proof failure: no further turns
 	stopping   bool
+	// early holds user messages that arrived during a Codex sign-in; they
+	// follow the first prompt (Story 78.22).
+	early []string
+	// authFailed marks a failed sign-in or subscription proof (sandbox exit).
+	authFailed bool
 
 	interruptSeq   int
 	interruptTimer *time.Timer
@@ -131,10 +136,23 @@ func (s *session) run(ctx context.Context, prompt string) {
 
 	if prompt != "" {
 		s.emitStatus("starting", "")
-		if err := s.spawn(ctx, ""); err != nil {
-			s.failStart(err)
-		} else {
-			s.sendUser(prompt)
+		res := signedIn
+		if s.needsSignIn() {
+			res = s.signIn(ctx)
+		}
+		switch res {
+		case signInStopped:
+			return
+		case signedIn:
+			if err := s.spawn(ctx, ""); err != nil {
+				s.failStart(err)
+			} else {
+				s.sendUser(prompt)
+				for _, text := range s.early {
+					s.sendUser(text)
+				}
+			}
+			s.early = nil
 		}
 	}
 
@@ -144,6 +162,14 @@ func (s *session) run(ctx context.Context, prompt string) {
 	flush.Stop()
 	armed := false
 	for {
+		if s.d.sandbox && s.rec.Status == "failed" {
+			// Session-bound sandbox mode: a failed session ends the daemon.
+			s.flushCoalesced()
+			dctx, cancel := context.WithTimeout(context.Background(), drainTimeout)
+			s.outbox.WaitDrained(dctx)
+			cancel()
+			return
+		}
 		if s.co.Pending() && !armed {
 			flush.Reset(coalesceWindow)
 			armed = true
@@ -386,6 +412,7 @@ func (s *session) failStart(err error) {
 	s.emitError(msg)
 	switch {
 	case errors.As(err, &proof):
+		s.authFailed = true
 		s.failSession(proof.msg)
 		s.emitStatus("failed", msg)
 	case errors.As(err, &lost):
@@ -596,6 +623,7 @@ func (s *session) handleLine(line []byte) {
 // failProof enforces the fail-closed subscription proof.
 func (s *session) failProof(msg string) {
 	s.log.Printf("%s; stopping the session", msg)
+	s.authFailed = true
 	if s.proc != nil && !s.isCodex() {
 		_ = s.proc.WriteJSON(interruptFrame("archivist-proof-" + s.outbox.RunID()))
 	}
@@ -639,6 +667,27 @@ func (s *session) handleControlRequest(f claudeFrame, line []byte) bool {
 // handle runs one relay command; it returns true when the session ended.
 func (s *session) handle(ctx context.Context, c sessionCmd) bool {
 	in := c.in
+	if !s.admit(c) {
+		return false
+	}
+	switch in.Kind {
+	case "user_message":
+		s.userMessage(ctx, in.Text)
+	case "interrupt":
+		s.interrupt()
+	case "stop_session":
+		s.stop(true)
+		return true
+	}
+	return false
+}
+
+// admit acknowledges one relay command and reports whether it is to be
+// executed: a command for another session, an approval (answered here), a
+// command already handled, or one whose record could not be saved (the
+// relay redelivers it) is not.
+func (s *session) admit(c sessionCmd) bool {
+	in := c.in
 	ack := func() { c.l.Send(commandAck(SessionSocket, in.CorrelationID, "")) }
 	if in.SessionID != s.id {
 		s.log.Printf("refused %s for another session", in.Kind)
@@ -661,16 +710,7 @@ func (s *session) handle(ctx context.Context, c sessionCmd) bool {
 		return false
 	}
 	ack()
-	switch in.Kind {
-	case "user_message":
-		s.userMessage(ctx, in.Text)
-	case "interrupt":
-		s.interrupt()
-	case "stop_session":
-		s.stop(true)
-		return true
-	}
-	return false
+	return true
 }
 
 func (s *session) userMessage(ctx context.Context, text string) {
@@ -814,7 +854,11 @@ func (s *session) shutdown() {
 	s.revokeToken()
 	s.d.store.RemoveRunDir(s.id)
 	if s.rec.Status == "active" {
-		s.emitStatus("disconnected", "archivist connect stopped; the next message resumes the session.")
+		if s.d.sandbox {
+			s.emitStatus("disconnected", "The sandbox stopped.")
+		} else {
+			s.emitStatus("disconnected", "archivist connect stopped; the next message resumes the session.")
+		}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()

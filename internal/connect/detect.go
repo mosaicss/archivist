@@ -67,6 +67,8 @@ type CodexInfo struct {
 	Home string
 	// AuthPresent reports that Home holds an auth.json file.
 	AuthPresent bool
+	// APILogin reports a login that is not ChatGPT (an API key).
+	APILogin bool
 	// Problem names why Codex is not usable ("" when usable).
 	Problem string
 }
@@ -229,6 +231,7 @@ func detectCodex(ctx context.Context, o DetectOptions) CodexInfo {
 	case c.Login != "":
 		apiLogin = true
 	}
+	c.APILogin = apiLogin
 	if c.Home != "" {
 		if st, err := os.Stat(filepath.Join(c.Home, "auth.json")); err == nil && st.Mode().IsRegular() {
 			c.AuthPresent = true

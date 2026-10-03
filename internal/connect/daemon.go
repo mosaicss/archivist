@@ -44,6 +44,10 @@ type Config struct {
 	TempDir string
 	// Dial overrides the websocket dialer (tests).
 	Dial func(ctx context.Context, u string, opts *websocket.DialOptions) (*websocket.Conn, *http.Response, error)
+	// SignIn names the harness ("claude" or "codex") that is installed but
+	// logged out (session-bound sandbox mode, RunSession): the session signs
+	// it in (posture 1) before its first turn. Its Bin stays configured.
+	SignIn string
 }
 
 // Daemon is a running `archivist connect`.
@@ -63,8 +67,12 @@ type Daemon struct {
 	environ     func() []string
 	tempDir     string
 	dial        func(ctx context.Context, u string, opts *websocket.DialOptions) (*websocket.Conn, *http.Response, error)
+	// sandbox is the session-bound mode (RunSession, Story 78.22): no user
+	// socket, and a failed session ends the daemon.
+	sandbox bool
 
 	mu       sync.Mutex
+	signIn   string // harness awaiting its posture-1 sign-in (guarded by mu)
 	sessions map[string]*session
 	starting map[string]bool
 	procs    int             // reserved live-process slots
@@ -89,7 +97,7 @@ func New(cfg Config) (*Daemon, error) {
 	d := &Daemon{api: cfg.API, relayURL: cfg.RelayURL, claude: cfg.Claude, codex: cfg.Codex, appVersion: cfg.AppVersion,
 		maxSessions: cfg.MaxSessions,
 		log:         cfg.Log, parser: parser, store: store, detect: cfg.Detect, runner: cfg.Runner,
-		environ: cfg.Environ, tempDir: cfg.TempDir, dial: cfg.Dial,
+		environ: cfg.Environ, tempDir: cfg.TempDir, dial: cfg.Dial, signIn: cfg.SignIn,
 		sessions: map[string]*session{}, starting: map[string]bool{}, tokens: map[string]bool{}}
 	if d.maxSessions <= 0 {
 		d.maxSessions = DefaultMaxSessions
@@ -218,7 +226,7 @@ func (d *Daemon) sessionCount() int {
 
 // attach starts a session goroutine; prompt is non-empty for a new session,
 // and slot passes a live-process slot already reserved for it.
-func (d *Daemon) attach(ctx context.Context, rec *SessionRecord, prompt string, slot bool) {
+func (d *Daemon) attach(ctx context.Context, rec *SessionRecord, prompt string, slot bool) *session {
 	s := newSession(d, rec)
 	s.slot = slot
 	d.mu.Lock()
@@ -234,23 +242,30 @@ func (d *Daemon) attach(ctx context.Context, rec *SessionRecord, prompt string, 
 		}
 		d.mu.Unlock()
 	}()
+	return s
 }
 
 // handleStart validates and starts one session. It acknowledges only after
 // the local record is durable (or the refusal is final), so a crash before
-// that point lets the relay redeliver.
-func (d *Daemon) handleStart(ctx context.Context, l *live, in *Inbound) {
+// that point lets the relay redeliver. l is nil in the session-bound mode
+// (RunSession: no user socket, nothing to acknowledge). It returns the
+// started session, or nil.
+func (d *Daemon) handleStart(ctx context.Context, l *live, in *Inbound) *session {
 	sid := in.SessionID
-	ack := func() { l.Send(commandAck(UserSocket, in.CorrelationID, sid)) }
+	ack := func() {
+		if l != nil {
+			l.Send(commandAck(UserSocket, in.CorrelationID, sid))
+		}
+	}
 	d.mu.Lock()
 	if d.starting[sid] {
 		d.mu.Unlock()
-		return // the attempt in progress acknowledges
+		return nil // the attempt in progress acknowledges
 	}
 	if _, running := d.sessions[sid]; running {
 		d.mu.Unlock()
 		ack()
-		return
+		return nil
 	}
 	d.starting[sid] = true
 	d.mu.Unlock()
@@ -263,49 +278,49 @@ func (d *Daemon) handleStart(ctx context.Context, l *live, in *Inbound) {
 	if rec, err := d.store.Load(sid); err == nil {
 		d.log.Printf("start_session %s redelivered for known session %s (%s); acknowledged only", in.CorrelationID, sid, rec.Status)
 		ack()
-		return
+		return nil
 	} else if errors.Is(err, errCorruptRecord) {
 		// Refused without execution and reported, so the relay stops redelivering.
 		d.refuseStart(ctx, l, in, "The local session record is unreadable; start a new session.", true)
-		return
+		return nil
 	} else if !isNotExist(err) {
 		// Transient read failure: no ack, the relay redelivers.
 		d.log.Printf("start_session %s: session record unreadable, awaiting redelivery: %v", in.CorrelationID, err)
-		return
+		return nil
 	}
 	if !d.agentUsable(in.Agent) {
 		d.refuseStart(ctx, l, in, fmt.Sprintf("The %s agent is not available in this archivist connect.", in.Agent), true)
-		return
+		return nil
 	}
 	info, err := d.api.GetAgentSession(ctx, sid)
 	if err != nil {
 		var apiErr *client.APIError
 		if errors.As(err, &apiErr) && (apiErr.Status == http.StatusNotFound || apiErr.Status == http.StatusBadRequest) {
 			d.refuseStart(ctx, l, in, "The session is unknown.", false)
-			return
+			return nil
 		}
 		// Transient: no ack, the relay redelivers in 30 s.
 		d.log.Printf("start_session %s: session lookup failed, awaiting redelivery: %v", in.CorrelationID, err)
-		return
+		return nil
 	}
 	now := time.Now().UnixMilli()
 	if info.SessionID != sid || info.Status != "active" || info.ExpiresAt <= now {
 		d.refuseStart(ctx, l, in, "The session is not active.", false)
-		return
+		return nil
 	}
 	if info.Agent != in.Agent {
 		d.refuseStart(ctx, l, in, "The session belongs to another agent.", true)
-		return
+		return nil
 	}
 	if !d.reserveSlot() {
 		d.refuseStart(ctx, l, in, fmt.Sprintf("archivist connect already runs %d live sessions.", d.maxSessions), true)
-		return
+		return nil
 	}
 	cwd, err := d.makeCwd()
 	if err != nil {
 		d.releaseSlot()
 		d.log.Printf("start_session %s: working directory: %v", in.CorrelationID, err)
-		return
+		return nil
 	}
 	rec := &SessionRecord{SessionID: sid, Agent: in.Agent, StartCorrelationID: in.CorrelationID, Cwd: cwd,
 		ExpiresAt: info.ExpiresAt, Status: "active", CreatedAt: now}
@@ -313,11 +328,11 @@ func (d *Daemon) handleStart(ctx context.Context, l *live, in *Inbound) {
 		d.releaseSlot()
 		_ = os.RemoveAll(cwd)
 		d.log.Printf("start_session %s: session record not saved: %v", in.CorrelationID, err)
-		return
+		return nil
 	}
 	ack()
 	d.log.Printf("session %s starting (cwd %s)", sid, cwd)
-	d.attach(ctx, rec, in.Prompt, true)
+	return d.attach(ctx, rec, in.Prompt, true)
 }
 
 // refuseStart acknowledges a start that will not run. When the session is
@@ -330,7 +345,9 @@ func (d *Daemon) refuseStart(ctx context.Context, l *live, in *Inbound, reason s
 	if err := d.store.Save(rec); err != nil {
 		d.log.Printf("refusal record not saved: %v", err)
 	}
-	l.Send(commandAck(UserSocket, in.CorrelationID, in.SessionID))
+	if l != nil {
+		l.Send(commandAck(UserSocket, in.CorrelationID, in.SessionID))
+	}
 	if !report {
 		return
 	}
@@ -473,4 +490,125 @@ func (d *Daemon) LiveTokens() []string {
 		ids = append(ids, id)
 	}
 	return ids
+}
+
+// ─── session-bound sandbox mode (Story 78.22) ───────────────────────────────
+
+// SessionStart is the session-bound mode's start (archivist connect
+// --session): the sandbox orchestrator supplies the session, agent and
+// prompt, so no user socket and no relay start_session are involved.
+type SessionStart struct {
+	SessionID string
+	Agent     string
+	Prompt    string
+}
+
+// ValidSessionID reports a relay session UUID.
+func ValidSessionID(id string) bool { return uuidRe.MatchString(id) }
+
+// ValidPrompt reports a prompt the relay accepts (1..32000 UTF-16 units).
+func ValidPrompt(p string) bool { return textOK(p) }
+
+// sessionLookupAttempts bounds GET /agent-sessions/:id retries on
+// transient failures (a var so tests can shorten the wait).
+var (
+	sessionLookupAttempts = 4
+	sessionLookupBackoff  = time.Second
+)
+
+// RunSession serves exactly one session without the user socket: it never
+// reports capabilities and never takes a start from the relay, so a
+// sandbox daemon neither supersedes the owner's own archivist connect nor
+// waits for a start the relay would only forward to a logged-in daemon.
+// The session is checked with chat-api (owned, active, the same agent),
+// then started on its session socket as a relay start_session would be
+// (handleStart); later messages, approvals, interrupts and stop_session
+// arrive on that socket. It returns nil after stop_session, the session's
+// end or ctx's end, and a *FatalError when the session cannot start, a
+// sign-in fails or the subscription proof fails (Auth set for the last two).
+func (d *Daemon) RunSession(ctx context.Context, st SessionStart) error {
+	d.sandbox = true
+	if err := d.checkSession(ctx, st); err != nil {
+		return err
+	}
+	sessCtx, cancelSessions := context.WithCancel(context.Background())
+	defer func() {
+		d.beginClosing()
+		cancelSessions()
+		d.wg.Wait()
+		SweepAllOrphans()
+		d.revokeLeftovers()
+	}()
+	in := &Inbound{Kind: "start_session", CorrelationID: "sandbox-" + newRunID(), SessionID: st.SessionID,
+		Agent: st.Agent, Prompt: st.Prompt}
+	s := d.handleStart(sessCtx, nil, in)
+	if s == nil {
+		return &FatalError{Code: "START_REFUSED", Message: "the session did not start (see the log above)"}
+	}
+	select {
+	case <-s.done:
+	case <-ctx.Done():
+		d.log.Printf("stopping: ending the session")
+		cancelSessions()
+		<-s.done
+	}
+	if s.rec.Status != "failed" {
+		return nil
+	}
+	msg := s.fatal
+	if msg == "" {
+		msg = "the session failed"
+	}
+	return &FatalError{Code: "SESSION_FAILED", Message: msg, Auth: s.authFailed}
+}
+
+// checkSession validates a session-bound start with chat-api before any
+// socket connects: the session must exist for this key's owner (chat-api
+// answers 404 otherwise), be active and belong to the requested agent.
+func (d *Daemon) checkSession(ctx context.Context, st SessionStart) error {
+	if !ValidSessionID(st.SessionID) {
+		return &FatalError{Code: "BAD_SESSION", Message: "the session id is not a session UUID"}
+	}
+	if !d.agentUsable(st.Agent) {
+		return &FatalError{Code: "AGENT_UNAVAILABLE", Message: fmt.Sprintf("the %s agent is not available here", st.Agent)}
+	}
+	var info *client.AgentSession
+	var err error
+	for attempt := 1; ; attempt++ {
+		info, err = d.api.GetAgentSession(ctx, st.SessionID)
+		if err == nil {
+			break
+		}
+		var apiErr *client.APIError
+		if errors.As(err, &apiErr) && apiErr.Code != "FEATURE_DISABLED" &&
+			(apiErr.Status == http.StatusNotFound || apiErr.Status == http.StatusBadRequest) {
+			return &FatalError{Code: "SESSION_UNKNOWN", Message: "chat-api does not know this session for this API key's owner"}
+		}
+		if fatal, _ := classifyMint(err, false); fatal != nil {
+			return fatal
+		}
+		if attempt >= sessionLookupAttempts || ctx.Err() != nil {
+			return &FatalError{Code: "SESSION_LOOKUP", Message: "the session could not be checked with chat-api: " + err.Error()}
+		}
+		d.log.Printf("session lookup failed, retrying: %v", err)
+		if err := sleepCtx(ctx, sessionLookupBackoff*time.Duration(attempt)); err != nil {
+			return &FatalError{Code: "SESSION_LOOKUP", Message: "the session could not be checked with chat-api: " + err.Error()}
+		}
+	}
+	switch {
+	case info.SessionID != st.SessionID || info.Status != "active" || info.ExpiresAt <= time.Now().UnixMilli():
+		return &FatalError{Code: "SESSION_INACTIVE", Message: "the session is not active"}
+	case info.Agent != st.Agent:
+		return &FatalError{Code: "SESSION_AGENT", Message: fmt.Sprintf("the session belongs to the %s agent, not %s", info.Agent, st.Agent)}
+	}
+	return nil
+}
+
+// signedIn records a completed sign-in: later starts need none.
+func (d *Daemon) signedIn(agent string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.signIn == agent {
+		d.signIn = ""
+	}
 }

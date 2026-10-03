@@ -22,6 +22,15 @@
 //	big <bytes>     write one stdout line of that many bytes
 //
 // config.json "exitBeforeInit": true exits 3 on the first turn before init.
+//
+// `auth login --claudeai` imitates Claude Code 2.1.285's sign-in (Story
+// 78.22): it requires a terminal, prints the link (OSC 8 hyperlink and
+// plain) and "Paste code here if prompted > ", reads one line, and on the
+// code config.json "loginCode" (default "good-code") records a login with
+// "loginAuthMethod" (default claude.ai) and exits 0; any other code exits 1.
+// "loginNoURL" exits 1 without a link; "loginEnter" waits for Enter after
+// "Login successful". Each login records its environment keys in
+// $HOME/.fakeclaude/login.json.
 package main
 
 import (
@@ -41,14 +50,19 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"golang.org/x/term"
 )
 
 type config struct {
-	LoggedIn       bool   `json:"loggedIn"`
-	AuthMethod     string `json:"authMethod"`
-	APIKeySource   string `json:"apiKeySource"`
-	PermissionMode string `json:"permissionMode"`
-	ExitBeforeInit bool   `json:"exitBeforeInit"`
+	LoggedIn        bool   `json:"loggedIn"`
+	AuthMethod      string `json:"authMethod"`
+	APIKeySource    string `json:"apiKeySource"`
+	PermissionMode  string `json:"permissionMode"`
+	ExitBeforeInit  bool   `json:"exitBeforeInit"`
+	LoginCode       string `json:"loginCode"`
+	LoginAuthMethod string `json:"loginAuthMethod"`
+	LoginNoURL      bool   `json:"loginNoURL"`
+	LoginEnter      bool   `json:"loginEnter"`
 }
 
 var (
@@ -94,6 +108,10 @@ func main() {
 		b, _ := json.Marshal(map[string]any{"loggedIn": cfg.LoggedIn, "authMethod": cfg.AuthMethod,
 			"apiProvider": "firstParty", "subscriptionType": "max"})
 		fmt.Println(string(b))
+		return
+	}
+	if len(args) >= 2 && args[0] == "auth" && args[1] == "login" {
+		login(args[2:])
 		return
 	}
 	if len(args) == 0 || args[0] != "-p" {
@@ -454,4 +472,62 @@ func (r *runner) callMCP() {
 	}
 	r.toolResult(toolID, []any{map[string]any{"type": "text", "text": text}}, isErr)
 	r.say(1, "tools: "+strings.Join(names, ","))
+}
+
+const loginURL = "https://claude.com/cai/oauth/authorize?code=true&client_id=fake&response_type=code" +
+	"&redirect_uri=https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback&scope=user%3Ainference&state=fakestate"
+
+// login imitates `claude auth login --claudeai` on a terminal.
+func login(args []string) {
+	var keys []string
+	for _, kv := range os.Environ() {
+		k, _, _ := strings.Cut(kv, "=")
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	_ = os.MkdirAll(base, 0o700)
+	rec, _ := json.Marshal(map[string]any{"args": args, "envKeys": keys, "tty": term.IsTerminal(int(os.Stdin.Fd()))})
+	_ = os.WriteFile(filepath.Join(base, "login.json"), rec, 0o600)
+	if len(args) != 1 || args[0] != "--claudeai" {
+		fmt.Fprintln(os.Stderr, "fakeclaude: auth login needs exactly --claudeai")
+		os.Exit(2)
+	}
+	if !term.IsTerminal(int(os.Stdin.Fd())) || !term.IsTerminal(int(os.Stdout.Fd())) {
+		fmt.Fprintln(os.Stderr, "fakeclaude: auth login needs a terminal")
+		os.Exit(2)
+	}
+	if cfg.LoginNoURL {
+		fmt.Print("Something went wrong\r\n")
+		os.Exit(1)
+	}
+	fmt.Print("Opening browser to sign in\u2026\r\nIf the browser didn't open, visit: \x1b]8;;" + loginURL + "\x07\x1b[94m" +
+		loginURL + "\x1b[39m\x1b]8;;\x07\r\nPaste code here if prompted > ")
+	in := bufio.NewReader(os.Stdin)
+	line, err := in.ReadString('\n')
+	if err != nil {
+		os.Exit(3)
+	}
+	want := cfg.LoginCode
+	if want == "" {
+		want = "good-code"
+	}
+	if strings.TrimSpace(line) != want {
+		fmt.Print("\r\nOAuth error: Invalid code\r\n")
+		os.Exit(1)
+	}
+	method := cfg.LoginAuthMethod
+	if method == "" {
+		method = "claude.ai"
+	}
+	c := loadConfig()
+	c.LoggedIn, c.AuthMethod = true, method
+	b, _ := json.Marshal(c)
+	_ = os.WriteFile(filepath.Join(base, "config.json"), b, 0o600)
+	fmt.Print("\r\nLogin successful.\r\n")
+	if cfg.LoginEnter {
+		fmt.Print("Press Enter to continue\u2026")
+		if _, err := in.ReadString('\n'); err != nil {
+			os.Exit(3)
+		}
+	}
 }

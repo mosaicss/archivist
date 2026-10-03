@@ -171,3 +171,34 @@ type codexResolved struct {
 	ThreadID  string          `json:"threadId"`
 	RequestID json.RawMessage `json:"requestId"`
 }
+
+// codexLoginStartParams is account/login/start for the ChatGPT device code
+// flow (posture-1 sign-in, Story 78.22).
+type codexLoginStartParams struct {
+	Type string `json:"type"`
+}
+
+// codexLoginStartResult is the chatgptDeviceCode account/login/start response.
+type codexLoginStartResult struct {
+	Type            string `json:"type"`
+	LoginID         string `json:"loginId"`
+	UserCode        string `json:"userCode"`
+	VerificationURL string `json:"verificationUrl"`
+}
+
+// codexLoginCompleted is account/login/completed.
+type codexLoginCompleted struct {
+	LoginID *string `json:"loginId"`
+	Success bool    `json:"success"`
+	Error   *string `json:"error"`
+}
+
+// codexLoginCancelParams is account/login/cancel.
+type codexLoginCancelParams struct {
+	LoginID string `json:"loginId"`
+}
+
+// codexLoginCancelResult is the account/login/cancel response.
+type codexLoginCancelResult struct {
+	Status string `json:"status"`
+}

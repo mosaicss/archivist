@@ -46,6 +46,8 @@ var codexSchemaDefs = []string{
 	"FileChangeRequestApprovalResponse", "FileChangeApprovalDecision", "McpServerElicitationRequestParams",
 	"McpServerElicitationRequestResponse", "McpServerElicitationAction", "PermissionsRequestApprovalResponse",
 	"PermissionGrantScope", "ToolRequestUserInputResponse",
+	"LoginAccountParams", "LoginAccountResponse", "AccountLoginCompletedNotification",
+	"CancelLoginAccountParams", "CancelLoginAccountResponse", "CancelLoginAccountStatus",
 }
 
 var codexMethodUnions = []string{"ClientRequest", "ClientNotification", "ServerRequest", "ServerNotification"}
@@ -268,6 +270,11 @@ func TestCodexProtoMatchesSchema(t *testing.T) {
 		{v: codexApprovalHead{}, defs: []string{"CommandExecutionRequestApprovalParams", "FileChangeRequestApprovalParams"}},
 		{v: codexElicitation{}, defs: []string{"McpServerElicitationRequestParams"}, nested: map[string]string{"_meta": ""}},
 		{v: codexResolved{}, defs: []string{"ServerRequestResolvedNotification"}},
+		{v: codexLoginStartParams{}, defs: []string{"LoginAccountParams"}},
+		{v: codexLoginStartResult{}, defs: []string{"LoginAccountResponse"}},
+		{v: codexLoginCompleted{}, defs: []string{"AccountLoginCompletedNotification"}},
+		{v: codexLoginCancelParams{}, defs: []string{"CancelLoginAccountParams"}},
+		{v: codexLoginCancelResult{}, defs: []string{"CancelLoginAccountResponse"}},
 	} {
 		tags := jsonFields(reflect.TypeOf(m.v))
 		if m.only != nil {
@@ -328,6 +335,9 @@ func TestCodexProtoMatchesSchema(t *testing.T) {
 		{"PatchChangeKind", "add"}:          {"type"},
 		{"PatchChangeKind", "update"}:       {"type"},
 		{"PatchChangeKind", "delete"}:       {"type"},
+		// Posture-1 sign-in (Story 78.22): the device code variants.
+		{"LoginAccountParams", "chatgptDeviceCode"}:   {"type"},
+		{"LoginAccountResponse", "chatgptDeviceCode"}: {"type", "loginId", "userCode", "verificationUrl"},
 	}
 	for k, want := range tagged {
 		have := fieldsOf(k[0], k[1])
@@ -361,6 +371,9 @@ func TestCodexProtoMatchesSchema(t *testing.T) {
 		{"ThreadItem", "type"}:                   {"userMessage", "agentMessage", "reasoning", "commandExecution", "mcpToolCall", "fileChange"},
 		{"PatchChangeKind", "type"}:              {"add", "update", "delete"},
 		{"UserInput", "type"}:                    {"text"},
+		{"LoginAccountParams", "type"}:           {"chatgptDeviceCode"},
+		{"LoginAccountResponse", "type"}:         {"chatgptDeviceCode"},
+		{"CancelLoginAccountStatus", ""}:         {"canceled", "notFound"},
 	}
 	for k, want := range enums {
 		have := enumsOf(k[0], k[1])
@@ -372,13 +385,14 @@ func TestCodexProtoMatchesSchema(t *testing.T) {
 	}
 	methods := map[string][]string{
 		"ClientRequest": {"initialize", "account/read", "model/list", "thread/start", "thread/resume", "turn/start",
-			"turn/interrupt", "thread/backgroundTerminals/clean"},
+			"turn/interrupt", "thread/backgroundTerminals/clean", "account/login/start", "account/login/cancel"},
 		"ClientNotification": {"initialized"},
 		"ServerRequest": {"item/commandExecution/requestApproval", "item/fileChange/requestApproval",
 			"mcpServer/elicitation/request", "item/tool/requestUserInput", "item/permissions/requestApproval"},
 		"ServerNotification": {"turn/started", "turn/completed", "item/started", "item/completed", "item/agentMessage/delta",
 			"item/reasoning/summaryTextDelta", "turn/plan/updated", "thread/tokenUsage/updated",
-			"mcpServer/startupStatus/updated", "account/updated", "serverRequest/resolved", "error"},
+			"mcpServer/startupStatus/updated", "account/updated", "serverRequest/resolved", "error",
+			"account/login/completed"},
 	}
 	for union, want := range methods {
 		have := map[string]bool{}
