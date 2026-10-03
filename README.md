@@ -22,7 +22,7 @@ https://github.com/mosaicss/archivist/releases, verify, and put the binary on
 your PATH. For example, Linux amd64:
 
 ```sh
-VER=0.2.22
+VER=0.2.23
 curl -fsSLO https://github.com/mosaicss/archivist/releases/download/v${VER}/archivist_v${VER}_linux_amd64.tar.gz
 curl -fsSLO https://github.com/mosaicss/archivist/releases/download/v${VER}/archivist_v${VER}_SHA256SUMS
 grep "archivist_v${VER}_linux_amd64.tar.gz" archivist_v${VER}_SHA256SUMS | sha256sum -c -
@@ -110,7 +110,7 @@ When a response is too large it is truncated and stderr says
 
 ```text
 $ archivist version
-archivist-cli 0.2.22 (commit abc1234 built 2026-10-01) linux/amd64
+archivist-cli 0.2.23 (commit abc1234 built 2026-10-01) linux/amd64
 ```
 
 ## Fair use and errors
@@ -326,8 +326,8 @@ goreleaser build --snapshot --clean
 Releases are cut by pushing a semver tag on a merged, CI green commit:
 
 ```sh
-git tag v0.2.22
-git push origin v0.2.22
+git tag v0.2.23
+git push origin v0.2.23
 ```
 
 `.github/workflows/release.yml` runs goreleaser: 5 platform binaries plus a

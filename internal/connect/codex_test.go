@@ -1030,6 +1030,9 @@ func TestCodexResumeEdgeRows(t *testing.T) {
 	h2.start()
 	h2.message(sid2, "echo two")
 	waitFor(t, 20*time.Second, "failed", func() bool { return h2.record(sid2).Status == "failed" })
+	// The record is saved before the outbox delivers the error and the
+	// failed status (in that order): wait for the relay to see the status.
+	h2.relay.waitStatus(t, sid2, "failed", 1)
 	if errs := h2.errorTexts(sid2); len(errs) != 1 || !strings.Contains(errs[0], "could not resume the thread") {
 		t.Fatalf("errors %v", errs)
 	}
