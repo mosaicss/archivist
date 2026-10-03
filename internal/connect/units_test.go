@@ -485,8 +485,16 @@ func TestClaudeArgsAreFixed(t *testing.T) {
 func TestDetectCodexLogin(t *testing.T) {
 	look := func(file string) (string, error) { return "/bin/" + file, nil }
 	sub := `{"loggedIn":true,"authMethod":"claude.ai","subscriptionType":"max"}`
+	owner := t.TempDir()
+	if err := os.WriteFile(filepath.Join(owner, "auth.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var codexEnvs [][]string
 	runner := func(loginErr error, loginOut string) Runner {
-		return func(_ context.Context, _ []string, _ string, bin string, args ...string) ([]byte, error) {
+		return func(_ context.Context, env []string, _ string, bin string, args ...string) ([]byte, error) {
+			if strings.HasSuffix(bin, "codex") {
+				codexEnvs = append(codexEnvs, env)
+			}
 			switch strings.Join(args, " ") {
 			case "--version":
 				if strings.HasSuffix(bin, "codex") {
@@ -502,21 +510,58 @@ func TestDetectCodexLogin(t *testing.T) {
 		}
 	}
 	cases := []struct {
-		err  error
-		out  string
-		want bool
+		err       error
+		out       string
+		loggedIn  bool
+		available bool
 	}{
-		{nil, "", true},                           // codex-cli 0.160.0 prints status on stderr, exit 0
-		{nil, "Logged in using ChatGPT", true},    // stdout variant
-		{errors.New("exit status 1"), "", false},  // not logged in
-		{nil, "Not logged in", false},             // defensive: text says logged out
-		{errors.New("signal: killed"), "", false}, // any error falls back to false
+		{nil, "Logged in using ChatGPT\n", true, true},                      // codex-cli 0.160.0 (stderr, read combined)
+		{nil, "", false, false},                                             // nothing printed: not a ChatGPT login
+		{nil, "Logged in using an API key - sk-proj-***ABCD", false, false}, // API key login: not usable
+		{nil, "WARNING: proceeding, even though we could not create PATH aliases\nLogged in using ChatGPT", true, true}, // warning line first
+		{errors.New("exit status 1"), "Not logged in", false, false},
+		{nil, "Not logged in", false, false},
+		{errors.New("signal: killed"), "", false, false},
 	}
 	for _, c := range cases {
-		d := Detect(context.Background(), look, runner(c.err, c.out), nil, "/")
+		codexEnvs = nil
+		run := runner(c.err, c.out)
+		d := DetectWith(context.Background(), DetectOptions{LookPath: look, Run: run, RunCombined: run,
+			Env: []string{"HOME=/h"}, Dir: "/", CodexHome: owner})
 		caps := d.Capabilities()
-		if d.Codex.LoggedIn != c.want || caps[1].LoggedIn != c.want || caps[1].Available {
+		if d.Codex.LoggedIn != c.loggedIn || caps[1].LoggedIn != c.loggedIn || caps[1].Available != c.available {
 			t.Errorf("%v/%q: codex %+v caps %+v", c.err, c.out, d.Codex, caps[1])
 		}
+		if strings.Contains(c.out, "API key") && !strings.Contains(d.Codex.Problem, "only drives a ChatGPT login") {
+			t.Errorf("API key login problem %q", d.Codex.Problem)
+		}
+		if c.loggedIn && d.Codex.Login != "Logged in using ChatGPT" {
+			t.Errorf("login line %q", d.Codex.Login)
+		}
+		if len(codexEnvs) != 2 {
+			t.Fatalf("codex probes %d", len(codexEnvs))
+		}
+		for _, env := range codexEnvs {
+			if !contains(env, "CODEX_HOME="+owner) {
+				t.Errorf("codex probe env %v lacks the owner CODEX_HOME", env)
+			}
+		}
+	}
+	// An old version with an API key login reports the version first, and
+	// the key never reaches Login or Problem.
+	old := func(_ context.Context, _ []string, _ string, bin string, args ...string) ([]byte, error) {
+		if strings.Join(args, " ") == "--version" {
+			return []byte("codex-cli 0.159.2"), nil
+		}
+		return []byte("Logged in using an API key - sk-proj-AbCdEfGhIjKlMnOpQrStUvWx"), nil
+	}
+	d0 := DetectWith(context.Background(), DetectOptions{LookPath: look, Run: old, RunCombined: old, Dir: "/", CodexHome: owner})
+	if !strings.Contains(d0.Codex.Problem, "older than the supported floor") || strings.Contains(d0.Codex.Login+d0.Codex.Problem, "AbCdEfGh") {
+		t.Errorf("old version with API key: problem %q login %q", d0.Codex.Problem, d0.Codex.Login)
+	}
+	// Without an owner home (Detect) Codex is reported but never available.
+	d := Detect(context.Background(), look, runner(nil, "Logged in using ChatGPT"), nil, "/")
+	if caps := d.Capabilities(); caps[1].Available || !caps[1].LoggedIn {
+		t.Errorf("no owner home: %+v", caps[1])
 	}
 }

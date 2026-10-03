@@ -32,6 +32,7 @@ var (
 	binDir     string
 	binErr     error
 	fakeClaude string
+	fakeCodex  string
 	archivist  string
 )
 
@@ -53,9 +54,11 @@ func testBinaries(t *testing.T) (claudeBin, archivistBin string) {
 			return
 		}
 		fakeClaude = filepath.Join(binDir, "claude")
+		fakeCodex = filepath.Join(binDir, "codex")
 		archivist = filepath.Join(binDir, "archivist")
 		for _, b := range []struct{ out, pkg string }{
 			{fakeClaude, "./testdata/fakeclaude"},
+			{fakeCodex, "./testdata/fakecodex"},
 			{archivist, "../../cmd/archivist"},
 		} {
 			cmd := exec.Command("go", "build", "-o", b.out, b.pkg)
@@ -69,6 +72,13 @@ func testBinaries(t *testing.T) (claudeBin, archivistBin string) {
 		t.Fatal(binErr)
 	}
 	return fakeClaude, archivist
+}
+
+// testCodexBinary builds the shared binaries and returns the fake Codex.
+func testCodexBinary(t *testing.T) string {
+	t.Helper()
+	testBinaries(t)
+	return fakeCodex
 }
 
 // ─── fake chat-api (78.15 routes) ────────────────────────────────────────────

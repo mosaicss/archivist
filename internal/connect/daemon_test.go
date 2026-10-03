@@ -41,16 +41,22 @@ const testOwnerKey = "ak_test_owner_key_0001"
 // harness runs a daemon in-process against the fake relay and chat-api, with
 // the fake Claude Code and the real archivist binary for `mcp serve`.
 type harness struct {
-	t      *testing.T
-	home   string
-	tmp    string
-	api    *fakeChatAPI
-	relay  *fakeRelay
-	log    *syncBuffer
-	max    int
-	d      *Daemon
-	cancel context.CancelFunc
-	done   chan error
+	t     *testing.T
+	home  string
+	tmp   string
+	api   *fakeChatAPI
+	relay *fakeRelay
+	log   *syncBuffer
+	max   int
+	// codex drives the fake Codex too (Story 78.17); codexModel and
+	// codexEffort are its local flags.
+	codex       bool
+	codexOff    bool // detect Codex as usable but leave the adapter unconfigured
+	codexModel  string
+	codexEffort string
+	d           *Daemon
+	cancel      context.CancelFunc
+	done        chan error
 }
 
 func newHarness(t *testing.T, fakeCfg map[string]any) *harness {
@@ -65,13 +71,17 @@ func newHarness(t *testing.T, fakeCfg map[string]any) *harness {
 // daemonEnv is the daemon's own environment: allowed keys plus provider and
 // archivist credentials that must never reach Claude.
 func (h *harness) daemonEnv() []string {
-	return []string{
+	env := []string{
 		"HOME=" + h.home, "PATH=" + os.Getenv("PATH"), "USER=tester", "LANG=C.UTF-8", "LC_ALL=C",
 		"XDG_CONFIG_HOME=" + filepath.Join(h.home, ".config"), "TMPDIR=" + h.tmp,
 		"ANTHROPIC_API_KEY=sk-ant-api03-must-not-pass", "CLAUDE_CODE_OAUTH_TOKEN=oauth-must-not-pass",
 		"CLAUDE_CONFIG_DIR=/nonexistent", "ARCHIVIST_TOKEN=" + testOwnerKey, "ARCHIVIST_BASE_URL=http://wrong.invalid",
 		"OPENAI_API_KEY=must-not-pass", "CODEX_HOME=/nonexistent", "HERDR_ENV=1", "AWS_SECRET_ACCESS_KEY=must-not-pass",
 	}
+	if h.codex {
+		env = append(env, "CODEX_API_KEY=must-not-pass", "CODEX_ACCESS_TOKEN=must-not-pass", "OPENAI_BASE_URL=http://wrong.invalid")
+	}
+	return env
 }
 
 func (h *harness) start() {
@@ -88,7 +98,15 @@ func (h *harness) start() {
 		if file == "claude" {
 			return claudeBin, nil
 		}
+		if file == "codex" && h.codex {
+			return testCodexBinary(h.t), nil
+		}
 		return "", exec.ErrNotFound
+	}
+	var codexCfg CodexConfig
+	if h.codex && !h.codexOff {
+		codexCfg = CodexConfig{Bin: testCodexBinary(h.t), Version: "0.160.0", Model: h.codexModel, Effort: h.codexEffort,
+			OwnerHome: h.codexOwner(), Executable: archivistBin, BaseURL: h.api.srv.URL}
 	}
 	d, err := New(Config{
 		API:      api,
@@ -96,9 +114,14 @@ func (h *harness) start() {
 		StateDir: filepath.Join(h.home, ".archivist", "connect"),
 		Claude: ClaudeConfig{Bin: claudeBin, SettingSources: DefaultSettingSources, Executable: archivistBin,
 			BaseURL: h.api.srv.URL},
+		Codex:       codexCfg,
 		MaxSessions: h.max,
 		Log:         NewLogger(h.log),
 		Detect: func(ctx context.Context) Detection {
+			if h.codex {
+				return DetectWith(ctx, DetectOptions{LookPath: lookPath, Run: ExecRunner, RunCombined: ExecCombinedRunner,
+					Env: childEnv, Dir: h.home, CodexHome: h.codexOwner()})
+			}
 			return Detect(ctx, lookPath, ExecRunner, childEnv, h.home)
 		},
 		Environ: func() []string { return env },

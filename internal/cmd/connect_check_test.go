@@ -23,7 +23,7 @@ func detectWith(found []string, claudeVersion, authJSON, codexVersion string) co
 	run := func(_ context.Context, _ []string, _ string, bin string, args ...string) ([]byte, error) {
 		switch {
 		case strings.HasSuffix(bin, "codex") && len(args) == 2 && args[0] == "login":
-			return nil, nil // exit 0: logged in
+			return []byte("Logged in using ChatGPT\n"), nil // exit 0: logged in
 		case strings.HasSuffix(bin, "codex"):
 			return []byte(codexVersion), nil
 		case len(args) == 1 && args[0] == "--version":
@@ -48,8 +48,8 @@ func exitOf(err error) int {
 }
 
 // Check row: `archivist connect --check` prints path, version, floor verdict,
-// loggedIn, authMethod, subscriptionType and codex "adapter: not supported
-// yet", and exits with a typed code.
+// loggedIn, authMethod, subscriptionType and the codex block (path, version,
+// floor, loggedIn, status), and exits with a typed code.
 func TestConnectCheckOutputAndExitCodes(t *testing.T) {
 	sub := `{"loggedIn":true,"authMethod":"claude.ai","subscriptionType":"max"}`
 	cases := []struct {
@@ -61,10 +61,10 @@ func TestConnectCheckOutputAndExitCodes(t *testing.T) {
 		{"usable", detectWith([]string{"claude", "codex"}, "2.1.280 (Claude Code)", sub, "codex-cli 0.160.0"), 0, []string{
 			"path:     /opt/bin/claude", "version:  2.1.280", "floor:    2.1.280 (ok)", "loggedIn: true",
 			"authMethod: claude.ai", "subscriptionType: max", "status:   usable",
-			"path:     /opt/bin/codex", "version:  0.160.0", "adapter:  not supported yet"}},
+			"path:     /opt/bin/codex", "version:  0.160.0", "floor:    0.160.0 (ok)", "not usable: the Codex home directory is unknown"}},
 		{"missing", detectWith(nil, "", "", ""), ExitNotFound, []string{
 			"claude\n  path:     not found", "not usable: Claude Code (claude) was not found on PATH",
-			"codex\n  path:     not found", "adapter:  not supported yet"}},
+			"codex\n  path:     not found"}},
 		{"below floor", detectWith([]string{"claude"}, "2.1.279 (Claude Code)", sub, ""), ExitGenericError, []string{
 			"version:  2.1.279", "floor:    2.1.280 (below floor)", "not usable: Claude Code 2.1.279 is older than the supported floor 2.1.280"}},
 		{"not subscription", detectWith([]string{"claude"}, "2.1.288 (Claude Code)", `{"loggedIn":true,"authMethod":"console","subscriptionType":""}`, ""), ExitAuthError, []string{
@@ -92,7 +92,7 @@ func TestConnectCheckShowsCodexLogin(t *testing.T) {
 	det := detectWith([]string{"claude", "codex"}, "2.1.280 (Claude Code)", sub, "codex-cli 0.160.0")
 	var out bytes.Buffer
 	printDetection(&out, det)
-	if !strings.Contains(out.String(), "codex\n  path:     /opt/bin/codex\n  version:  0.160.0\n  loggedIn: true\n  adapter:  not supported yet") {
+	if !strings.Contains(out.String(), "codex\n  path:     /opt/bin/codex\n  version:  0.160.0\n  floor:    0.160.0 (ok)\n  loggedIn: true\n  login:    Logged in using ChatGPT\n  status:   not usable") {
 		t.Fatalf("codex block:\n%s", out.String())
 	}
 }

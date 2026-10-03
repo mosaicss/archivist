@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -46,13 +48,33 @@ type ClaudeInfo struct {
 // Usable reports whether sessions may start with this Claude Code.
 func (c ClaudeInfo) Usable() bool { return c.Problem == "" }
 
+// CodexFloor is the oldest Codex CLI the adapter drives: the version whose
+// app-server protocol Story 78.17 was built and verified against. Newer
+// versions are reported, not blocked.
+const CodexFloor = "0.160.0"
+
 // CodexInfo is what detection learned about a local Codex CLI.
 type CodexInfo struct {
-	Path    string
-	Version string
-	// LoggedIn is `codex login status` exiting 0 (a local check, no model call).
+	Path      string
+	Version   string
+	VersionOK bool
+	// LoggedIn is `codex login status` (a local check, no model call)
+	// exiting 0 and reporting a ChatGPT login.
 	LoggedIn bool
+	// Login is the status line `codex login status` printed (stdout or stderr).
+	Login string
+	// Home is the owner's Codex home (CODEX_HOME if absolute, else ~/.codex).
+	Home string
+	// AuthPresent reports that Home holds an auth.json file.
+	AuthPresent bool
+	// Problem names why Codex is not usable ("" when usable).
+	Problem string
 }
+
+// Usable reports whether Codex sessions may start: installed, at or above
+// the floor, logged in and with the owner's auth.json present. The
+// ChatGPT subscription itself is proven per session (account/read).
+func (c CodexInfo) Usable() bool { return c.Path != "" && c.Problem == "" }
 
 // Detection is the local harness inventory.
 type Detection struct {
@@ -68,8 +90,7 @@ type Capability struct {
 	LoggedIn  bool   `json:"loggedIn"`
 }
 
-// Capabilities reports Claude (available only when usable) and, when
-// installed, Codex as unavailable until its adapter exists (Story 78.17).
+// Capabilities reports each installed harness; available only when usable.
 func (d Detection) Capabilities() []Capability {
 	caps := []Capability{}
 	if d.Claude.Path != "" {
@@ -81,7 +102,8 @@ func (d Detection) Capabilities() []Capability {
 		})
 	}
 	if d.Codex.Path != "" {
-		caps = append(caps, Capability{Agent: "codex", Version: capabilityVersion(d.Codex.Version), LoggedIn: d.Codex.LoggedIn})
+		caps = append(caps, Capability{Agent: "codex", Version: capabilityVersion(d.Codex.Version),
+			Available: d.Codex.Usable(), LoggedIn: d.Codex.LoggedIn})
 	}
 	return caps
 }
@@ -108,6 +130,22 @@ func capabilityVersion(v string) string {
 // Runner runs a detection command and returns its stdout. Tests replace it.
 type Runner func(ctx context.Context, env []string, dir, bin string, args ...string) ([]byte, error)
 
+// ExecCombinedRunner is ExecRunner returning stdout and stderr together
+// (for probes that report on stderr).
+func ExecCombinedRunner(ctx context.Context, env []string, dir, bin string, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, detectTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin, args...)
+	cmd.Env = env
+	cmd.Dir = dir
+	cmd.WaitDelay = 2 * time.Second
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return out, fmt.Errorf("%s %s: %w", bin, strings.Join(args, " "), err)
+	}
+	return out, nil
+}
+
 // ExecRunner runs bin with exactly env and dir.
 func ExecRunner(ctx context.Context, env []string, dir, bin string, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, detectTimeout)
@@ -130,22 +168,114 @@ func ExecRunner(ctx context.Context, env []string, dir, bin string, args ...stri
 type LookPath func(file string) (string, error)
 
 // Detect inventories Claude Code and Codex. env is the allowlisted child
-// environment; dir is the working directory for the probes.
+// environment; dir is the working directory for the probes. Without an
+// owner Codex home (DetectWith) Codex is reported but never usable.
 func Detect(ctx context.Context, lookPath LookPath, run Runner, env []string, dir string) Detection {
+	return DetectWith(ctx, DetectOptions{LookPath: lookPath, Run: run, Env: env, Dir: dir})
+}
+
+// DetectOptions configures DetectWith.
+type DetectOptions struct {
+	LookPath LookPath
+	Run      Runner
+	// Env is the allowlisted child environment (no CODEX_HOME).
+	Env []string
+	Dir string
+	// CodexHome is the owner's Codex home (OwnerCodexHome); codex probes run
+	// with CODEX_HOME set to it. "" leaves Codex unusable.
+	CodexHome string
+	// RunCombined runs `codex login status`, which prints on stderr: it
+	// returns stdout and stderr together. nil uses Run.
+	RunCombined Runner
+}
+
+// DetectWith inventories Claude Code and Codex.
+func DetectWith(ctx context.Context, o DetectOptions) Detection {
 	var d Detection
-	d.Claude = detectClaude(ctx, lookPath, run, env, dir)
-	if path, err := lookPath("codex"); err == nil {
-		d.Codex.Path = path
-		if out, err := run(ctx, env, dir, path, "--version"); err == nil {
-			d.Codex.Version = parseVersion(string(out))
-		}
-		// codex-cli prints "Logged in using ..." or "Not logged in" on stderr
-		// and exits 0 or 1; any error counts as logged out.
-		if out, err := run(ctx, env, dir, path, "login", "status"); err == nil && !strings.Contains(string(out), "Not logged in") {
-			d.Codex.LoggedIn = true
+	d.Claude = detectClaude(ctx, o.LookPath, o.Run, o.Env, o.Dir)
+	d.Codex = detectCodex(ctx, o)
+	return d
+}
+
+func detectCodex(ctx context.Context, o DetectOptions) CodexInfo {
+	var c CodexInfo
+	path, err := o.LookPath("codex")
+	if err != nil {
+		return c
+	}
+	c.Path, c.Home = path, o.CodexHome
+	env := o.Env
+	if c.Home != "" {
+		env = append(append([]string(nil), o.Env...), "CODEX_HOME="+c.Home)
+	}
+	if out, err := o.Run(ctx, env, o.Dir, path, "--version"); err == nil {
+		c.Version = parseVersion(string(out))
+	}
+	c.VersionOK = c.Version != "" && !versionLess(c.Version, CodexFloor)
+	// codex-cli prints "Logged in using ChatGPT" (or "... an API key", or
+	// "Not logged in") on stderr and exits 0 or 1; only a ChatGPT login
+	// counts, any error counts as logged out.
+	runLogin := o.RunCombined
+	if runLogin == nil {
+		runLogin = o.Run
+	}
+	out, loginErr := runLogin(ctx, env, o.Dir, path, "login", "status")
+	c.Login = loginLine(string(out))
+	apiLogin := false
+	switch {
+	case loginErr != nil || strings.Contains(c.Login, "Not logged in"):
+	case strings.Contains(c.Login, "ChatGPT"):
+		c.LoggedIn = true
+	case c.Login != "":
+		apiLogin = true
+	}
+	if c.Home != "" {
+		if st, err := os.Stat(filepath.Join(c.Home, "auth.json")); err == nil && st.Mode().IsRegular() {
+			c.AuthPresent = true
 		}
 	}
-	return d
+	switch {
+	case c.Version == "":
+		c.Problem = "could not read the Codex version"
+	case !c.VersionOK:
+		c.Problem = fmt.Sprintf("Codex %s is older than the supported floor %s; update Codex", c.Version, CodexFloor)
+	case apiLogin:
+		c.Problem = fmt.Sprintf("Codex reports %q; archivist connect only drives a ChatGPT login (run 'codex login' and sign in with ChatGPT)", c.Login)
+	case !c.LoggedIn:
+		c.Problem = "Codex is not logged in; run 'codex login' and sign in with ChatGPT"
+	case c.Home == "":
+		c.Problem = "the Codex home directory is unknown"
+	case !c.AuthPresent:
+		c.Problem = fmt.Sprintf("no auth.json in %s; run 'codex login' and sign in with ChatGPT", c.Home)
+	}
+	return c
+}
+
+// loginLine is the status line of `codex login status` output (other
+// lines, such as warnings, are ignored), scrubbed for logs and --check.
+func loginLine(out string) string {
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "Logged in") || strings.Contains(line, "Not logged in") {
+			return Scrub(truncateString(line, 200))
+		}
+	}
+	return ""
+}
+
+// OwnerCodexHome is the owner's Codex home: the daemon's CODEX_HOME when it
+// is an absolute path, else ~/.codex. Sessions never run in it; they link
+// its auth.json into a private per-session home.
+func OwnerCodexHome(environ []string, userHome string) string {
+	for _, kv := range environ {
+		if v, ok := strings.CutPrefix(kv, "CODEX_HOME="); ok && filepath.IsAbs(v) {
+			return filepath.Clean(v)
+		}
+	}
+	if userHome == "" {
+		return ""
+	}
+	return filepath.Join(userHome, ".codex")
 }
 
 func detectClaude(ctx context.Context, lookPath LookPath, run Runner, env []string, dir string) ClaudeInfo {

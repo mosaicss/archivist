@@ -77,6 +77,14 @@ type session struct {
 	interruptSeq   int
 	interruptTimer *time.Timer
 
+	// Codex (Story 78.17): the live app-server connection, the translator,
+	// the turn's last usage report (sent just before finish/abort) and the
+	// descendant snapshot timer.
+	cx        *codexRun
+	ctr       *CodexTranslator
+	lastUsage Chunk
+	snapTimer *time.Timer
+
 	token      *client.TaskToken
 	tokenFile  string
 	mcpFile    string
@@ -94,6 +102,7 @@ func newSession(d *Daemon, rec *SessionRecord) *session {
 		remember: map[string]bool{}, linkErr: make(chan error, 1), done: make(chan struct{})}
 	s.outbox = NewOutbox(d.parser, log)
 	s.tr = NewTranslator()
+	s.ctr = NewCodexTranslator()
 	runID := s.outbox.RunID()
 	s.tr.TurnID = func(n int) string { return "claude-" + runID + "-turn-" + strconv.Itoa(n) }
 	s.link = newLink("session socket", SessionSocket, rec.SessionID, d.api, d.relayURL, s.outbox, log)
@@ -166,8 +175,57 @@ func (s *session) run(ctx context.Context, prompt string) {
 			s.interruptTimedOut()
 		case <-timerC(s.tokenTimer):
 			s.refreshToken(ctx)
+		case <-s.codexWake():
+			s.drainCodex()
+		case <-s.codexGone():
+			// The JSON-RPC connection closed (protocol error or EOF) while
+			// the process may still run: treat it as the process ending.
+			s.log.Printf("codex connection closed")
+			s.processExited()
+		case <-timerC(s.snapTimer):
+			s.snapshot()
 		}
 	}
+}
+
+// codexWake signals queued Codex events (nil without a Codex process).
+func (s *session) codexWake() <-chan struct{} {
+	if s.cx == nil {
+		return nil
+	}
+	return s.cx.rpc.q.wake
+}
+
+// codexGone is closed when the Codex JSON-RPC connection ends.
+func (s *session) codexGone() <-chan struct{} {
+	if s.cx == nil {
+		return nil
+	}
+	return s.cx.rpc.conn.DisconnectNotify()
+}
+
+// snapshot records the harness's descendants and reaps adopted zombies
+// (periodic: Codex sessions, and Claude sessions while the daemon is the
+// child subreaper).
+func (s *session) snapshot() {
+	s.snapTimer = nil
+	if s.proc == nil {
+		return
+	}
+	s.proc.Snapshot()
+	reapZombies()
+	s.snapTimer = time.NewTimer(codexSnapshotEvery)
+}
+
+// isCodex reports a Codex session (Story 78.17); everything else is Claude.
+func (s *session) isCodex() bool { return s.rec.Agent == "codex" }
+
+// harness names the session's harness in user-facing messages.
+func (s *session) harness() string {
+	if s.isCodex() {
+		return "Codex"
+	}
+	return "Claude Code"
 }
 
 func timerC(t *time.Timer) <-chan time.Time {
@@ -209,8 +267,8 @@ func (s *session) emitError(text string) {
 
 // ─── process ────────────────────────────────────────────────────────────────
 
-// spawn starts Claude Code after the subscription login proof; resumeID
-// continues an earlier Claude session.
+// spawn starts the session's harness after its subscription login proof;
+// resumeID continues an earlier Claude session or Codex thread.
 func (s *session) spawn(ctx context.Context, resumeID string) (err error) {
 	if !s.slot {
 		if !s.d.reserveSlot() {
@@ -223,6 +281,11 @@ func (s *session) spawn(ctx context.Context, resumeID string) (err error) {
 			s.releaseSlot()
 		}
 	}()
+	if !s.d.agentUsable(s.rec.Agent) {
+		// A record reattached for a harness this run does not drive: not a
+		// failed proof, the session stays resumable.
+		return fmt.Errorf("%s is not usable in this archivist connect run; fix it, then restart archivist connect", s.harness())
+	}
 	if err := s.ensureToken(ctx); err != nil {
 		return fmt.Errorf("task token: %w", err)
 	}
@@ -233,6 +296,9 @@ func (s *session) spawn(ctx context.Context, resumeID string) (err error) {
 		if err := os.MkdirAll(s.rec.Cwd, 0o700); err != nil {
 			return fmt.Errorf("working directory: %w", err)
 		}
+	}
+	if s.isCodex() {
+		return s.spawnCodex(ctx, resumeID)
 	}
 	env, err := BuildChildEnv(s.d.environ(), nil)
 	if err != nil {
@@ -255,6 +321,10 @@ func (s *session) spawn(ctx context.Context, resumeID string) (err error) {
 	s.proc, s.procDone, s.procLines = proc, proc.Done(), proc.Lines()
 	s.running, s.turnActive, s.resumedID = false, false, resumeID
 	s.tr.reset()
+	if s.d.reaping {
+		// The daemon adopts orphans (Codex configured): reap Claude's too.
+		s.snapTimer = time.NewTimer(codexSnapshotEvery)
+	}
 	return nil
 }
 
@@ -274,8 +344,16 @@ func (s *session) releaseSlot() {
 	}
 }
 
-// resumable reports whether a later message can resume Claude.
-func (s *session) resumable() bool { return s.rec.ClaudeSessionID != "" }
+// resumable reports whether a later message can resume the harness.
+func (s *session) resumable() bool { return s.resumeID() != "" }
+
+// resumeID is the Claude session id or Codex thread id to resume.
+func (s *session) resumeID() string {
+	if s.isCodex() {
+		return s.rec.CodexThreadID
+	}
+	return s.rec.ClaudeSessionID
+}
 
 // failSession ends a session that cannot continue: the record is failed,
 // the token revoked and later messages refused with msg.
@@ -286,6 +364,9 @@ func (s *session) failSession(msg string) {
 	s.revokeToken()
 	s.d.store.RemoveRunDir(s.id)
 	removeSessionCwd(s.rec.Cwd)
+	if s.isCodex() {
+		s.d.store.RemoveCodexHome(s.id)
+	}
 }
 
 // proofError is a failed subscription proof: fatal for the session.
@@ -295,7 +376,8 @@ func (e *proofError) Error() string { return e.msg }
 
 func (s *session) failStart(err error) {
 	var proof *proofError
-	msg := Scrub("Could not start Claude Code: " + err.Error())
+	var lost *lostError
+	msg := Scrub("Could not start " + s.harness() + ": " + err.Error())
 	s.log.Printf("%s", msg)
 	if errors.Is(err, errCapacity) {
 		s.emitCapacity()
@@ -306,6 +388,9 @@ func (s *session) failStart(err error) {
 	case errors.As(err, &proof):
 		s.failSession(proof.msg)
 		s.emitStatus("failed", msg)
+	case errors.As(err, &lost):
+		s.failSession(msg + " Start a new session.")
+		s.emitStatus("failed", msg+" Start a new session.")
 	case s.resumable():
 		s.revokeToken()
 		s.d.store.RemoveRunDir(s.id) // ensureToken recreates it on resume
@@ -322,6 +407,10 @@ func (s *session) sendUser(text string) {
 	}
 	if s.turnActive {
 		s.queue = append(s.queue, text)
+		return
+	}
+	if s.isCodex() {
+		s.codexSendUser(text)
 		return
 	}
 	frame := userFrame(text)
@@ -367,6 +456,24 @@ func (s *session) stopProcess(kill bool) {
 	s.pending = map[string]*pendingApproval{}
 	s.queue = nil
 	s.stopInterruptTimer()
+	if s.cx != nil {
+		s.cx.rpc.close()
+		s.cx = nil
+	}
+	s.lastUsage = nil
+	if s.snapTimer != nil {
+		s.snapTimer.Stop()
+		s.snapTimer = nil
+	}
+}
+
+// nextQueued starts the oldest message queued during a turn.
+func (s *session) nextQueued() {
+	if len(s.queue) > 0 {
+		next := s.queue[0]
+		s.queue = s.queue[1:]
+		s.sendUser(next)
+	}
 }
 
 func (s *session) processExited() {
@@ -380,6 +487,18 @@ func (s *session) processExited() {
 			s.handleLine(line)
 		}
 	}
+	if s.cx != nil {
+		// Let the JSON-RPC reader finish the buffered messages (the turn may
+		// have completed) before treating the exit.
+		select {
+		case <-s.cx.rpc.conn.DisconnectNotify():
+		case <-time.After(2 * time.Second):
+		}
+		s.drainCodex()
+		if s.proc != nil && len(s.queue) > 0 {
+			s.emitError(fmt.Sprintf("Codex exited before %d queued message(s) were sent; send them again.", len(s.queue)))
+		}
+	}
 	if s.proc == nil {
 		return
 	}
@@ -389,11 +508,15 @@ func (s *session) processExited() {
 	if s.stopping {
 		return
 	}
-	s.log.Printf("claude exited unexpectedly: %v", err)
-	if wasTurn {
-		s.emitError("Claude Code exited before the turn finished.")
+	if s.isCodex() {
+		s.log.Printf("codex exited unexpectedly: %v", err)
+	} else {
+		s.log.Printf("claude exited unexpectedly: %v", err)
 	}
-	s.processGone("Claude Code exited")
+	if wasTurn {
+		s.emitError(s.harness() + " exited before the turn finished.")
+	}
+	s.processGone(s.harness() + " exited")
 }
 
 // processGone settles a session whose Claude process went away on its own
@@ -466,18 +589,14 @@ func (s *session) handleLine(line []byte) {
 			s.emitStatus("interrupted", "")
 		}
 		s.flushCoalesced()
-		if len(s.queue) > 0 {
-			next := s.queue[0]
-			s.queue = s.queue[1:]
-			s.sendUser(next)
-		}
+		s.nextQueued()
 	}
 }
 
 // failProof enforces the fail-closed subscription proof.
 func (s *session) failProof(msg string) {
 	s.log.Printf("%s; stopping the session", msg)
-	if s.proc != nil {
+	if s.proc != nil && !s.isCodex() {
 		_ = s.proc.WriteJSON(interruptFrame("archivist-proof-" + s.outbox.RunID()))
 	}
 	s.stopProcess(true)
@@ -560,9 +679,13 @@ func (s *session) userMessage(ctx context.Context, text string) {
 		return
 	}
 	if s.proc == nil {
-		if s.rec.ClaudeSessionID == "" {
-			s.emitError("There is no Claude Code session to resume.")
-			s.emitStatus("failed", "There is no Claude Code session to resume.")
+		if !s.resumable() {
+			what := "Claude Code session"
+			if s.isCodex() {
+				what = "Codex thread"
+			}
+			s.emitError("There is no " + what + " to resume.")
+			s.emitStatus("failed", "There is no "+what+" to resume.")
 			return
 		}
 		// Reserve the slot first: a full daemon refuses without "starting".
@@ -573,8 +696,12 @@ func (s *session) userMessage(ctx context.Context, text string) {
 			}
 			s.slot = true
 		}
-		s.emitStatus("starting", "Resuming the Claude Code session.")
-		if err := s.spawn(ctx, s.rec.ClaudeSessionID); err != nil {
+		if s.isCodex() {
+			s.emitStatus("starting", "Resuming the Codex thread.")
+		} else {
+			s.emitStatus("starting", "Resuming the Claude Code session.")
+		}
+		if err := s.spawn(ctx, s.resumeID()); err != nil {
 			s.failStart(err)
 			return
 		}
@@ -585,6 +712,11 @@ func (s *session) userMessage(ctx context.Context, text string) {
 func (s *session) interrupt() {
 	if s.proc == nil || !s.turnActive || s.interruptTimer != nil {
 		return // no live turn: ack only
+	}
+	if s.isCodex() {
+		s.codexInterrupt()
+		s.interruptTimer = time.NewTimer(interruptTimeout)
+		return
 	}
 	s.interruptSeq++
 	id := fmt.Sprintf("archivist-interrupt-%s-%d", s.outbox.RunID(), s.interruptSeq)
@@ -604,14 +736,24 @@ func (s *session) stopInterruptTimer() {
 
 func (s *session) interruptTimedOut() {
 	s.interruptTimer = nil
-	s.log.Printf("no result %v after interrupt; terminating claude", interruptTimeout)
+	if s.isCodex() {
+		s.log.Printf("no turn completion %v after interrupt; terminating codex", interruptTimeout)
+	} else {
+		s.log.Printf("no result %v after interrupt; terminating claude", interruptTimeout)
+	}
 	s.stopProcess(true)
-	s.emitError("Claude Code did not stop after the interrupt.")
-	s.processGone("Claude Code did not stop after the interrupt")
+	s.emitError(s.harness() + " did not stop after the interrupt.")
+	s.processGone(s.harness() + " did not stop after the interrupt")
 }
 
 // answerApproval turns a relay resolution into Claude's control response.
 func (s *session) answerApproval(in *Inbound) {
+	if s.isCodex() {
+		if s.cx != nil {
+			s.codexAnswerApproval(in)
+		}
+		return
+	}
 	p, ok := s.pending[in.ApprovalID]
 	if !ok || s.proc == nil {
 		return // unknown or already answered: ack only
@@ -654,6 +796,9 @@ func (s *session) stop(emitCompleted bool) {
 	s.save()
 	s.d.store.RemoveRunDir(s.id)
 	removeSessionCwd(s.rec.Cwd)
+	if s.isCodex() {
+		s.d.store.RemoveCodexHome(s.id)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), drainTimeout)
 	defer cancel()
 	s.outbox.WaitDrained(ctx)
@@ -690,7 +835,8 @@ func (s *session) linkEnded(err error) {
 		s.d.store.RemoveRunDir(s.id)
 	default:
 		var fatal *FatalError
-		if errors.As(err, &fatal) {
+		isFatal := errors.As(err, &fatal)
+		if isFatal {
 			s.log.Printf("session socket stopped: %v", err)
 			s.rec.Status = "failed"
 			s.save()
@@ -698,6 +844,11 @@ func (s *session) linkEnded(err error) {
 		}
 		s.stopping = true
 		s.stopProcess(false)
+		// Only once Codex is gone: a running Codex could recreate the home
+		// (and, without the link, write a separate login there).
+		if isFatal && s.isCodex() {
+			s.d.store.RemoveCodexHome(s.id)
+		}
 		s.revokeToken()
 		s.d.store.RemoveRunDir(s.id)
 	}
@@ -714,8 +865,9 @@ func (s *session) save() bool {
 
 // ─── task token ─────────────────────────────────────────────────────────────
 
-// ensureToken mints the session task token and writes the token file and
-// MCP config (both 0600, in the private run dir outside the cwd).
+// ensureToken mints the session task token and writes the token file and,
+// for Claude, the MCP config (both 0600, in the private run dir outside the
+// cwd). Codex gets its MCP server through -c overrides instead.
 func (s *session) ensureToken(ctx context.Context) error {
 	if s.token != nil {
 		return nil
@@ -735,11 +887,17 @@ func (s *session) ensureToken(ctx context.Context) error {
 		return fmt.Errorf("chat-api returned a malformed task token")
 	}
 	s.tokenFile = filepath.Join(dir, "task-token")
-	s.mcpFile = filepath.Join(dir, "mcp.json")
 	if err := writeFileAtomic(s.tokenFile, []byte(tok.Token+"\n")); err != nil {
 		s.revoke(tok)
 		return err
 	}
+	if s.isCodex() {
+		s.token = tok
+		s.log.Printf("task token minted (fp:%s, expires %s)", auth.Fingerprint(tok.Token), time.UnixMilli(tok.ExpiresAt).UTC().Format(time.RFC3339))
+		s.scheduleRefresh(time.Until(time.UnixMilli(tok.ExpiresAt)) - tokenRefreshLead)
+		return nil
+	}
+	s.mcpFile = filepath.Join(dir, "mcp.json")
 	cfg, err := mcpConfig(s.d.claude, s.tokenFile)
 	if err != nil {
 		s.revoke(tok)

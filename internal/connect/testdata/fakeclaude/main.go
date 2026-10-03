@@ -16,6 +16,7 @@
 //	remember <w>    store a codeword for this Claude session
 //	recall          reply with the stored codeword
 //	spawn           start a detached `sleep 300` in its own process group
+//	orphanexit      start a detached `sleep 0.3` whose parent exits at once
 //	exit            start streaming, then exit 3 mid-turn
 //	wait <ms>       sleep, then reply "waited"
 //	big <bytes>     write one stdout line of that many bytes
@@ -245,6 +246,12 @@ func (r *runner) turn(text string) bool {
 		return r.ask("Write", map[string]any{"file_path": arg, "content": "x"})
 	case "mcp":
 		r.callMCP()
+	case "orphanexit":
+		// A detached grandchild whose parent exits at once and which exits
+		// itself shortly after: an orphan for the subreaper to reap.
+		pidFile := filepath.Join(base, "orphanexit.pid")
+		_ = exec.Command("sh", "-c", "setsid sleep 0.3 </dev/null >/dev/null 2>&1 & echo $! > "+pidFile).Run()
+		r.say(0, "orphaned")
 	case "spawn":
 		c := exec.Command("sleep", "300")
 		c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}

@@ -32,3 +32,5 @@ type procID struct {
 func killPID(id procID) {}
 
 func descendants(root int) []procID { return nil }
+
+func liveIDs() map[procID]bool { return nil }

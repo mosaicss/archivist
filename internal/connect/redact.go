@@ -20,9 +20,13 @@ var secretPatterns = []struct {
 	{regexp.MustCompile(`mst_[A-Za-z0-9_.\-]+`), true},
 	{regexp.MustCompile(`mc_pat_[A-Za-z0-9_\-]+`), true},
 	{regexp.MustCompile(`\bak_[A-Za-z0-9_\-]+`), true},
+	// JWTs (Codex's ChatGPT OAuth tokens) before the two-part ticket rule.
+	{regexp.MustCompile(`eyJ[A-Za-z0-9_\-]{8,}\.eyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+`), false},
 	// Relay tickets: base64url JSON claims ("{" encodes as "eyJ") plus a
 	// 43 character HMAC.
 	{regexp.MustCompile(`eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{43}`), false},
+	// OpenAI API keys (Codex, Story 78.17).
+	{regexp.MustCompile(`\bsk-[A-Za-z0-9_\-]{20,}`), false},
 }
 
 // Scrub replaces every recognised credential in s.

@@ -105,7 +105,7 @@ When a response is too large it is truncated and stderr says
 | `usage` | This month's fair use count and the rate limit |
 | `doctor` | Check credential, connectivity, version and skill |
 | `update` | Replace the binary with the latest release (`--skill`, `--check`) |
-| `connect` | Drive your own Claude Code from the Mosaic workspace (preview, see below) |
+| `connect` | Drive your own Claude Code or Codex from the Mosaic workspace (preview, see below) |
 | `version` | Print version, commit, build date and platform |
 
 ```text
@@ -188,21 +188,26 @@ tools whose chat-api routes a task token may call: `search`,
 falls back to the full company catalog, which task tokens cannot read, so it
 is left out. `auth login` refuses task tokens.
 
-## Connect your Claude Code (preview)
+## Connect your Claude Code or Codex (preview)
 
-`archivist connect` lets the Mosaic workspace drive the Claude Code installed
-on your machine. It runs in the foreground and keeps one outbound WebSocket to
+`archivist connect` lets the Mosaic workspace drive the Claude Code or Codex
+installed on your machine. It runs in the foreground and keeps one outbound WebSocket to
 the Mosaic agent relay; nothing listens on your machine.
 
 ```bash
 archivist connect --check   # what was detected; connects nothing
 archivist connect           # serve workspace sessions until Ctrl-C
 archivist connect --claude-model claude-sonnet-5 --claude-effort low
+archivist connect --codex-model gpt-6-luna --codex-effort low
 ```
 
 Requirements: an `ak_` API key (`archivist auth login`) on a Pro account, and
-Claude Code 2.1.280 or newer logged in with a claude.ai subscription (`claude
-auth status` shows `authMethod: claude.ai`). API key logins are refused.
+at least one of: Claude Code 2.1.280 or newer logged in with a claude.ai
+subscription (`claude auth status` shows `authMethod: claude.ai`), or Codex
+0.160.0 or newer logged in with ChatGPT (`codex login status`). API key logins
+are refused. Newer versions are reported, not blocked; a harness that is not
+usable when `archivist connect` starts is reported as unavailable and its
+sessions are refused (restart after logging in).
 
 For each "My Claude Code" session the daemon:
 
@@ -224,6 +229,54 @@ For each "My Claude Code" session the daemon:
 - streams the session as `mosaic-event/1` events, each validated before it is
   sent.
 
+For each "My Codex" session the daemon:
+
+- runs one `codex app-server --stdio --strict-config` in a fresh temporary
+  directory, with the same environment allowlist plus `CODEX_HOME` set to a
+  private per-session home, `~/.archivist/connect/codex-home/<session>/`
+  (0700). That home holds only `auth.json` as a link to your login
+  (`$CODEX_HOME/auth.json` if `CODEX_HOME` is an absolute path, else
+  `~/.codex/auth.json`), never a copy; Codex refreshes the login in place
+  through the link. Your Codex config, `AGENTS.md`, rules, hooks, plugins,
+  skills, memories, MCP servers, notifications and project trust are not
+  loaded and never written; parent `OPENAI_*` and `CODEX_*` variables never
+  pass;
+- fixes the rest with `-c` overrides: ChatGPT login only, the `openai`
+  provider, a `workspace-write` sandbox that can write only the session
+  directory (not `/tmp` or `$TMPDIR`, where other sessions' directories
+  live; `TMPDIR` points at `<session dir>/.tmp`) with no network, a core
+  shell environment for commands, web search off, history off,
+  no project root markers, and the archivist MCP server (task mode tools,
+  task token as above). The approval policy (`untrusted`, reviewed by you)
+  and model are set per thread; `--codex-model` defaults to Codex's default
+  model and `--codex-effort` to Codex's default effort;
+- refuses the session (error plus a failed status, Codex stopped, nothing
+  else sent) unless Codex reports the session home, a ChatGPT account, the
+  `openai` provider, the untrusted approval policy reviewed by the user, the
+  workspace-write sandbox without network, extra roots, `/tmp` or `$TMPDIR`
+  (TMPDIR points inside the session directory), no instruction files, and the archivist MCP server ready with no other MCP server. A later
+  switch away from the ChatGPT login ends the session the same way;
+- turns command, file change and archivist tool approvals into workspace
+  cards. Your answer maps one to one onto Codex's choices: allow once is
+  accept, allow for session is Codex's accept for session (the identical
+  command, or the same file, runs again without asking for the rest of the
+  session), deny once (or no answer within 60 seconds) is decline, and deny
+  for session is cancel (deny and end the turn); for an archivist tool, allow
+  for session uses Codex's session-only persistence. archivist connect never
+  sends Codex's rule amendments or "always" approvals, so no approval is
+  written to your config;
+- interrupts with `turn/interrupt` and then cleans the thread's background
+  terminals; after a restart the next message resumes the same thread
+  (`thread/resume`) from the kept session home;
+- stops every process a session started, including commands Codex detaches
+  with `setsid`: the daemon records each session's descendants and, on
+  Linux, adopts orphaned ones as child subreaper, then kills and reaps them
+  when the session stops, is interrupted past its timeout, crashes or
+  Ctrl-C ends the daemon.
+
+The session home is kept while the session can resume and removed when the
+session stops, fails or is found inactive at the next start.
+
 The relay sends only data (session ids, prompts, approval decisions,
 interrupt and stop). Binaries, arguments and flags are fixed on your machine.
 Session ids and working directories are kept in `~/.archivist/connect/`
@@ -231,16 +284,17 @@ Session ids and working directories are kept in `~/.archivist/connect/`
 Each running session's task token and MCP config sit in
 `~/.archivist/connect/run/<session>/` (`task-token`, `mcp.json`, 0600), are
 removed when the session stops or the daemon exits, and the token is revoked
-then. Ctrl-C stops every Claude process and revokes its tokens.
+then. Ctrl-C stops every Claude Code and Codex process and revokes its tokens.
 
 `ARCHIVIST_RELAY_URL` overrides the relay address (default
-`wss://relay.mosaic-finance.com`). macOS and Linux only for now; Codex
-sessions come later (`--check` reports Codex as not supported yet).
+`wss://relay.mosaic-finance.com`). macOS and Linux only for now.
 
-Exit codes: 0 stopped by Ctrl-C (or `--check` found a usable Claude Code); 1
-refused or stopped (feature not enabled, another `archivist connect` took
-over, Claude Code too old); 2 bad flag or relay URL; 3 Claude Code not found; 4 credential
-or Claude login problem.
+Exit codes: 0 stopped by Ctrl-C (or `--check` found a usable Claude Code or
+Codex); 1 refused or stopped (feature not enabled, another `archivist connect`
+took over, Claude Code too old); 2 bad flag or relay URL; 3 no usable harness
+(Claude Code not found, or neither Claude Code nor an installed Codex is
+usable); 4 credential or Claude login problem. When Codex is not installed,
+the Claude Code codes apply as before.
 
 ## Claude Code skill
 
