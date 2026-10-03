@@ -46,3 +46,27 @@ func TestConnectCheckShowsUsableCodex(t *testing.T) {
 		t.Fatalf("codex block:\n%s", out.String())
 	}
 }
+
+func TestHarnessConfigsMapFlagsAndDetection(t *testing.T) {
+	det := connect.Detection{
+		Claude: connect.ClaudeInfo{Problem: "Claude Code (claude) was not found on PATH", ProblemCode: "missing"},
+		Codex: connect.CodexInfo{Path: "/opt/bin/codex", Version: "0.161.0", VersionOK: true, LoggedIn: true,
+			Home: "/h/.codex", AuthPresent: true},
+	}
+	f := connectFlags{model: "claude-sonnet-5", effort: "low", codexModel: "gpt-6-luna", codexEffort: "high"}
+	cl, cx := harnessConfigs(det, f, "/opt/bin/archivist", "http://127.0.0.1:9")
+	if cl != (connect.ClaudeConfig{}) {
+		t.Fatalf("an unusable Claude Code got a config: %+v", cl)
+	}
+	want := connect.CodexConfig{Bin: "/opt/bin/codex", Version: "0.161.0", Model: "gpt-6-luna", Effort: "high",
+		OwnerHome: "/h/.codex", Executable: "/opt/bin/archivist", BaseURL: "http://127.0.0.1:9"}
+	if cx != want {
+		t.Fatalf("codex config %+v, want %+v", cx, want)
+	}
+	det.Claude = connect.ClaudeInfo{Path: "/opt/bin/claude", Version: "2.1.280", VersionOK: true}
+	det.Codex.Problem = "too old"
+	cl, cx = harnessConfigs(det, f, "/a", "")
+	if cl.Bin != "/opt/bin/claude" || cl.Model != "claude-sonnet-5" || cl.Effort != "low" || cx != (connect.CodexConfig{}) {
+		t.Fatalf("claude %+v codex %+v", cl, cx)
+	}
+}

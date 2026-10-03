@@ -95,9 +95,12 @@ func codexArgs(cfg CodexConfig, tokenFile string) []string {
 		// Commands see only a core environment.
 		{"shell_environment_policy.inherit", `"core"`},
 		{"shell_environment_policy.include_only", tomlValue(codexShellEnv)},
-		// Sandbox: the session cwd (plus temp dirs) only, no network.
+		// Sandbox: the session cwd only (not /tmp or $TMPDIR, where other
+		// sessions' directories live), no network.
 		{"sandbox_workspace_write.writable_roots", "[]"},
 		{"sandbox_workspace_write.network_access", "false"},
+		{"sandbox_workspace_write.exclude_slash_tmp", "true"},
+		{"sandbox_workspace_write.exclude_tmpdir_env_var", "true"},
 		// No project root detection: no trust entries are ever written.
 		{"project_root_markers", "[]"},
 		// The archivist MCP server under the session task token.
@@ -218,7 +221,12 @@ func (s *session) spawnCodex(ctx context.Context, threadID string) error {
 	if err != nil {
 		return err
 	}
-	env, err := BuildChildEnv(s.d.environ(), nil)
+	// Temp files go inside the cwd (the sandbox excludes /tmp and $TMPDIR).
+	tmp := filepath.Join(s.rec.Cwd, ".tmp")
+	if err := os.MkdirAll(tmp, 0o700); err != nil {
+		return fmt.Errorf("session temp directory: %w", err)
+	}
+	env, err := BuildChildEnv(s.d.environ(), map[string]string{"TMPDIR": tmp})
 	if err != nil {
 		return err
 	}
@@ -299,9 +307,10 @@ func (s *session) codexHandshake(ctx context.Context, home, threadID string) err
 		}
 	} else if err := c.rpc.conn.Call(hctx, "thread/resume", params, &th); err != nil {
 		var rpcErr *jsonrpc2.Error
-		if errors.As(err, &rpcErr) {
+		if errors.As(err, &rpcErr) && threadGone(rpcErr.Message) {
 			return &lostError{"Codex could not resume the thread: " + rpcErr.Message}
 		}
+		// Anything else may pass: the session stays resumable.
 		return fmt.Errorf("thread/resume: %w", err)
 	}
 	if problem := threadProblem(th, s.rec.Cwd, threadID); problem != "" {
@@ -323,8 +332,15 @@ func (s *session) codexHandshake(ctx context.Context, home, threadID string) err
 	return nil
 }
 
+// threadGone reports a thread/resume error that means the thread cannot
+// come back (its rollout is missing), as opposed to a passing failure.
+func threadGone(msg string) bool {
+	m := strings.ToLower(msg)
+	return strings.Contains(m, "no rollout found") || strings.Contains(m, "not found")
+}
+
 // threadProblem checks the thread/start (or resume) response against the
-// isolation the session requires.
+// isolation the session requires. Missing fields fail.
 func threadProblem(th codexThreadResult, cwd, resumed string) string {
 	var problems []string
 	if th.Thread.ID == "" {
@@ -343,15 +359,23 @@ func threadProblem(th codexThreadResult, cwd, resumed string) string {
 	if th.ApprovalsReviewer != "user" {
 		problems = append(problems, fmt.Sprintf("approvals reviewer %q, not \"user\"", th.ApprovalsReviewer))
 	}
-	if th.Cwd != "" && !samePath(th.Cwd, cwd) {
+	if !samePath(th.Cwd, cwd) {
 		problems = append(problems, fmt.Sprintf("thread cwd %q, not the session directory", th.Cwd))
 	}
 	if th.Sandbox.Type != "workspaceWrite" {
 		problems = append(problems, fmt.Sprintf("sandbox %q, not \"workspaceWrite\"", th.Sandbox.Type))
 	}
-	if th.Sandbox.NetworkAccess {
-		problems = append(problems, "sandbox network access is on")
+	flag := func(v *bool, want bool, what string) {
+		switch {
+		case v == nil:
+			problems = append(problems, "sandbox "+what+" not reported")
+		case *v != want:
+			problems = append(problems, fmt.Sprintf("sandbox %s is %v", what, *v))
+		}
 	}
+	flag(th.Sandbox.NetworkAccess, false, "networkAccess")
+	flag(th.Sandbox.ExcludeSlashTmp, true, "excludeSlashTmp")
+	flag(th.Sandbox.ExcludeTmpdirEnvVar, true, "excludeTmpdirEnvVar")
 	for _, root := range th.Sandbox.WritableRoots {
 		if !samePath(root, cwd) {
 			problems = append(problems, fmt.Sprintf("extra writable root %q", root))
@@ -408,6 +432,8 @@ func (s *session) codexAwaitMCP(ctx context.Context) error {
 			return &proofError{"the archivist MCP server did not report ready"}
 		case <-s.procDone:
 			return errors.New("codex exited during startup")
+		case <-c.rpc.conn.DisconnectNotify():
+			return errors.New("the connection to codex closed during startup")
 		}
 	}
 }
@@ -592,6 +618,9 @@ func (s *session) codexNotification(ev codexEvent) {
 		if json.Unmarshal(ev.Params, &env) == nil && json.Unmarshal(env.Item, &head) == nil {
 			if head.Type == "mcpToolCall" && ev.Method == "item/started" {
 				c.mcpItem = head.ID
+			}
+			if ev.Method == "item/completed" && head.ID == c.mcpItem {
+				c.mcpItem = "" // a later elicitation is not this call's
 			}
 			if head.Type == "commandExecution" && s.proc != nil {
 				s.proc.Snapshot()

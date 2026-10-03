@@ -204,7 +204,9 @@ func (s *session) codexGone() <-chan struct{} {
 	return s.cx.rpc.conn.DisconnectNotify()
 }
 
-// snapshot records the harness's descendants (periodic, Codex).
+// snapshot records the harness's descendants and reaps adopted zombies
+// (periodic: Codex sessions, and Claude sessions while the daemon is the
+// child subreaper).
 func (s *session) snapshot() {
 	s.snapTimer = nil
 	if s.proc == nil {
@@ -279,6 +281,11 @@ func (s *session) spawn(ctx context.Context, resumeID string) (err error) {
 			s.releaseSlot()
 		}
 	}()
+	if !s.d.agentUsable(s.rec.Agent) {
+		// A record reattached for a harness this run does not drive: not a
+		// failed proof, the session stays resumable.
+		return fmt.Errorf("%s is not usable in this archivist connect run; fix it, then restart archivist connect", s.harness())
+	}
 	if err := s.ensureToken(ctx); err != nil {
 		return fmt.Errorf("task token: %w", err)
 	}
@@ -314,6 +321,10 @@ func (s *session) spawn(ctx context.Context, resumeID string) (err error) {
 	s.proc, s.procDone, s.procLines = proc, proc.Done(), proc.Lines()
 	s.running, s.turnActive, s.resumedID = false, false, resumeID
 	s.tr.reset()
+	if s.d.reaping {
+		// The daemon adopts orphans (Codex configured): reap Claude's too.
+		s.snapTimer = time.NewTimer(codexSnapshotEvery)
+	}
 	return nil
 }
 

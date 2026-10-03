@@ -242,8 +242,10 @@ For each "My Codex" session the daemon:
   loaded and never written; parent `OPENAI_*` and `CODEX_*` variables never
   pass;
 - fixes the rest with `-c` overrides: ChatGPT login only, the `openai`
-  provider, a `workspace-write` sandbox with no network and no extra writable
-  roots, a core shell environment for commands, web search off, history off,
+  provider, a `workspace-write` sandbox that can write only the session
+  directory (not `/tmp` or `$TMPDIR`, where other sessions' directories
+  live; `TMPDIR` points at `<session dir>/.tmp`) with no network, a core
+  shell environment for commands, web search off, history off,
   no project root markers, and the archivist MCP server (task mode tools,
   task token as above). The approval policy (`untrusted`, reviewed by you)
   and model are set per thread; `--codex-model` defaults to Codex's default
@@ -251,7 +253,8 @@ For each "My Codex" session the daemon:
 - refuses the session (error plus a failed status, Codex stopped, nothing
   else sent) unless Codex reports the session home, a ChatGPT account, the
   `openai` provider, the untrusted approval policy reviewed by the user, the
-  workspace-write sandbox without network or extra roots, no instruction
+  workspace-write sandbox without network, extra roots, `/tmp` or `$TMPDIR`,
+  in the session directory, no instruction
   files, and the archivist MCP server ready with no other MCP server. A later
   switch away from the ChatGPT login ends the session the same way;
 - turns command, file change and archivist tool approvals into workspace

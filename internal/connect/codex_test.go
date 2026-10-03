@@ -84,6 +84,7 @@ type codexRunRecord struct {
 	Args      []string `json:"args"`
 	EnvKeys   []string `json:"envKeys"`
 	CodexHome string   `json:"codexHome"`
+	TmpDir    string   `json:"tmpdir"`
 	Cwd       string   `json:"cwd"`
 	PID       int      `json:"pid"`
 }
@@ -170,7 +171,7 @@ func TestCodexCapabilitiesReportUsable(t *testing.T) {
 		if !c.noAuth {
 			_ = os.WriteFile(filepath.Join(owner, "auth.json"), []byte("{}"), 0o600)
 		}
-		det := DetectWith(context.Background(), DetectOptions{LookPath: look, Run: ExecRunner,
+		det := DetectWith(context.Background(), DetectOptions{LookPath: look, Run: ExecRunner, RunCombined: ExecCombinedRunner,
 			Env: []string{"HOME=" + home, "PATH=" + os.Getenv("PATH")}, Dir: home, CodexHome: owner})
 		if c.problem == "" {
 			if !det.Codex.Usable() {
@@ -367,6 +368,18 @@ func TestCodexSessionLifecycle(t *testing.T) {
 	}
 	if strings.Contains(strings.Join(run.Args, " "), "approval_policy") {
 		t.Error("approval_policy in argv")
+	}
+	// Temp files stay in the session cwd; the sandbox excludes /tmp and $TMPDIR.
+	if run.TmpDir != filepath.Join(rec.Cwd, ".tmp") {
+		t.Fatalf("TMPDIR %q", run.TmpDir)
+	}
+	if st, err := os.Stat(run.TmpDir); err != nil || st.Mode().Perm() != 0o700 {
+		t.Fatalf("session temp dir %v %v", st, err)
+	}
+	for _, kv := range []string{"sandbox_workspace_write.exclude_slash_tmp=true", "sandbox_workspace_write.exclude_tmpdir_env_var=true"} {
+		if !slices.Contains(run.Args, kv) {
+			t.Errorf("argv lacks -c %s", kv)
+		}
 	}
 	// Session home: 0700 with auth.json linked (never copied) to the owner's.
 	st, err := os.Stat(sessionHome)
@@ -1047,5 +1060,172 @@ func TestCodexOrphanAttributionWithTwoSessions(t *testing.T) {
 	}
 	if !gone(grandB) {
 		t.Fatal("B's grandchild survived Ctrl-C")
+	}
+}
+
+// ─── coordinator review rows ────────────────────────────────────────────────
+
+func TestThreadProblemFailsClosed(t *testing.T) {
+	yes, no := true, false
+	good := func() codexThreadResult {
+		var th codexThreadResult
+		th.Thread.ID = "th-1"
+		th.ModelProvider = "openai"
+		th.Cwd = "/w/session"
+		th.ApprovalPolicy = json.RawMessage(`"untrusted"`)
+		th.ApprovalsReviewer = "user"
+		th.Sandbox.Type = "workspaceWrite"
+		th.Sandbox.NetworkAccess, th.Sandbox.ExcludeSlashTmp, th.Sandbox.ExcludeTmpdirEnvVar = &no, &yes, &yes
+		return th
+	}
+	if p := threadProblem(good(), "/w/session", ""); p != "" {
+		t.Fatalf("compliant thread failed: %s", p)
+	}
+	if p := threadProblem(good(), "/w/session", "th-1"); p != "" {
+		t.Fatalf("compliant resume failed: %s", p)
+	}
+	for name, c := range map[string]struct {
+		mutate  func(*codexThreadResult)
+		resumed string
+		want    string
+	}{
+		"no thread id":        {func(th *codexThreadResult) { th.Thread.ID = "" }, "", "no thread id"},
+		"other resumed id":    {func(*codexThreadResult) {}, "th-other", "resumed thread"},
+		"provider":            {func(th *codexThreadResult) { th.ModelProvider = "custom" }, "", "model provider"},
+		"policy":              {func(th *codexThreadResult) { th.ApprovalPolicy = json.RawMessage(`"never"`) }, "", "approval policy"},
+		"granular policy":     {func(th *codexThreadResult) { th.ApprovalPolicy = json.RawMessage(`{"granular":{}}`) }, "", "approval policy"},
+		"missing policy":      {func(th *codexThreadResult) { th.ApprovalPolicy = nil }, "", "approval policy"},
+		"reviewer":            {func(th *codexThreadResult) { th.ApprovalsReviewer = "auto_review" }, "", "approvals reviewer"},
+		"sandbox type":        {func(th *codexThreadResult) { th.Sandbox.Type = "dangerFullAccess" }, "", "sandbox \"dangerFullAccess\""},
+		"network on":          {func(th *codexThreadResult) { th.Sandbox.NetworkAccess = &yes }, "", "networkAccess is true"},
+		"network missing":     {func(th *codexThreadResult) { th.Sandbox.NetworkAccess = nil }, "", "networkAccess not reported"},
+		"slash tmp writable":  {func(th *codexThreadResult) { th.Sandbox.ExcludeSlashTmp = &no }, "", "excludeSlashTmp is false"},
+		"slash tmp missing":   {func(th *codexThreadResult) { th.Sandbox.ExcludeSlashTmp = nil }, "", "excludeSlashTmp not reported"},
+		"tmpdir writable":     {func(th *codexThreadResult) { th.Sandbox.ExcludeTmpdirEnvVar = &no }, "", "excludeTmpdirEnvVar is false"},
+		"tmpdir missing":      {func(th *codexThreadResult) { th.Sandbox.ExcludeTmpdirEnvVar = nil }, "", "excludeTmpdirEnvVar not reported"},
+		"extra root":          {func(th *codexThreadResult) { th.Sandbox.WritableRoots = []string{"/home/owner"} }, "", "extra writable root"},
+		"cwd differs":         {func(th *codexThreadResult) { th.Cwd = "/elsewhere" }, "", "thread cwd"},
+		"cwd missing":         {func(th *codexThreadResult) { th.Cwd = "" }, "", "thread cwd"},
+		"instruction sources": {func(th *codexThreadResult) { th.InstructionSources = []string{"/h/AGENTS.md"} }, "", "instruction sources"},
+	} {
+		th := good()
+		c.mutate(&th)
+		if p := threadProblem(th, "/w/session", c.resumed); !strings.Contains(p, c.want) {
+			t.Errorf("%s: problem %q, want %q", name, p, c.want)
+		}
+	}
+	// The cwd itself as a writable root is fine.
+	th := good()
+	th.Sandbox.WritableRoots = []string{"/w/session"}
+	if p := threadProblem(th, "/w/session", ""); p != "" {
+		t.Errorf("cwd root: %s", p)
+	}
+}
+
+func TestCodexLateOtherMCPServerEndsSession(t *testing.T) {
+	h := newCodexHarness(t, map[string]any{"lateExtraMCP": true})
+	h.start()
+	sid := h.startCodexSession("echo hi")
+	h.relay.waitStatus(t, sid, "failed", 1)
+	pid := codexRuns(t, h.home)[0].PID
+	waitFor(t, 10*time.Second, "codex killed", func() bool { return gone(pid) })
+	if errs := h.errorTexts(sid); len(errs) != 1 || !strings.Contains(errs[0], `other than archivist ("codex_apps")`) {
+		t.Fatalf("errors %v", errs)
+	}
+	if !slices.Contains(h.relay.statuses(sid), "running") || h.record(sid).Status != "failed" {
+		t.Fatalf("statuses %v", h.relay.statuses(sid))
+	}
+}
+
+func TestCodexResolvedApprovalIsNotAnsweredLater(t *testing.T) {
+	h := newCodexHarness(t, nil)
+	h.start()
+	sid := h.startCodexSession("cmd touch never.txt")
+	var req map[string]any
+	waitFor(t, 15*time.Second, "approval request", func() bool {
+		reqs := h.relay.eventsOf(sid, "tool-approval-request")
+		if len(reqs) == 1 {
+			req = reqs[0]
+		}
+		return req != nil
+	})
+	// Interrupted while the card is open: Codex resolves the request itself.
+	h.command(sid, "interrupt")
+	h.waitFinishes(sid, 1)
+	time.Sleep(200 * time.Millisecond)
+	cid := "resolved:" + req["correlationId"].(string)
+	h.relay.send(sid, map[string]any{"kind": "approval_response", "correlationId": cid, "sessionId": sid,
+		"approvalId": req["payload"].(map[string]any)["approvalId"], "decision": "allow", "reason": "user"})
+	waitFor(t, 10*time.Second, "ack", func() bool { return h.relay.acked(cid) })
+	h.message(sid, "echo after")
+	h.waitFinishes(sid, 2)
+	if n := len(h.relay.eventsOf(sid, "tool-approval-response")); n != 0 {
+		t.Fatalf("a resolved approval produced %d responses", n)
+	}
+	if b, err := os.ReadFile(filepath.Join(h.home, ".fakecodex", "late-replies.jsonl")); err == nil {
+		t.Fatalf("codex got a reply to a resolved request: %s", b)
+	}
+}
+
+func TestCodexResumeErrorKinds(t *testing.T) {
+	h := newCodexHarness(t, nil)
+	h.start()
+	sid := h.startCodexSession("echo one")
+	h.waitFinishes(sid, 1)
+	home := filepath.Join(h.home, ".archivist", "connect", "codex-home", sid)
+	if err := h.stop(); err != nil {
+		t.Fatal(err)
+	}
+	setFake := func(cfg map[string]any) {
+		b, _ := json.Marshal(cfg)
+		if err := os.WriteFile(filepath.Join(h.home, ".fakecodex", "config.json"), b, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A passing internal error keeps the session resumable.
+	setFake(map[string]any{"resumeError": "internal error: database is locked"})
+	h.start()
+	h.message(sid, "echo two")
+	h.relay.waitStatus(t, sid, "failed", 1)
+	if h.record(sid).Status != "active" {
+		t.Fatal("a transient resume error ended the session")
+	}
+	if _, err := os.Stat(home); err != nil {
+		t.Fatal("home removed after a transient resume error")
+	}
+	// The thread is gone: the session fails for good.
+	setFake(map[string]any{"resumeError": "no rollout found for thread id x"})
+	h.message(sid, "echo three")
+	waitFor(t, 20*time.Second, "failed record", func() bool { return h.record(sid).Status == "failed" })
+	if _, err := os.Stat(home); !os.IsNotExist(err) {
+		t.Fatal("home kept after the thread was gone")
+	}
+}
+
+func TestResumeForUndrivenHarnessStaysResumable(t *testing.T) {
+	h := newCodexHarness(t, nil)
+	h.start()
+	sid := h.startCodexSession("echo one")
+	h.waitFinishes(sid, 1)
+	if err := h.stop(); err != nil {
+		t.Fatal(err)
+	}
+	// Restart without a usable Codex: the reattached session cannot run.
+	h.codexOff = true
+	h.start()
+	h.message(sid, "echo two")
+	h.relay.waitStatus(t, sid, "failed", 1)
+	if errs := h.errorTexts(sid); len(errs) != 1 || !strings.Contains(errs[0], "restart archivist connect") {
+		t.Fatalf("errors %v", errs)
+	}
+	rec := h.record(sid)
+	if rec.Status != "active" || len(codexRuns(t, h.home)) != 1 {
+		t.Fatal("an undriven harness failed the session or started Codex")
+	}
+	if _, err := os.Stat(rec.Cwd); err != nil {
+		t.Fatal("cwd removed")
+	}
+	if _, err := os.Stat(filepath.Join(h.home, ".archivist", "connect", "codex-home", sid)); err != nil {
+		t.Fatal("home removed")
 	}
 }

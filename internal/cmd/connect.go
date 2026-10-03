@@ -133,7 +133,7 @@ func runConnect(cmd *cobra.Command, version string, check bool, f connectFlags) 
 	codexHome := connect.OwnerCodexHome(os.Environ(), home)
 	detect := func(ctx context.Context) connect.Detection {
 		return connect.DetectWith(ctx, connect.DetectOptions{LookPath: exec.LookPath, Run: connect.ExecRunner,
-			Env: childEnv, Dir: home, CodexHome: codexHome})
+			RunCombined: connect.ExecCombinedRunner, Env: childEnv, Dir: home, CodexHome: codexHome})
 	}
 
 	if check {
@@ -188,14 +188,13 @@ func runConnect(cmd *cobra.Command, version string, check bool, f connectFlags) 
 		Detect:     detect,
 		AppVersion: version,
 	}
-	// Only a harness usable now is driven; the other's sessions are refused.
-	if det.Claude.Usable() {
-		cfg.Claude = connect.ClaudeConfig{Bin: det.Claude.Path, Model: f.model, Effort: f.effort,
-			SettingSources: connect.DefaultSettingSources, Executable: exe, BaseURL: baseURL}
+	cfg.Claude, cfg.Codex = harnessConfigs(det, f, exe, baseURL)
+	// Say why an installed harness is not offered.
+	if det.Claude.Path != "" && !det.Claude.Usable() {
+		log.Printf("warning: Claude Code sessions are unavailable: %s", det.Claude.Problem)
 	}
-	if det.Codex.Usable() {
-		cfg.Codex = connect.CodexConfig{Bin: det.Codex.Path, Version: det.Codex.Version, Model: f.codexModel,
-			Effort: f.codexEffort, OwnerHome: det.Codex.Home, Executable: exe, BaseURL: baseURL}
+	if det.Codex.Path != "" && !det.Codex.Usable() {
+		log.Printf("warning: Codex sessions are unavailable: %s", det.Codex.Problem)
 	}
 	d, err := connect.New(cfg)
 	if err != nil {
@@ -237,6 +236,22 @@ func runConnect(cmd *cobra.Command, version string, check bool, f connectFlags) 
 		_, _ = fmt.Fprintf(stderr, "archivist connect: %v\n", err)
 		return &ExitError{Code: ExitGenericError}
 	}
+}
+
+// harnessConfigs maps detection and local flags to the adapter configs.
+// Only a harness usable now is driven (an empty Bin refuses its sessions).
+func harnessConfigs(det connect.Detection, f connectFlags, exe, baseURL string) (connect.ClaudeConfig, connect.CodexConfig) {
+	var cl connect.ClaudeConfig
+	var cx connect.CodexConfig
+	if det.Claude.Usable() {
+		cl = connect.ClaudeConfig{Bin: det.Claude.Path, Model: f.model, Effort: f.effort,
+			SettingSources: connect.DefaultSettingSources, Executable: exe, BaseURL: baseURL}
+	}
+	if det.Codex.Usable() {
+		cx = connect.CodexConfig{Bin: det.Codex.Path, Version: det.Codex.Version, Model: f.codexModel,
+			Effort: f.codexEffort, OwnerHome: det.Codex.Home, Executable: exe, BaseURL: baseURL}
+	}
+	return cl, cx
 }
 
 // relayURLFromEnv returns the relay base URL. Tickets travel in the

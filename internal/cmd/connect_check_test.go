@@ -23,7 +23,7 @@ func detectWith(found []string, claudeVersion, authJSON, codexVersion string) co
 	run := func(_ context.Context, _ []string, _ string, bin string, args ...string) ([]byte, error) {
 		switch {
 		case strings.HasSuffix(bin, "codex") && len(args) == 2 && args[0] == "login":
-			return nil, nil // exit 0: logged in
+			return []byte("Logged in using ChatGPT\n"), nil // exit 0: logged in
 		case strings.HasSuffix(bin, "codex"):
 			return []byte(codexVersion), nil
 		case len(args) == 1 && args[0] == "--version":
@@ -92,7 +92,7 @@ func TestConnectCheckShowsCodexLogin(t *testing.T) {
 	det := detectWith([]string{"claude", "codex"}, "2.1.280 (Claude Code)", sub, "codex-cli 0.160.0")
 	var out bytes.Buffer
 	printDetection(&out, det)
-	if !strings.Contains(out.String(), "codex\n  path:     /opt/bin/codex\n  version:  0.160.0\n  floor:    0.160.0 (ok)\n  loggedIn: true\n  status:   not usable") {
+	if !strings.Contains(out.String(), "codex\n  path:     /opt/bin/codex\n  version:  0.160.0\n  floor:    0.160.0 (ok)\n  loggedIn: true\n  login:    Logged in using ChatGPT\n  status:   not usable") {
 		t.Fatalf("codex block:\n%s", out.String())
 	}
 }

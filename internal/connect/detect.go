@@ -58,9 +58,10 @@ type CodexInfo struct {
 	Path      string
 	Version   string
 	VersionOK bool
-	// LoggedIn is `codex login status` exiting 0 (a local check, no model call).
+	// LoggedIn is `codex login status` (a local check, no model call)
+	// exiting 0 and reporting a ChatGPT login.
 	LoggedIn bool
-	// Login is the first line `codex login status` printed on stdout, if any.
+	// Login is the status line `codex login status` printed (stdout or stderr).
 	Login string
 	// Home is the owner's Codex home (CODEX_HOME if absolute, else ~/.codex).
 	Home string
@@ -129,6 +130,22 @@ func capabilityVersion(v string) string {
 // Runner runs a detection command and returns its stdout. Tests replace it.
 type Runner func(ctx context.Context, env []string, dir, bin string, args ...string) ([]byte, error)
 
+// ExecCombinedRunner is ExecRunner returning stdout and stderr together
+// (for probes that report on stderr).
+func ExecCombinedRunner(ctx context.Context, env []string, dir, bin string, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, detectTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin, args...)
+	cmd.Env = env
+	cmd.Dir = dir
+	cmd.WaitDelay = 2 * time.Second
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return out, fmt.Errorf("%s %s: %w", bin, strings.Join(args, " "), err)
+	}
+	return out, nil
+}
+
 // ExecRunner runs bin with exactly env and dir.
 func ExecRunner(ctx context.Context, env []string, dir, bin string, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, detectTimeout)
@@ -167,6 +184,9 @@ type DetectOptions struct {
 	// CodexHome is the owner's Codex home (OwnerCodexHome); codex probes run
 	// with CODEX_HOME set to it. "" leaves Codex unusable.
 	CodexHome string
+	// RunCombined runs `codex login status`, which prints on stderr: it
+	// returns stdout and stderr together. nil uses Run.
+	RunCombined Runner
 }
 
 // DetectWith inventories Claude Code and Codex.
@@ -192,11 +212,21 @@ func detectCodex(ctx context.Context, o DetectOptions) CodexInfo {
 		c.Version = parseVersion(string(out))
 	}
 	c.VersionOK = c.Version != "" && !versionLess(c.Version, CodexFloor)
-	// codex-cli prints "Logged in using ..." or "Not logged in" on stderr
-	// and exits 0 or 1; any error counts as logged out.
-	if out, err := o.Run(ctx, env, o.Dir, path, "login", "status"); err == nil && !strings.Contains(string(out), "Not logged in") {
+	// codex-cli prints "Logged in using ChatGPT" (or "... an API key", or
+	// "Not logged in") on stderr and exits 0 or 1; only a ChatGPT login
+	// counts, any error counts as logged out.
+	runLogin := o.RunCombined
+	if runLogin == nil {
+		runLogin = o.Run
+	}
+	out, loginErr := runLogin(ctx, env, o.Dir, path, "login", "status")
+	c.Login = firstLine(string(out))
+	switch {
+	case loginErr != nil || strings.Contains(c.Login, "Not logged in"):
+	case strings.Contains(c.Login, "ChatGPT"):
 		c.LoggedIn = true
-		c.Login = firstLine(string(out))
+	case c.Login != "":
+		c.Problem = fmt.Sprintf("Codex reports %q; archivist connect only drives a ChatGPT login (run 'codex login' and sign in with ChatGPT)", c.Login)
 	}
 	if c.Home != "" {
 		if st, err := os.Stat(filepath.Join(c.Home, "auth.json")); err == nil && st.Mode().IsRegular() {
@@ -204,6 +234,7 @@ func detectCodex(ctx context.Context, o DetectOptions) CodexInfo {
 		}
 	}
 	switch {
+	case c.Problem != "":
 	case c.Version == "":
 		c.Problem = "could not read the Codex version"
 	case !c.VersionOK:

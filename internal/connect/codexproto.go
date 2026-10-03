@@ -83,7 +83,10 @@ type codexThreadResult struct {
 	Sandbox            struct {
 		Type          string   `json:"type"`
 		WritableRoots []string `json:"writableRoots"`
-		NetworkAccess bool     `json:"networkAccess"`
+		// Pointers: a missing field fails the proof instead of reading false.
+		NetworkAccess       *bool `json:"networkAccess"`
+		ExcludeSlashTmp     *bool `json:"excludeSlashTmp"`
+		ExcludeTmpdirEnvVar *bool `json:"excludeTmpdirEnvVar"`
 	} `json:"sandbox"`
 	ReasoningEffort *string `json:"reasoningEffort"`
 }

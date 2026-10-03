@@ -119,8 +119,8 @@ func (h *harness) start() {
 		Log:         NewLogger(h.log),
 		Detect: func(ctx context.Context) Detection {
 			if h.codex {
-				return DetectWith(ctx, DetectOptions{LookPath: lookPath, Run: ExecRunner, Env: childEnv, Dir: h.home,
-					CodexHome: h.codexOwner()})
+				return DetectWith(ctx, DetectOptions{LookPath: lookPath, Run: ExecRunner, RunCombined: ExecCombinedRunner,
+					Env: childEnv, Dir: h.home, CodexHome: h.codexOwner()})
 			}
 			return Detect(ctx, lookPath, ExecRunner, childEnv, h.home)
 		},

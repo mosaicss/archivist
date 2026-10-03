@@ -53,6 +53,7 @@ type Daemon struct {
 	claude      ClaudeConfig
 	codex       CodexConfig
 	appVersion  string
+	reaping     bool // child subreaper on: sessions reap adopted zombies
 	maxSessions int
 	log         *Logger
 	parser      *mosaicevent.Parser
@@ -102,10 +103,17 @@ func New(cfg Config) (*Daemon, error) {
 	if d.appVersion == "" {
 		d.appVersion = "dev"
 	}
-	// Orphaned harness descendants are reparented to the daemon (Linux), so
-	// the stop sweep can kill and reap them.
-	if err := enableSubreaper(); err != nil && d.log != nil {
-		d.log.Printf("warning: could not become the child subreaper: %v", err)
+	// With Codex configured, orphaned harness descendants (Codex detaches
+	// commands with setsid) are reparented to the daemon (Linux), so the
+	// stop sweep can kill and reap them.
+	if d.codex.Bin != "" {
+		if err := enableSubreaper(); err != nil {
+			if d.log != nil {
+				d.log.Printf("warning: could not become the child subreaper: %v", err)
+			}
+		} else {
+			d.reaping = true
+		}
 	}
 	return d, nil
 }

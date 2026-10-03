@@ -35,7 +35,11 @@
 //
 // config.json also sets mcpFail (archivist reports failed),
 // handshakeAccount (an account/updated before MCP ready) and
-// turnStartDelayMs (a slow turn/start reply).
+// turnStartDelayMs (a slow turn/start reply), lateExtraMCP (another MCP
+// server reports after archivist is ready, at the first turn) and
+// resumeError (thread/resume answers this JSON-RPC error message).
+// Replies to requests the fake no longer waits for are recorded in
+// late-replies.jsonl.
 package main
 
 import (
@@ -71,6 +75,8 @@ type config struct {
 	MCPFail            bool     `json:"mcpFail"`
 	HandshakeAccount   string   `json:"handshakeAccount"`
 	TurnStartDelayMs   int      `json:"turnStartDelayMs"`
+	LateExtraMCP       bool     `json:"lateExtraMCP"`
+	ResumeError        string   `json:"resumeError"`
 }
 
 var (
@@ -174,7 +180,7 @@ func record(args []string) {
 	sort.Strings(keys)
 	cwd, _ := os.Getwd()
 	b, _ := json.MarshalIndent(map[string]any{"args": args, "envKeys": keys, "codexHome": os.Getenv("CODEX_HOME"),
-		"cwd": cwd, "pid": os.Getpid()}, "", "  ")
+		"tmpdir": os.Getenv("TMPDIR"), "cwd": cwd, "pid": os.Getpid()}, "", "  ")
 	_ = os.WriteFile(filepath.Join(dir, fmt.Sprintf("%d.json", os.Getpid())), b, 0o600)
 }
 
@@ -216,6 +222,11 @@ func (s *server) run() {
 			ch := s.waits[id]
 			delete(s.waits, id)
 			s.mu.Unlock()
+			if ch == nil {
+				f, _ := os.OpenFile(filepath.Join(base, "late-replies.jsonl"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+				_, _ = f.Write(append(append([]byte(nil), sc.Bytes()...), '\n'))
+				_ = f.Close()
+			}
 			if ch != nil {
 				if len(m.Error) > 0 {
 					ch <- json.RawMessage(`{"__error":` + string(m.Error) + `}`)
@@ -246,6 +257,12 @@ func replyErr(id json.RawMessage, code int, message string) {
 
 // ask sends a server request and waits for the daemon's reply.
 func (s *server) ask(method string, params any) json.RawMessage {
+	return s.askUntil(method, params, nil)
+}
+
+// askUntil is ask that gives up when stop closes (a turn interrupt): the
+// request is resolved without a reply, as Codex does.
+func (s *server) askUntil(method string, params any, stop <-chan struct{}) json.RawMessage {
 	s.mu.Lock()
 	id := s.nextID
 	s.nextID++
@@ -257,6 +274,12 @@ func (s *server) ask(method string, params any) json.RawMessage {
 	case r := <-ch:
 		notify("serverRequest/resolved", map[string]any{"threadId": s.threadID, "requestId": id})
 		return r
+	case <-stop:
+		s.mu.Lock()
+		delete(s.waits, id)
+		s.mu.Unlock()
+		notify("serverRequest/resolved", map[string]any{"threadId": s.threadID, "requestId": id})
+		return nil
 	case <-time.After(5 * time.Minute):
 		return nil
 	}
@@ -294,6 +317,9 @@ func (s *server) handle(id json.RawMessage, method string, params json.RawMessag
 		tid, _ := p["threadId"].(string)
 		if method == "thread/start" {
 			tid = uuid()
+		} else if cfg.ResumeError != "" {
+			replyErr(id, -32603, cfg.ResumeError)
+			return
 		} else if _, err := os.Stat(rollout(tid)); err != nil {
 			replyErr(id, -32600, "no rollout found for thread id "+tid)
 			return
@@ -317,7 +343,8 @@ func (s *server) handle(id json.RawMessage, method string, params json.RawMessag
 			"modelProvider": cfg.ModelProvider, "cwd": s.cwd, "instructionSources": sources,
 			"approvalPolicy": p["approvalPolicy"], "approvalsReviewer": p["approvalsReviewer"],
 			"sandbox": map[string]any{"type": "workspaceWrite", "writableRoots": roots, "networkAccess": false,
-				"excludeTmpdirEnvVar": false, "excludeSlashTmp": false},
+				"excludeTmpdirEnvVar": s.overrides["sandbox_workspace_write.exclude_tmpdir_env_var"] == "true",
+				"excludeSlashTmp":     s.overrides["sandbox_workspace_write.exclude_slash_tmp"] == "true"},
 			"reasoningEffort": nil})
 		s.startMCP()
 	case "turn/start":
@@ -484,6 +511,10 @@ func decisionOf(r json.RawMessage) string {
 func (s *server) turn(turn, text string, stop <-chan struct{}) {
 	t := &turnCtx{s: s, turn: turn, stop: stop}
 	notify("turn/started", map[string]any{"threadId": s.threadID, "turn": map[string]any{"id": turn, "items": []any{}, "status": "inProgress"}})
+	if cfg.LateExtraMCP {
+		notify("mcpServer/startupStatus/updated", map[string]any{"threadId": s.threadID, "name": "codex_apps",
+			"status": "starting", "error": nil, "failureReason": nil})
+	}
 	t.item("item/started", map[string]any{"type": "userMessage", "id": "u-" + turn[:8], "content": []any{map[string]any{"type": "text", "text": text}}})
 	t.item("item/completed", map[string]any{"type": "userMessage", "id": "u-" + turn[:8], "content": []any{map[string]any{"type": "text", "text": text}}})
 	cmd, arg, _ := strings.Cut(strings.TrimSpace(text), " ")
@@ -601,10 +632,10 @@ func (t *turnCtx) command(command string, background bool) string {
 	cached := t.s.cache[command]
 	t.s.mu.Unlock()
 	if !cached {
-		decision = decisionOf(t.s.ask("item/commandExecution/requestApproval", t.with("kind", "command", "itemId", id,
+		decision = decisionOf(t.s.askUntil("item/commandExecution/requestApproval", t.with("kind", "command", "itemId", id,
 			"startedAtMs", time.Now().UnixMilli(), "environmentId", "local", "command", command, "cwd", t.s.cwd,
 			"commandActions", []any{}, "reason", "fake needs approval",
-			"availableDecisions", []any{"accept", "acceptForSession", "decline", "cancel"})))
+			"availableDecisions", []any{"accept", "acceptForSession", "decline", "cancel"}), t.stop))
 	}
 	switch decision {
 	case "acceptForSession":
@@ -630,7 +661,9 @@ func (t *turnCtx) command(command string, background bool) string {
 		item["status"], item["aggregatedOutput"], item["exitCode"], item["durationMs"] = "completed", "ran: "+command+"\n", 0, 1
 		t.item("item/completed", item)
 		t.say("ran " + command)
-	case "cancel":
+	case "cancel", "":
+		// cancel, or interrupted while the approval was open (resolved
+		// without a reply).
 		item["status"] = "declined"
 		t.item("item/completed", item)
 		return "interrupted"
