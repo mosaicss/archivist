@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"regexp"
 	"sort"
 	"strings"
@@ -22,6 +23,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/mosaicss/archivist/internal/auth"
 	"github.com/mosaicss/archivist/internal/cmd"
+	"github.com/mosaicss/archivist/internal/taskscope"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
@@ -250,7 +252,8 @@ func newMCPCmd(newRoot func() *cobra.Command, version string) *cobra.Command {
 }
 
 func newMCPServeCmd(newRoot func() *cobra.Command, version string) *cobra.Command {
-	return &cobra.Command{
+	var tokenFile string
+	serve := &cobra.Command{
 		Use:   "serve",
 		Short: "Serve every archivist verb as an MCP tool over stdio",
 		Long: `Serve every archivist verb as an MCP tool over stdio.
@@ -259,33 +262,57 @@ The server speaks JSON-RPC on stdin/stdout (stderr is the log channel) and
 exposes one tool per CLI verb with the same auth flow, exit-code semantics,
 and web-UI audit surface. Requires ARCHIVIST_TOKEN (or --token).
 
+--token-file names a file holding the token; it is read again on every tool
+call, so a supervisor can rotate the token without restarting the server.
+A session task token (mst_..., minted by 'archivist connect') switches the
+server to task mode: only the search and read tools whose chat-api routes a
+task token may call are exposed.
+
 Claude Desktop config:
   {"mcpServers":{"archivist":{"command":"archivist","args":["mcp","serve"],
    "env":{"ARCHIVIST_TOKEN":"ak_..."}}}}`,
 		Annotations: map[string]string{
-			"pp:typed-exit-codes": "0,4",
+			"pp:typed-exit-codes": "0,2,4",
 			"mcp:hidden":          "true",
 		},
 		RunE: func(c *cobra.Command, args []string) error {
+			tokenFlag, _ := c.Root().PersistentFlags().GetString("token")
+			if tokenFlag != "" && tokenFile != "" {
+				_, _ = fmt.Fprintln(c.ErrOrStderr(), "archivist mcp serve: use --token or --token-file, not both.")
+				return &cmd.ExitError{Code: cmd.ExitUsageError}
+			}
 			// AC1: validate the token BEFORE serving — fail fast with the
 			// CLI's canonical guidance and exit 4.
-			tokenFlag, _ := c.Root().PersistentFlags().GetString("token")
-			if _, err := auth.ResolveToken(tokenFlag); err != nil {
+			var token string
+			var err error
+			src := staticToken(tokenFlag)
+			if tokenFile != "" {
+				src = fileToken(tokenFile)
+				token, err = src()
+			} else {
+				token, err = auth.ResolveToken(tokenFlag)
+			}
+			if err != nil {
 				if errors.Is(err, auth.ErrNoToken) {
 					_, _ = fmt.Fprintln(c.ErrOrStderr(),
 						"archivist mcp serve: no credentials found. Run 'archivist auth login --token ak_...' to save a credential, or set ARCHIVIST_TOKEN.")
 				} else {
-					_, _ = fmt.Fprintln(c.ErrOrStderr(), err.Error())
+					_, _ = fmt.Fprintln(c.ErrOrStderr(), "archivist mcp serve: "+err.Error())
 				}
 				return &cmd.ExitError{Code: cmd.ExitAuthError}
 			}
 
-			server, count := buildMCPServer(newRoot, version, tokenFlag)
+			taskMode := auth.IsTaskToken(token)
+			server, count := buildMCPServerWith(newRoot, version, src, taskMode)
+			mode := ""
+			if taskMode {
+				mode = ", task mode"
+			}
 			// Stderr only — process stdout belongs to the SDK transport (AC9).
 			_, _ = fmt.Fprintf(c.ErrOrStderr(),
-				"archivist mcp serve: %d tools registered (v%s)\n", count, version)
+				"archivist mcp serve: %d tools registered (v%s%s)\n", count, version, mode)
 
-			err := server.Run(c.Context(), &mcp.StdioTransport{})
+			err = server.Run(c.Context(), &mcp.StdioTransport{})
 			if err == nil || errors.Is(err, context.Canceled) {
 				// Clean EOF / ctx-cancel — exit 0 (AC1).
 				return nil
@@ -294,18 +321,58 @@ Claude Desktop config:
 			return &cmd.ExitError{Code: cmd.ExitGenericError}
 		},
 	}
+	serve.Flags().StringVar(&tokenFile, "token-file", "",
+		"Read the token from this file on every tool call (rotation without restart)")
+	return serve
+}
+
+// tokenSource yields the token appended to each dispatched argv. An empty
+// token leaves resolution to the verb (ARCHIVIST_TOKEN, credentials file).
+type tokenSource func() (string, error)
+
+func staticToken(token string) tokenSource {
+	return func() (string, error) { return token, nil }
+}
+
+// fileToken re-reads path on every call. The file holds exactly one token
+// (surrounding whitespace ignored) in a valid format.
+func fileToken(path string) tokenSource {
+	return func() (string, error) {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return "", fmt.Errorf("read token file: %w", err)
+		}
+		token := strings.TrimSpace(string(data))
+		if token == "" {
+			return "", fmt.Errorf("token file %s is empty", path)
+		}
+		if err := auth.ValidateTokenFormat(token); err != nil {
+			return "", fmt.Errorf("token file %s: %w", path, err)
+		}
+		return token, nil
+	}
 }
 
 // buildMCPServer assembles the MCP server with one tool per walked verb.
 // tokenOverride carries a --token passed to `mcp serve` into every dispatch.
 // Returns the server and the registered tool count.
 func buildMCPServer(newRoot func() *cobra.Command, version, tokenOverride string) (*mcp.Server, int) {
+	return buildMCPServerWith(newRoot, version, staticToken(tokenOverride), auth.IsTaskToken(tokenOverride))
+}
+
+// buildMCPServerWith is buildMCPServer with a token source; taskMode limits
+// the tools to the task allowlist.
+func buildMCPServerWith(newRoot func() *cobra.Command, version string, src tokenSource, taskMode bool) (*mcp.Server, int) {
 	server := mcp.NewServer(
 		&mcp.Implementation{Name: "archivist", Version: version},
 		&mcp.ServerOptions{Instructions: mcpInstructions},
 	)
-	specs := collectTools(newRoot())
-	for _, spec := range specs {
+	count := 0
+	for _, spec := range collectTools(newRoot()) {
+		if taskMode && !taskscope.ToolAllowed(spec.Name) {
+			continue
+		}
+		count++
 		// Untyped AddTool on purpose: schemas are walker-built at runtime;
 		// the generic mcp.AddTool[In,Out] infers schemas from Go structs.
 		server.AddTool(&mcp.Tool{
@@ -319,9 +386,9 @@ func buildMCPServer(newRoot func() *cobra.Command, version, tokenOverride string
 				DestructiveHint: boolPtr(false),
 				OpenWorldHint:   boolPtr(false),
 			},
-		}, newToolHandler(newRoot, spec, tokenOverride))
+		}, newToolHandler(newRoot, spec, src))
 	}
-	return server, len(specs)
+	return server, count
 }
 
 func boolPtr(b bool) *bool { return &b }
@@ -332,8 +399,12 @@ func boolPtr(b bool) *bool { return &b }
 //
 // The dispatched root runs under the request context (ExecuteContext), so a
 // host cancellation reaches the verb's Client.Do and aborts its HTTP call.
-func newToolHandler(newRoot func() *cobra.Command, spec toolSpec, tokenOverride string) mcp.ToolHandler {
+func newToolHandler(newRoot func() *cobra.Command, spec toolSpec, src tokenSource) mcp.ToolHandler {
 	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		tokenOverride, err := src()
+		if err != nil {
+			return errorResult(cmd.ExitAuthError, err.Error(), ""), nil
+		}
 		argv, usageErr := buildArgv(spec, req.Params.Arguments, tokenOverride)
 		if usageErr != "" {
 			return errorResult(cmd.ExitUsageError, usageErr, ""), nil

@@ -20,7 +20,7 @@ import (
 
 func init() {
 	// Keep registration order (auth, search, read, toc, companies, doctor,
-	// usage, update, version) in --help: research verbs first, in the order
+	// usage, update, connect, version) in --help: research verbs first, in the order
 	// an agent uses them. Cobra would otherwise sort alphabetically.
 	cobra.EnableCommandSorting = false
 }
@@ -62,6 +62,7 @@ func NewRootCmd(version, commit, date string) *cobra.Command {
 	root.AddCommand(newDoctorCmd(version, commit, date))
 	root.AddCommand(NewUsageCmd(version))
 	root.AddCommand(NewUpdateCmd(version))
+	root.AddCommand(newConnectCmd(version))
 	root.AddCommand(NewVersionCmd(version, commit, date))
 
 	return root

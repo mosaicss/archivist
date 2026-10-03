@@ -105,6 +105,7 @@ When a response is too large it is truncated and stderr says
 | `usage` | This month's fair use count and the rate limit |
 | `doctor` | Check credential, connectivity, version and skill |
 | `update` | Replace the binary with the latest release (`--skill`, `--check`) |
+| `connect` | Drive your own Claude Code from the Mosaic workspace (preview, see below) |
 | `version` | Print version, commit, build date and platform |
 
 ```text
@@ -171,9 +172,75 @@ Tools (11): `search`, `read_passage`, `read_section`, `toc`,
 tool has a title and the annotations `readOnlyHint: true`,
 `destructiveHint: false`, `openWorldHint: false`.
 
-`auth login`, `auth logout` and `update` are not exposed: token setup and
-binary replacement are operator actions. A failed call returns an error result
-naming the exit code, with the verb's stderr and stdout.
+`auth login`, `auth logout`, `update` and `connect` are not exposed: token
+setup, binary replacement and harness supervision are operator actions. A
+failed call returns an error result naming the exit code, with the verb's
+stderr and stdout.
+
+`--token-file <path>` reads the token from a file on every tool call, so a
+supervisor can rotate it without restarting the server (it cannot be combined
+with `--token`).
+
+**Task mode.** When the token is a session task token (`mst_...`, minted by
+`archivist connect` for one workspace session), the server exposes only the
+tools whose chat-api routes a task token may call: `search`,
+`companies_search`, `read_passage`, `read_section` and `toc`. `companies_get`
+falls back to the full company catalog, which task tokens cannot read, so it
+is left out. `auth login` refuses task tokens.
+
+## Connect your Claude Code (preview)
+
+`archivist connect` lets the Mosaic workspace drive the Claude Code installed
+on your machine. It runs in the foreground and keeps one outbound WebSocket to
+the Mosaic agent relay; nothing listens on your machine.
+
+```bash
+archivist connect --check   # what was detected; connects nothing
+archivist connect           # serve workspace sessions until Ctrl-C
+archivist connect --claude-model claude-sonnet-5 --claude-effort low
+```
+
+Requirements: an `ak_` API key (`archivist auth login`) on a Pro account, and
+Claude Code 2.1.280 or newer logged in with a claude.ai subscription (`claude
+auth status` shows `authMethod: claude.ai`). API key logins are refused.
+
+For each "My Claude Code" session the daemon:
+
+- runs `claude -p` in stream-json mode in a fresh temporary directory, with
+  only `HOME`, `PATH`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `TERM`, `TMPDIR`,
+  `LC_*` and `XDG_*` in its environment (provider keys and `CLAUDE_*`,
+  `ARCHIVIST_*` variables never pass) and without your user, project or local
+  Claude settings;
+- refuses the session unless Claude reports a subscription login
+  (`apiKeySource: none`) and the default permission mode;
+- gives Claude the built-in tools Bash, Read, Edit, Write, Glob and Grep and
+  the Mosaic search and read tools (`archivist mcp serve` in task mode, under
+  a 15 minute task token it rotates and revokes); every tool call that needs
+  permission becomes an approval card in the workspace (allow once, allow for
+  session, deny once, deny for session; no answer within 60 seconds denies).
+  "Allow for session" and "deny for session" apply to every later call of that
+  tool in the session, whatever its input, without another card; they live in
+  the daemon's memory, so restarting `archivist connect` clears them;
+- streams the session as `mosaic-event/1` events, each validated before it is
+  sent.
+
+The relay sends only data (session ids, prompts, approval decisions,
+interrupt and stop). Binaries, arguments and flags are fixed on your machine.
+Session ids and working directories are kept in `~/.archivist/connect/`
+(0700); after a restart, the next message resumes the same Claude session.
+Each running session's task token and MCP config sit in
+`~/.archivist/connect/run/<session>/` (`task-token`, `mcp.json`, 0600), are
+removed when the session stops or the daemon exits, and the token is revoked
+then. Ctrl-C stops every Claude process and revokes its tokens.
+
+`ARCHIVIST_RELAY_URL` overrides the relay address (default
+`wss://relay.mosaic-finance.com`). macOS and Linux only for now; Codex
+sessions come later (`--check` reports Codex as not supported yet).
+
+Exit codes: 0 stopped by Ctrl-C (or `--check` found a usable Claude Code); 1
+refused or stopped (feature not enabled, another `archivist connect` took
+over, Claude Code too old); 2 bad flag or relay URL; 3 Claude Code not found; 4 credential
+or Claude login problem.
 
 ## Claude Code skill
 

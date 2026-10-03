@@ -545,3 +545,25 @@ func TestAuthStatusMinVersionPrintedOnce(t *testing.T) {
 		t.Errorf("the min-version block was reported twice:\n%s", output)
 	}
 }
+
+func TestAuthLoginRefusesTaskTokenNoWrite(t *testing.T) {
+	home := sandboxAuthHome(t)
+	hits := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hits++ }))
+	t.Cleanup(srv.Close)
+	t.Setenv("ARCHIVIST_BASE_URL", srv.URL)
+	output, err := runAuthCmd(t, "auth", "login", "--token",
+		"mst_0f8fad5b-d9cb-469f-a165-70867728950e.AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-abcde")
+	if err == nil {
+		t.Fatal("expected task token login to fail")
+	}
+	if !strings.Contains(output, "cannot be saved as a login") {
+		t.Errorf("missing refusal reason:\n%s", output)
+	}
+	if hits != 0 {
+		t.Errorf("task token login reached the network (%d requests)", hits)
+	}
+	if _, statErr := os.Stat(credPath(home)); !os.IsNotExist(statErr) {
+		t.Error("task token login wrote a credentials file")
+	}
+}

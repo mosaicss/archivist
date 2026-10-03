@@ -97,6 +97,16 @@ func (c *Client) Do(ctx context.Context, method, path string, body io.Reader) (*
 
 	backoffs := []time.Duration{250 * time.Millisecond, 500 * time.Millisecond, 1000 * time.Millisecond}
 
+	// Buffer the body once so every attempt sends the same bytes: a reader
+	// consumed by the first attempt would make a retried POST send nothing.
+	var payload []byte
+	if body != nil {
+		var err error
+		if payload, err = io.ReadAll(body); err != nil {
+			return nil, fmt.Errorf("read request body: %w", err)
+		}
+	}
+
 	var lastErr error
 	var lastResp *http.Response
 
@@ -110,7 +120,11 @@ func (c *Client) Do(ctx context.Context, method, path string, body io.Reader) (*
 			}
 		}
 
-		req, err := http.NewRequestWithContext(ctx, method, url, body)
+		var attemptBody io.Reader
+		if payload != nil {
+			attemptBody = bytes.NewReader(payload)
+		}
+		req, err := http.NewRequestWithContext(ctx, method, url, attemptBody)
 		if err != nil {
 			return nil, fmt.Errorf("build request: %w", err)
 		}

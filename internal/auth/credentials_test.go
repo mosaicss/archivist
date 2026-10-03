@@ -360,3 +360,61 @@ func TestTokenFormatValidation(t *testing.T) {
 		t.Error("expected empty token to fail, got nil")
 	}
 }
+
+const validTaskToken = "mst_0f8fad5b-d9cb-469f-a165-70867728950e.AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-abcde"
+
+func TestTaskTokenFormat(t *testing.T) {
+	if err := auth.ValidateTokenFormat(validTaskToken); err != nil {
+		t.Fatalf("valid task token rejected: %v", err)
+	}
+	if !auth.IsTaskToken(validTaskToken) {
+		t.Fatal("IsTaskToken false for mst_ token")
+	}
+	bad := []string{
+		"mst_",
+		"mst_0f8fad5b-d9cb-469f-a165-70867728950e",                                               // no secret
+		"mst_0F8FAD5B-D9CB-469F-A165-70867728950E.AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-abcde",   // uppercase uuid
+		"mst_0f8fad5b-d9cb-469f-a165-70867728950e.AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-abcd",    // 42 chars
+		"mst_0f8fad5b-d9cb-469f-a165-70867728950e.AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-abcd=",   // padding
+		"mst_0f8fad5b-d9cb-469f-a165-70867728950e.AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-abcde\n", // trailing newline
+	}
+	for _, tok := range bad {
+		if err := auth.ValidateTokenFormat(tok); !errors.Is(err, auth.ErrInvalidTaskToken) {
+			t.Errorf("ValidateTokenFormat(%q) = %v, want ErrInvalidTaskToken", tok, err)
+		}
+	}
+}
+
+func TestLoginRefusesTaskTokens(t *testing.T) {
+	if err := auth.ValidateLoginTokenFormat(validTaskToken); !errors.Is(err, auth.ErrTaskTokenLogin) {
+		t.Fatalf("login accepted a task token: %v", err)
+	}
+	if err := auth.ValidateLoginTokenFormat("ak_live_abcdefghij"); err != nil {
+		t.Fatalf("login refused ak_: %v", err)
+	}
+	if err := auth.ValidateLoginTokenFormat("nope"); !errors.Is(err, auth.ErrInvalidFormat) {
+		t.Fatalf("login accepted a malformed token: %v", err)
+	}
+}
+
+func TestResolveAcceptsTaskTokenFromEnv(t *testing.T) {
+	sandboxHome(t)
+	t.Setenv("ARCHIVIST_TOKEN", validTaskToken)
+	got, src, err := auth.Resolve("")
+	if err != nil || got != validTaskToken || src != auth.SourceEnv {
+		t.Fatalf("Resolve: %q %v %v", got, src, err)
+	}
+}
+
+func TestFingerprintNeverContainsSecret(t *testing.T) {
+	fp := auth.Fingerprint(validTaskToken)
+	if len(fp) != 8 || strings.Contains(validTaskToken, fp) {
+		t.Fatalf("fingerprint %q", fp)
+	}
+	if auth.KeyID(validTaskToken) != "mst_0f8fad5b" {
+		t.Fatalf("KeyID = %q", auth.KeyID(validTaskToken))
+	}
+	if auth.Fingerprint("ak_abcdefghXYZ") != auth.Fingerprint("ak_abcdefghOTHER") {
+		t.Fatal("fingerprint must depend only on key_id")
+	}
+}
