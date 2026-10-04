@@ -6,6 +6,23 @@ The CLI returns passages, not answers: Mosaic runs no model for it. Chat and tab
 
 ## Install
 
+### One-step install script (macOS, Linux, Windows)
+
+```sh
+curl -fsSL https://github.com/mosaicss/archivist/releases/latest/download/install.sh | bash
+```
+
+```powershell
+& ([scriptblock]::Create((irm https://github.com/mosaicss/archivist/releases/latest/download/install.ps1)))
+```
+
+The script installs or updates archivist (`~/.local/bin`, or
+`%LOCALAPPDATA%\Programs\archivist` on Windows) after checking the archive
+against the release's `SHA256SUMS`, and adds the Claude Code skill when
+`~/.claude/skills` exists. A Homebrew install is upgraded with `brew upgrade`
+instead (only while the cask is still installed). With a pairing code from the Mosaic workspace it also connects this
+machine; see [One-step connect](#one-step-connect).
+
 ### Homebrew (macOS)
 
 ```sh
@@ -194,8 +211,78 @@ from that directory to the session's workspace (see below).
 ## Connect your Claude Code or Codex (preview)
 
 `archivist connect` lets the Mosaic workspace drive the Claude Code or Codex
-installed on your machine. It runs in the foreground and keeps one outbound WebSocket to
-the Mosaic agent relay; nothing listens on your machine.
+installed on your machine. It keeps one outbound WebSocket to the Mosaic
+agent relay; nothing listens on your machine.
+
+### One-step connect
+
+The workspace shows a single use pairing code (valid for 10 minutes) and a
+command that includes it. Paste the command into a terminal, or ask your own
+agent to run it:
+
+```sh
+curl -fsSL https://github.com/mosaicss/archivist/releases/latest/download/install.sh | bash -s -- --pair ABCDE-FGHJK
+```
+
+It installs or updates archivist, then runs:
+
+```sh
+archivist connect --pair ABCDE-FGHJK   # redeem the code for a new ak_ key, saved to ~/.archivist/credentials
+archivist connect --install            # run connect as a background user service
+archivist connect --status             # report the service and the saved key
+```
+
+`--pair` accepts the code in any case, with or without the hyphen or spaces,
+and never prints the key (only its masked form). An unknown, used or expired
+code exits 4: get a new code in Mosaic. The redeem request is sent once and
+never retried. If `ARCHIVIST_TOKEN` is set it still takes precedence in that
+terminal, and `--pair` warns about it. Pairing again replaces the saved key;
+the earlier key stays active, and `--pair` says so (masked) so you can
+revoke it in Mosaic. A `~/.archivist/credentials` symlink (dotfiles) is kept:
+the key is written to the file it points to, which is created when it does
+not exist yet.
+
+`--install` writes a launchd agent on macOS
+(`~/Library/LaunchAgents/com.mosaic-finance.archivist.connect.plist`, loaded
+into `gui/<uid>`, started at login) or a systemd user unit on Linux
+(`~/.config/systemd/user/archivist-connect.service`, enabled and started,
+with `loginctl --no-ask-password enable-linger` attempted so it also starts
+at boot). The
+service runs `archivist connect --service` with only `PATH`, `HOME`, `LANG`,
+`LC_ALL`, an absolute `CODEX_HOME` or `CLAUDE_CONFIG_DIR`, and
+`ARCHIVIST_BASE_URL`/`ARCHIVIST_RELAY_URL` when set, captured at install
+time; it reads the saved key only (`ARCHIVIST_TOKEN` and `--token` are
+ignored, even when injected into the service environment). It logs to
+`~/.archivist/connect/connect.log` (0600; at service start a log over 10 MiB
+is moved to `connect.log.1`) and writes its process id to
+`~/.archivist/connect/service.pid` while it runs. A crash restarts it after
+10 seconds; a clean stop (another `archivist connect` took over, the key was
+revoked, the feature is off, no usable Claude Code or Codex) leaves it
+stopped until `archivist connect --install`, the next login (macOS, Linux
+without lingering) or the next boot. Running `--install` again restarts it
+on the current binary. The install script does that on every update;
+after `archivist update` or `brew upgrade`, run `archivist connect --install`
+yourself so the service runs the new binary (`archivist update` reminds you
+when a service is installed). `archivist connect --uninstall`
+stops and removes it and keeps the saved key.
+
+`--status` exits 0 when the service is running (Linux: the unit is active;
+macOS: the job is loaded and the daemon in `service.pid` is alive) and a key
+is saved, else 1, and prints the last log line. A loaded launchd job whose
+daemon has stopped shows "loaded, not running"; a job loaded a moment ago gets
+about 5 seconds to write its pid first. `--pair`, `--install`,
+`--uninstall` and `--status` are used one at a time.
+
+Windows: `install.ps1 -Pair CODE` installs and pairs; background connect is
+not available on Windows yet.
+
+Install script options: `--pair CODE`, `--no-service` (pair only).
+`ARCHIVIST_INSTALL_DIR` changes the install directory,
+`ARCHIVIST_INSTALL_VERSION` installs a given tag, and
+`ARCHIVIST_RELEASE_BASE_URL` points the script at another release host (for
+testing). Each released script is stamped with its own tag.
+
+### Running it yourself
 
 ```bash
 archivist connect --check   # what was detected; connects nothing
@@ -217,8 +304,9 @@ For each "My Claude Code" session the daemon:
 - runs `claude -p` in stream-json mode in a fresh temporary directory, with
   only `HOME`, `PATH`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `TERM`, `TMPDIR`,
   `LC_*` and `XDG_*` in its environment (provider keys and `CLAUDE_*`,
-  `ARCHIVIST_*` variables never pass) and without your user, project or local
-  Claude settings;
+  `ARCHIVIST_*` variables never pass, except an absolute `CLAUDE_CONFIG_DIR`
+  naming an existing directory, so a login kept outside `~/.claude` is found)
+  and without your user, project or local Claude settings;
 - refuses the session unless Claude reports a subscription login
   (`apiKeySource: none`) and the default permission mode;
 - gives Claude the built-in tools Bash, Read, Edit, Write, Glob and Grep and
@@ -312,10 +400,12 @@ then. Ctrl-C stops every Claude Code and Codex process and revokes its tokens.
 
 Exit codes: 0 stopped by Ctrl-C (or `--check` found a usable Claude Code or
 Codex); 1 refused or stopped (feature not enabled, another `archivist connect`
-took over, Claude Code too old); 2 bad flag or relay URL; 3 no usable harness
-(Claude Code not found, or neither Claude Code nor an installed Codex is
-usable); 4 credential or Claude login problem. When Codex is not installed,
-the Claude Code codes apply as before.
+took over, Claude Code too old), service not running, or service setup
+failed; 2 bad flag or relay URL; 3 no usable harness (Claude Code not found,
+or neither Claude Code nor an installed Codex is usable); 4 credential or
+Claude login problem, or an invalid or expired pairing code; 5 server or
+network error while pairing; 7 pairing rate limited. When Codex is not
+installed, the Claude Code codes apply as before.
 
 ## Claude Code skill
 

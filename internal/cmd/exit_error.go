@@ -10,6 +10,10 @@ import "fmt"
 // implementations.
 type ExitError struct {
 	Code int
+	// unexpected marks a failure that is not a terminal outcome (an
+	// unexpected daemon error): the background service exits non-zero for
+	// it so its manager restarts it (Story 78.30).
+	unexpected bool
 }
 
 func (e *ExitError) Error() string {

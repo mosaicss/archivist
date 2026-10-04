@@ -9,6 +9,8 @@ package connect
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 )
@@ -42,6 +44,23 @@ var denyPrefixes = []string{
 	"ANTHROPIC_", "CLAUDE_CODE_", "CLAUDE_", "OPENAI_", "CODEX_", "ARCHIVIST_", "HERDR_",
 }
 
+// ClaudeConfigDirKey names the directory holding the owner's Claude Code
+// login when it is not ~/.claude (Story 78.30). It is the one CLAUDE_ key a
+// harness child may see, copied from the daemon environment only when it is
+// an absolute path to an existing directory; it is never an override. The
+// subscription proof (claude auth status, system/init apiKeySource) still
+// runs on whatever login that directory holds.
+const ClaudeConfigDirKey = "CLAUDE_CONFIG_DIR"
+
+// claudeConfigDirAllowed reports whether v may pass as CLAUDE_CONFIG_DIR.
+func claudeConfigDirAllowed(v string) bool {
+	if v == "" || !filepath.IsAbs(v) || strings.ContainsAny(v, "\x00\n\r") {
+		return false
+	}
+	info, err := os.Stat(v)
+	return err == nil && info.IsDir()
+}
+
 // EnvAllowed reports whether key may reach a harness child.
 func EnvAllowed(key string) bool {
 	for _, p := range denyPrefixes {
@@ -61,12 +80,19 @@ func EnvAllowed(key string) bool {
 }
 
 // BuildChildEnv returns the child environment (os.Environ form, sorted by
-// key) built only from allowlisted parent keys, then overrides. An override
+// key) built only from allowlisted parent keys (plus an absolute, existing
+// CLAUDE_CONFIG_DIR), then overrides. An override
 // for a key outside the allowlist, or under a deny prefix, is an error.
 func BuildChildEnv(parent []string, overrides map[string]string) ([]string, error) {
 	vals := map[string]string{}
 	for _, kv := range parent {
 		k, v, ok := strings.Cut(kv, "=")
+		if ok && k == ClaudeConfigDirKey {
+			if claudeConfigDirAllowed(v) {
+				vals[k] = v
+			}
+			continue
+		}
 		if !ok || k == "" || !EnvAllowed(k) {
 			continue
 		}

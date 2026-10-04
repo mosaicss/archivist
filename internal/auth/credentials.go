@@ -116,6 +116,28 @@ func validate(token string, source Source, path string) error {
 	return nil
 }
 
+// SavedToken returns the credentials file's token, ignoring the flag and
+// ARCHIVIST_TOKEN rungs: it is what a background service (which never
+// carries ARCHIVIST_TOKEN) will use. A missing or empty file is ErrNoToken.
+func SavedToken() (string, error) {
+	path, err := CredentialsPath()
+	if err != nil {
+		return "", err
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", ErrNoToken
+		}
+		return "", fmt.Errorf("read credentials file %s: %w", path, err)
+	}
+	token := strings.TrimSpace(string(data))
+	if token == "" {
+		return "", ErrNoToken
+	}
+	return token, validate(token, SourceFile, path)
+}
+
 // ResolveToken returns the active CLI token or an error.
 // Thin wrapper over Resolve for the existing per-verb call sites.
 func ResolveToken(flagValue string) (string, error) {
@@ -127,8 +149,10 @@ func ResolveToken(flagValue string) (string, error) {
 }
 
 // SaveToken writes the token to the credentials file (mode 0600, parent dir
-// 0700) and returns the path written. Callers verify the token first; this
-// function only persists.
+// 0700) atomically (temporary file plus rename) and returns the path
+// written. When the credentials file is a symlink (a dotfiles setup), the
+// link is kept: the temporary file is written beside its target and renamed
+// onto it. Callers verify the token first; this function only persists.
 func SaveToken(token string) (string, error) {
 	path, err := CredentialsPath()
 	if err != nil {
@@ -137,10 +161,82 @@ func SaveToken(token string) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return "", fmt.Errorf("create %s: %w", filepath.Dir(path), err)
 	}
-	if err := os.WriteFile(path, []byte(token+"\n"), 0o600); err != nil {
+	target, err := credentialsTarget(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve credentials link %s: %w", path, err)
+	}
+	if target != path {
+		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+			return "", fmt.Errorf("create %s: %w", filepath.Dir(target), err)
+		}
+	}
+	if err := writeFileAtomic(target, []byte(token+"\n")); err != nil {
 		return "", fmt.Errorf("write credentials file %s: %w", path, err)
 	}
 	return path, nil
+}
+
+// credentialsTarget is the file SaveToken replaces: path itself, or, when
+// path is a symlink (dotfiles), the file it points to, so the link survives.
+// A link whose target does not exist yet (a fresh dotfiles checkout) is
+// followed with os.Readlink, relative targets against the link's directory.
+func credentialsTarget(path string) (string, error) {
+	target := path
+	for hops := 0; ; hops++ {
+		info, err := os.Lstat(target)
+		if errors.Is(err, os.ErrNotExist) {
+			return target, nil
+		}
+		if err != nil {
+			return "", err
+		}
+		if info.Mode()&os.ModeSymlink == 0 {
+			return target, nil
+		}
+		if hops >= 40 {
+			return "", errors.New("too many levels of symbolic links")
+		}
+		next, err := os.Readlink(target)
+		if err != nil {
+			return "", err
+		}
+		if !filepath.IsAbs(next) {
+			next = filepath.Join(filepath.Dir(target), next)
+		}
+		target = next
+	}
+}
+
+// writeFileAtomic writes data to a 0600 temporary file in path's directory,
+// syncs it and renames it over path, so a reader sees the old credential or
+// the new one, never a partial file. The temporary file is removed on any
+// failure.
+func writeFileAtomic(path string, data []byte) (err error) {
+	f, err := os.CreateTemp(filepath.Dir(path), ".credentials-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	defer func() {
+		if err != nil {
+			_ = f.Close()
+			_ = os.Remove(tmp)
+		}
+	}()
+	// CreateTemp already opens 0600; Chmod states it for every platform.
+	if err = f.Chmod(0o600); err != nil {
+		return err
+	}
+	if _, err = f.Write(data); err != nil {
+		return err
+	}
+	if err = f.Sync(); err != nil {
+		return err
+	}
+	if err = f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 // DeleteCredentials removes the credentials file. Idempotent: a missing file

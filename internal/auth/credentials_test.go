@@ -250,6 +250,82 @@ func TestSaveTokenOverwritesExisting(t *testing.T) {
 	}
 }
 
+// SaveToken replaces the file atomically: an existing 0644 file comes back
+// 0600, and no temporary file is left beside it.
+func TestSaveTokenAtomicReplace(t *testing.T) {
+	home := sandboxHome(t)
+	path := writeCredFile(t, home, "ak_oldtoken\n")
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := auth.SaveToken("ak_replacedtoken"); err != nil {
+		t.Fatalf("SaveToken: %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtimeHasUnixModes() && info.Mode().Perm() != 0o600 {
+		t.Errorf("mode %v, want 0600", info.Mode().Perm())
+	}
+	b, _ := os.ReadFile(path)
+	if string(b) != "ak_replacedtoken\n" {
+		t.Errorf("content %q", b)
+	}
+	entries, _ := os.ReadDir(filepath.Dir(path))
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".tmp") {
+			t.Errorf("temporary file left behind: %s", e.Name())
+		}
+	}
+}
+
+// A credentials file that is a symlink (dotfiles) stays a link: the new
+// token lands in its target.
+func TestSaveTokenKeepsSymlink(t *testing.T) {
+	if !runtimeHasUnixModes() {
+		t.Skip("symlinks need privileges on windows")
+	}
+	home := sandboxHome(t)
+	dotfiles := filepath.Join(t.TempDir(), "dotfiles")
+	if err := os.MkdirAll(dotfiles, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(dotfiles, "archivist-credentials")
+	if err := os.WriteFile(target, []byte("ak_oldtoken\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(home, ".archivist"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(home, ".archivist", "credentials")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := auth.SaveToken("ak_linkedtoken"); err != nil {
+		t.Fatalf("SaveToken: %v", err)
+	}
+	info, err := os.Lstat(link)
+	if err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("credentials is no longer a symlink: %v %v", info.Mode(), err)
+	}
+	b, _ := os.ReadFile(target)
+	if string(b) != "ak_linkedtoken\n" {
+		t.Fatalf("target content %q", b)
+	}
+	if ti, _ := os.Stat(target); ti.Mode().Perm() != 0o600 {
+		t.Fatalf("target mode %v", ti.Mode().Perm())
+	}
+	entries, _ := os.ReadDir(dotfiles)
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".tmp") {
+			t.Errorf("temporary file left behind: %s", e.Name())
+		}
+	}
+}
+
+func runtimeHasUnixModes() bool { return filepath.Separator == '/' }
+
 func TestDeleteCredentials(t *testing.T) {
 	home := sandboxHome(t)
 	path := writeCredFile(t, home, "ak_tokenvalue\n")
@@ -416,5 +492,50 @@ func TestFingerprintNeverContainsSecret(t *testing.T) {
 	}
 	if auth.Fingerprint("ak_abcdefghXYZ") != auth.Fingerprint("ak_abcdefghOTHER") {
 		t.Fatal("fingerprint must depend only on key_id")
+	}
+}
+
+// A credentials symlink whose target does not exist yet (a fresh dotfiles
+// checkout) is kept: the target is created where the link points, relative
+// targets resolved against the link's directory.
+func TestSaveTokenCreatesBrokenSymlinkTarget(t *testing.T) {
+	if !runtimeHasUnixModes() {
+		t.Skip("symlinks need privileges on windows")
+	}
+	for _, relative := range []bool{false, true} {
+		home := sandboxHome(t)
+		dir := filepath.Join(home, ".archivist")
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		target := filepath.Join(home, "dotfiles", "archivist", "credentials")
+		linkTo := target
+		if relative {
+			linkTo = filepath.Join("..", "dotfiles", "archivist", "credentials")
+		}
+		link := filepath.Join(dir, "credentials")
+		if err := os.Symlink(linkTo, link); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := auth.SaveToken("ak_brokenlinktoken"); err != nil {
+			t.Fatalf("relative=%v SaveToken: %v", relative, err)
+		}
+		info, err := os.Lstat(link)
+		if err != nil || info.Mode()&os.ModeSymlink == 0 {
+			t.Fatalf("relative=%v credentials is no longer a symlink: %v", relative, err)
+		}
+		if got, _ := os.Readlink(link); got != linkTo {
+			t.Fatalf("relative=%v link now points to %q", relative, got)
+		}
+		b, err := os.ReadFile(target)
+		if err != nil || string(b) != "ak_brokenlinktoken\n" {
+			t.Fatalf("relative=%v target content %q %v", relative, b, err)
+		}
+		if ti, _ := os.Stat(target); ti.Mode().Perm() != 0o600 {
+			t.Fatalf("relative=%v target mode %v", relative, ti.Mode().Perm())
+		}
+		if got, err := auth.SavedToken(); err != nil || got != "ak_brokenlinktoken" {
+			t.Fatalf("relative=%v SavedToken %q %v", relative, got, err)
+		}
 	}
 }

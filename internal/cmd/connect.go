@@ -60,9 +60,25 @@ Code the next message is the code to paste. It exits 0 after stop_session
 or the session's end, and non-zero when the sign-in or the subscription
 proof fails.
 
-Exit codes: 0 ok; 1 refused or stopped (feature off, superseded, too old);
-2 bad flag or relay URL; 3 no usable harness (Claude Code not found, or no
-usable Claude Code or Codex); 4 credential or Claude login problem.`
+One-step setup (macOS and Linux): the workspace shows a pairing code.
+
+  archivist connect --pair CODE   redeem a pairing code for a new key and save it
+  archivist connect --install     run connect as a background user service
+                                  (launchd agent or systemd user unit) that
+                                  starts at login and restarts after a crash
+  archivist connect --status      report the service and the saved key
+  archivist connect --uninstall   stop and remove the background service
+
+The service uses the saved key (~/.archivist/credentials), never
+ARCHIVIST_TOKEN, and logs to ~/.archivist/connect/connect.log. These four
+flags are used one at a time. Windows: --pair works; background connect is
+not available on Windows yet.
+
+Exit codes: 0 ok; 1 refused or stopped (feature off, superseded, too old),
+service not running, or service setup failed; 2 bad flag or relay URL; 3 no
+usable harness (Claude Code not found, or no usable Claude Code or Codex);
+4 credential or Claude login problem, or an invalid or expired pairing
+code; 5 server or network error while pairing; 7 pairing rate limited.`
 
 var (
 	connectModelRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:\[\]-]{0,127}$`)
@@ -73,17 +89,37 @@ func newConnectCmd(version string) *cobra.Command {
 	var check bool
 	var model, effort, codexModel, codexEffort string
 	var sessionID, agent, promptFile string
+	var pair string
+	var install, uninstall, status, serviceMode bool
 	c := &cobra.Command{
 		Use:   "connect",
 		Short: "Drive your own Claude Code or Codex from the Mosaic workspace (preview)",
 		Long:  connectLong,
 		Annotations: map[string]string{
-			"pp:typed-exit-codes": "0,1,2,3,4",
+			"pp:typed-exit-codes": "0,1,2,3,4,5,7",
 			// A daemon that spawns harnesses is never an MCP tool.
 			"mcp:hidden": "true",
 		},
-		Args: cobra.NoArgs,
+		// Positional arguments are accepted only as the rest of a --pair
+		// code typed with spaces (archivist connect --pair abcde fghjk).
+		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			m := setupMode{pair: cmd.Flags().Changed("pair"), install: install, uninstall: uninstall,
+				status: status, service: serviceMode}
+			if err := m.validate(cmd.ErrOrStderr(), args, check, sessionID != "" || agent != "" || promptFile != "",
+				model != "" || effort != "" || codexModel != "" || codexEffort != ""); err != nil {
+				return err
+			}
+			switch {
+			case m.pair:
+				return runPair(cmd, version, strings.Join(append([]string{pair}, args...), " "))
+			case m.install:
+				return runServiceInstall(cmd)
+			case m.uninstall:
+				return runServiceUninstall(cmd)
+			case m.status:
+				return runServiceStatus(cmd)
+			}
 			if model != "" && !connectModelRe.MatchString(model) {
 				_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Error: --claude-model %q is not a model name\n", model)
 				return &ExitError{Code: ExitUsageError}
@@ -104,8 +140,11 @@ func newConnectCmd(version string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return runConnect(cmd, version, check, connectFlags{model: model, effort: effort,
-				codexModel: codexModel, codexEffort: codexEffort, session: st})
+			f := connectFlags{model: model, effort: effort, codexModel: codexModel, codexEffort: codexEffort, session: st}
+			if m.service {
+				return runServiceMode(cmd, version, f)
+			}
+			return runConnect(cmd, version, check, f)
 		},
 	}
 	c.Flags().BoolVar(&check, "check", false, "Report detected harnesses and logins, then exit")
@@ -116,6 +155,12 @@ func newConnectCmd(version string) *cobra.Command {
 	c.Flags().StringVar(&sessionID, "session", "", "Session-bound mode: serve only this session (UUID); needs --agent and --prompt-file")
 	c.Flags().StringVar(&agent, "agent", "", "Session-bound mode: the session's agent, claude or codex")
 	c.Flags().StringVar(&promptFile, "prompt-file", "", "Session-bound mode: file holding the session's first prompt")
+	c.Flags().StringVar(&pair, "pair", "", "Redeem a pairing code from the Mosaic workspace for a new key and save it")
+	c.Flags().BoolVar(&install, "install", false, "Install and start connect as a background user service (macOS, Linux)")
+	c.Flags().BoolVar(&uninstall, "uninstall", false, "Stop and remove the background service")
+	c.Flags().BoolVar(&status, "status", false, "Report the background service and the saved key")
+	c.Flags().BoolVar(&serviceMode, "service", false, "Run as the background service (used by the service definition)")
+	_ = c.Flags().MarkHidden("service")
 	return c
 }
 
@@ -319,7 +364,7 @@ func connectResult(stderr io.Writer, log *connect.Logger, d *connect.Daemon, err
 		return &ExitError{Code: ExitGenericError}
 	default:
 		_, _ = fmt.Fprintf(stderr, "archivist connect: %v\n", err)
-		return &ExitError{Code: ExitGenericError}
+		return &ExitError{Code: ExitGenericError, unexpected: true}
 	}
 }
 
