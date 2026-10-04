@@ -441,6 +441,35 @@ func TestMCPServer_SearchRoundTrip(t *testing.T) {
 	}
 }
 
+// TestMCPServer_InstructionsCiteOnlyURL: the initialize instructions name the
+// permalink url as the only link to cite and the exchange document id as an
+// identifier, never a link (78-drop-source-urls).
+func TestMCPServer_InstructionsCiteOnlyURL(t *testing.T) {
+	cs := newMCPSession(t, "")
+	init := cs.InitializeResult()
+	if init == nil {
+		t.Fatal("no initialize result")
+	}
+	got := init.Instructions
+	if got != mcpInstructions {
+		t.Fatalf("initialize instructions differ from mcpInstructions:\n%s", got)
+	}
+	for _, want := range []string{
+		"That url is the only link: cite only url",
+		"exchange_document_id (with exchange_document_kind)",
+		"an identifier to quote, not a link",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("instructions missing %q:\n%s", want, got)
+		}
+	}
+	for _, banned := range []string{"source_url", "sec.gov", "quotemedia", "sedarplus", "kap.org.tr"} {
+		if strings.Contains(strings.ToLower(got), banned) {
+			t.Errorf("instructions mention %q:\n%s", banned, got)
+		}
+	}
+}
+
 // TestMCPServer_DashPositionalIsNotAFlag: positionals follow a "--"
 // terminator, so a query that starts with "-" reaches the verb as the query
 // instead of being parsed as a flag.

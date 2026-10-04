@@ -210,7 +210,10 @@ func sanitizeIdent(s string) string {
 const mcpInstructions = "Research SEC and SEDAR filings. Start with search to find passages, " +
 	"then read around them with read_passage (a passage and its neighbours), read_section " +
 	"(a whole section) or toc (a filing's section headers). Every passage carries a " +
-	"permalink url that opens it in Mosaic's filing viewer: cite that url for each claim. " +
+	"permalink url that opens it in Mosaic's filing viewer. That url is the only link: " +
+	"cite only url, for each claim. When present, exchange_document_id (with " +
+	"exchange_document_kind) is the filing's identifier at its exchange or regulator, an " +
+	"identifier to quote, not a link. " +
 	"Use companies_search to resolve a company name to the symbol that search takes. " +
 	"Tools mirror the archivist CLI verbs 1:1 and return the same JSON the CLI prints when " +
 	"piped; a truncated result carries next_cursor, which the cursor argument takes. " +
