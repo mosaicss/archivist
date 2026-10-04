@@ -144,3 +144,19 @@ func writeChannelFile(t *testing.T, home, channel string) {
 		t.Fatal(err)
 	}
 }
+
+// macOS downloads the universal archive; there is no per-arch darwin asset.
+func TestReleasePlatform(t *testing.T) {
+	cases := map[[2]string]string{
+		{"darwin", "arm64"}:  "darwin_all",
+		{"darwin", "amd64"}:  "darwin_all",
+		{"linux", "amd64"}:   "linux_amd64",
+		{"linux", "arm64"}:   "linux_arm64",
+		{"windows", "amd64"}: "windows_amd64",
+	}
+	for in, want := range cases {
+		if got := releasePlatform(in[0], in[1]); got != want {
+			t.Errorf("%v: %s, want %s", in, got, want)
+		}
+	}
+}

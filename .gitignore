@@ -7,6 +7,8 @@
 
 # Goreleaser
 /dist/
+# Installers stamped by the release workflow
+/build/
 
 # Test + coverage
 *.test

@@ -51,6 +51,40 @@ func TestBuildChildEnvAllowlist(t *testing.T) {
 	}
 }
 
+// CLAUDE_CONFIG_DIR passes only as an absolute path to an existing
+// directory, and never as an override; every other CLAUDE_ key stays denied.
+func TestBuildChildEnvClaudeConfigDir(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "file")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cases := map[string]bool{
+		dir:                          true,
+		"relative/dir":               false,
+		"":                           false,
+		filepath.Join(dir, "absent"): false,
+		file:                         false,
+	}
+	for v, want := range cases {
+		env, err := BuildChildEnv([]string{"HOME=/h", "CLAUDE_CONFIG_DIR=" + v, "CLAUDE_CODE_OAUTH_TOKEN=o", "CLAUDE_HOME=/x"}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := contains(env, "CLAUDE_CONFIG_DIR="+v); got != want {
+			t.Errorf("%q: passed %v, want %v (%v)", v, got, want, env)
+		}
+		for _, kv := range env {
+			if strings.HasPrefix(kv, "CLAUDE_") && !strings.HasPrefix(kv, "CLAUDE_CONFIG_DIR=") {
+				t.Errorf("denied key passed: %s", kv)
+			}
+		}
+	}
+	if _, err := BuildChildEnv(nil, map[string]string{"CLAUDE_CONFIG_DIR": dir}); err == nil {
+		t.Fatal("CLAUDE_CONFIG_DIR override accepted")
+	}
+}
+
 func contains(list []string, s string) bool {
 	for _, x := range list {
 		if x == s {

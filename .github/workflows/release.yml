@@ -20,7 +20,6 @@ jobs:
       # ${{ env.X != '' }}. GH Actions rejects `${{ secrets.X != '' }}`
       # in step `if:` conditions ("Unrecognized named-value: 'secrets'").
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-      SITEGROUND_DEPLOY_KEY: ${{ secrets.SITEGROUND_DEPLOY_KEY }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -52,6 +51,25 @@ jobs:
           # And the frontmatter must have survived intact.
           head -1 skill/SKILL.md | grep -qx -- "---"
 
+      # Story 78.30: the one-step installers ship as release assets
+      # (releases/latest/download/install.sh and install.ps1), stamped with
+      # this tag so a copy always installs the binaries it was released
+      # with. goreleaser uploads them (release.extra_files) with the
+      # archives, so the latest release never lacks them.
+      - name: Stamp installers
+        run: |
+          VERSION="${{ github.ref_name }}"
+          mkdir -p build/installers
+          for f in install.sh install.ps1; do
+            sed "s|__ARCHIVIST_VERSION__|${VERSION}|g" "scripts/${f}" > "build/installers/${f}"
+            grep -qF "${VERSION}" "build/installers/${f}"
+            if grep -q "__ARCHIVIST_VERSION__" "build/installers/${f}"; then
+              echo "FAIL: ${f} still carries the version placeholder"
+              exit 1
+            fi
+          done
+          bash -n build/installers/install.sh
+
       - name: Run goreleaser
         uses: goreleaser/goreleaser-action@v7
         with:
@@ -77,7 +95,11 @@ jobs:
       - name: Attest build provenance
         uses: actions/attest-build-provenance@v4
         with:
-          subject-path: dist/archivist_v*_*
+          # The archives, SHA256SUMS and the stamped installers.
+          subject-path: |
+            dist/archivist_v*_*
+            build/installers/install.sh
+            build/installers/install.ps1
 
       - name: Inject SHA256 hashes into npm package
         run: |
@@ -106,13 +128,3 @@ jobs:
           npm publish --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-      - name: Deploy install.sh to SiteGround
-        if: ${{ env.SITEGROUND_DEPLOY_KEY != '' }}
-        run: |
-          eval "$(ssh-agent -s)"
-          echo "${{ secrets.SITEGROUND_DEPLOY_KEY }}" | ssh-add -
-          rsync -avz --delete \
-            -e "ssh -o StrictHostKeyChecking=no" \
-            scripts/install.sh \
-            "${{ secrets.SITEGROUND_SSH_USER }}@${{ secrets.SITEGROUND_SSH_HOST }}:${{ secrets.SITEGROUND_INSTALL_PATH }}/install.sh"

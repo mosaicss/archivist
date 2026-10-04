@@ -148,7 +148,7 @@ func runUpdate(ctx context.Context, cmd *cobra.Command, current string) error {
 		return &ExitError{Code: ExitNotFound}
 	}
 
-	platform := fmt.Sprintf("%s_%s", runtime.GOOS, runtime.GOARCH)
+	platform := releasePlatform(runtime.GOOS, runtime.GOARCH)
 	var archiveExt string
 	if runtime.GOOS == "windows" {
 		archiveExt = "zip"
@@ -251,6 +251,17 @@ func runUpdate(ctx context.Context, cmd *cobra.Command, current string) error {
 		"Updated from v%s to v%s. Run 'archivist version' to confirm.\n",
 		normalCurrent, normalLatest)
 	return nil
+}
+
+// releasePlatform is the release archive's platform part. goreleaser ships
+// one universal macOS binary (universal_binaries replace: true), so every
+// darwin build downloads archivist_v<ver>_darwin_all.tar.gz; there is no
+// darwin_arm64 or darwin_amd64 archive.
+func releasePlatform(goos, goarch string) string {
+	if goos == "darwin" {
+		return "darwin_all"
+	}
+	return goos + "_" + goarch
 }
 
 // readInstallChannel reads ~/.archivist/install-channel. Returns "" if absent.

@@ -165,6 +165,12 @@ release:
   github:
     owner: mosaicss
     name: archivist
+  # Story 78.30: the one-step installers, stamped with the tag by the
+  # release workflow's "Stamp installers" step (the release pipe does not run
+  # under --snapshot, so CI snapshot builds need no stamped copy).
+  extra_files:
+    - glob: ./build/installers/install.sh
+    - glob: ./build/installers/install.ps1
   draft: false
   prerelease: auto
   name_template: "v{{ .Version }}"

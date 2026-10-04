@@ -87,7 +87,23 @@ jobs:
           sudo apt-get install -y shellcheck
 
       - name: shellcheck install.sh
-        run: shellcheck scripts/install.sh
+        run: shellcheck scripts/install.sh scripts/test-install.sh
+
+      - name: install.sh replay (fake release, stub service managers)
+        run: bash scripts/test-install.sh
+
+      - name: install.ps1 parse check
+        shell: bash
+        run: |
+          if ! command -v pwsh >/dev/null 2>&1; then
+            echo "pwsh not present; install.ps1 parse check skipped"
+            exit 0
+          fi
+          pwsh -NoProfile -NonInteractive -Command '
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile("scripts/install.ps1", [ref]$null, [ref]$errors) | Out-Null
+            if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Error $_.ToString() }; exit 1 }
+            "install.ps1 parses"'
 
       - name: shellcheck ci-drift-check.sh
         run: shellcheck scripts/ci-drift-check.sh
