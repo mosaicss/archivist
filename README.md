@@ -318,7 +318,10 @@ For each "My Claude Code" session the daemon:
   tool in the session, whatever its input, without another card; they live in
   the daemon's memory, so restarting `archivist connect` clears them;
 - streams the session as `mosaic-event/1` events, each validated before it is
-  sent.
+  sent. The one exception is the session-bound mode's sign-in prompt, a
+  `mosaic-event/2` `data-auth-prompt` that adds the Codex device code and the
+  sign-in expiry; the relay must accept `mosaic-event/2` before a release
+  that sends it.
 
 For each "My Codex" session the daemon:
 

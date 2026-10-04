@@ -18,13 +18,14 @@ import (
 
 // fakeRelay is a minimal in-process stand-in for the 78.14 relay's daemon
 // side: it accepts daemon sockets, stores and acks events (deduped by
-// correlationId), validates every event with the mosaic-event/1 parser,
+// correlationId), validates every event with the parser of the version it
+// declares (mosaic-event/1 or mosaic-event/2, as the relay does),
 // redelivers queued commands on each connect until acked, and records
 // capabilities and acks. The wrangler-backed e2e test covers the real relay.
 type fakeRelay struct {
 	t      *testing.T
 	srv    *httptest.Server
-	parser *mosaicevent.Parser
+	parser *mosaicevent.Set
 
 	mu       sync.Mutex
 	user     *websocket.Conn
@@ -49,7 +50,7 @@ type fakeRelay struct {
 }
 
 func newFakeRelay(t *testing.T) *fakeRelay {
-	p, err := mosaicevent.New()
+	p, err := mosaicevent.NewSet()
 	if err != nil {
 		t.Fatal(err)
 	}

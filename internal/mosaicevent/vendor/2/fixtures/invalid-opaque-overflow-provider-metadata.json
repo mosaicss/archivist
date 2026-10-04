@@ -1,0 +1,13 @@
+[
+  {
+    "type": "text-start",
+    "id": "opaque",
+    "providerMetadata": {
+      "synthetic": {
+        "nested": [
+          1e400
+        ]
+      }
+    }
+  }
+]

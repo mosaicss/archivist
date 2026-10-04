@@ -1,0 +1,34 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://mosaic-finance.com/schemas/mosaic-event/2/data-exec-output.json",
+  "type": "object",
+  "properties": {
+    "toolCallId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "stream": {
+      "enum": [
+        "stdout",
+        "stderr"
+      ]
+    },
+    "text": {
+      "type": "string"
+    },
+    "exitCode": {
+      "type": "integer",
+      "minimum": -2147483648,
+      "maximum": 2147483647
+    },
+    "truncated": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "toolCallId",
+    "stream",
+    "text"
+  ],
+  "additionalProperties": false
+}

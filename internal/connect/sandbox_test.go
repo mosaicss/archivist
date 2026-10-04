@@ -132,6 +132,33 @@ func (h *harness) authPrompt(sid string) map[string]any {
 	return data
 }
 
+// checkPromptContract checks the auth prompt's v2 fields and that only
+// data-auth-prompt envelopes are stamped mosaic-event/2.
+func (h *harness) checkPromptContract(sid string, data map[string]any, code string, sent time.Time) {
+	h.t.Helper()
+	if code == "" {
+		if _, ok := data["code"]; ok {
+			h.t.Errorf("auth prompt has a code: %v", data)
+		}
+	} else if data["code"] != code {
+		h.t.Errorf("auth prompt code %v, want %s", data["code"], code)
+	}
+	// expiresAt is the 5-minute sign-in deadline, in epoch milliseconds.
+	exp, _ := data["expiresAt"].(float64)
+	if lo, hi := sent.Add(signInTimeout).UnixMilli(), time.Now().Add(signInTimeout).UnixMilli(); exp < float64(lo) || exp > float64(hi) {
+		h.t.Errorf("auth prompt expiresAt %v, want within [%d, %d]", data["expiresAt"], lo, hi)
+	}
+	for _, e := range h.relay.eventsOf(sid, "") {
+		want := "mosaic-event/1"
+		if e["type"] == "data-auth-prompt" {
+			want = "mosaic-event/2"
+		}
+		if e["schemaVersion"] != want {
+			h.t.Errorf("%v event stamped %v, want %s", e["type"], e["schemaVersion"], want)
+		}
+	}
+}
+
 // sessionTimeline lists the session's payload types (status values inline).
 func (h *harness) sessionTimeline(sid string) []string {
 	var out []string
@@ -286,6 +313,7 @@ func TestSessionModeContextCancel(t *testing.T) {
 func TestSessionModeClaudeSignIn(t *testing.T) {
 	h := newHarness(t, map[string]any{"loggedIn": false, "authMethod": "none"})
 	s := h.api.addSession("claude")
+	started := time.Now()
 	r := h.runSession(s.SessionID, "claude", "claude", "echo after sign in",
 		"NODE_EXTRA_CA_CERTS="+testCABundle, "SSL_CERT_FILE="+testCABundle)
 	data := h.authPrompt(s.SessionID)
@@ -300,6 +328,8 @@ func TestSessionModeClaudeSignIn(t *testing.T) {
 	waitFor(t, 30*time.Second, "turn after sign in", func() bool {
 		return strings.Contains(h.relay.text(s.SessionID), "after sign in")
 	})
+	// Claude has no device code (the user pastes one); the turn stays v1.
+	h.checkPromptContract(s.SessionID, data, "", started)
 	if got := h.relay.statuses(s.SessionID); !slices.Contains(got, "running") || slices.Contains(got, "failed") {
 		t.Fatalf("statuses %v", got)
 	}
@@ -435,6 +465,7 @@ func newSignInCodexHarness(t *testing.T, fakeCfg map[string]any) *harness {
 func TestSessionModeCodexDeviceCodeSignIn(t *testing.T) {
 	h := newSignInCodexHarness(t, nil)
 	s := h.api.addSession("codex")
+	started := time.Now()
 	r := h.runSession(s.SessionID, "codex", "codex", "echo codex after sign in", "SSL_CERT_FILE="+testCABundle)
 	data := h.authPrompt(s.SessionID)
 	msg, _ := data["message"].(string)
@@ -452,6 +483,8 @@ func TestSessionModeCodexDeviceCodeSignIn(t *testing.T) {
 		txt := h.relay.text(s.SessionID)
 		return strings.Contains(txt, "codex after sign in") && strings.Contains(txt, "early message")
 	})
+	// The device code travels as the v2 code too; the turns stay v1.
+	h.checkPromptContract(s.SessionID, data, "FAKE-1234", started)
 	b, err := os.ReadFile(filepath.Join(h.home, ".fakecodex", "login-start.json"))
 	if err != nil || string(b) != `{"type":"chatgptDeviceCode"}` {
 		t.Fatalf("login start params %s (%v)", b, err)

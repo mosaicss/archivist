@@ -1,0 +1,11 @@
+[
+  {
+    "type": "start",
+    "messageMetadata": {
+      "schemaVersion": "mosaic-event/2",
+      "nested": [
+        1e400
+      ]
+    }
+  }
+]

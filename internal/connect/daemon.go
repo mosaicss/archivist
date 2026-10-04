@@ -63,7 +63,7 @@ type Daemon struct {
 	reaping     bool // child subreaper on: sessions reap adopted zombies
 	maxSessions int
 	log         *Logger
-	parser      *mosaicevent.Parser
+	parser      *mosaicevent.Set
 	store       *Store
 	detect      func(ctx context.Context) Detection
 	runner      Runner
@@ -90,9 +90,9 @@ func New(cfg Config) (*Daemon, error) {
 	if !Supported() {
 		return nil, ErrUnsupportedPlatform
 	}
-	parser, err := mosaicevent.New()
+	parser, err := mosaicevent.NewSet()
 	if err != nil {
-		return nil, fmt.Errorf("load mosaic-event/1 contract: %w", err)
+		return nil, fmt.Errorf("load the mosaic-event contracts: %w", err)
 	}
 	store, err := OpenStore(cfg.StateDir)
 	if err != nil {

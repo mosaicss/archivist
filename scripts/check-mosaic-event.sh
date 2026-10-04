@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Candidate Go parser + exact vendored canonical TS package/corpus. No private Mosaic access.
+# Candidate Go parser + exact vendored canonical bundles. No private Mosaic access.
+# v1: vendored TS contract package/corpus against the Go report. v2 (no contract package):
+# source record, manifest digest, stamp.mjs --check and the Go v2 corpus/drift tests.
 set -euo pipefail
 root="$(git rev-parse --show-toplevel)"
 bundle="$root/internal/mosaicevent/vendor/1"
@@ -10,14 +12,24 @@ import {readFileSync} from 'node:fs';
 import {createHash} from 'node:crypto';
 import assert from 'node:assert/strict';
 const root=process.argv[2];
-const p=JSON.parse(readFileSync(`${root}/internal/mosaicevent/vendor-source.json`,'utf8'));
-assert.equal(p.schemaVersion,'mosaic-event/1');
-assert.equal(p.repository,'https://forge.hive.mosaic-finance.com/tunc/mosaic.git');
-assert.match(p.sourceCommit,/^[0-9a-f]{40}$/);
-assert.equal(createHash('sha256').update(readFileSync(`${root}/internal/mosaicevent/vendor/1/manifest.json`)).digest('hex'),p.bundleDigest);
+for (const [record, version] of [['vendor-source.json', 'mosaic-event/1'], ['vendor-source-2.json', 'mosaic-event/2']]) {
+  const p=JSON.parse(readFileSync(`${root}/internal/mosaicevent/${record}`,'utf8'));
+  const n=version.split('/')[1];
+  assert.equal(p.schemaVersion,version);
+  assert.equal(p.repository,'https://forge.hive.mosaic-finance.com/tunc/mosaic.git');
+  assert.match(p.sourceCommit,/^[0-9a-f]{40}$/);
+  assert.equal(p.bundlePath,`reference/schemas/mosaic-event/${n}`);
+  assert.equal(p.vendoredPath,`internal/mosaicevent/vendor/${n}`);
+  const manifest=readFileSync(`${root}/${p.vendoredPath}/manifest.json`);
+  assert.equal(createHash('sha256').update(manifest).digest('hex'),p.bundleDigest);
+  assert.equal(readFileSync(`${root}/${p.vendoredPath}/manifest.sha256`,'utf8').trim(),p.bundleDigest);
+  assert.equal(JSON.parse(manifest).schemaVersion,version);
+}
 JS
 npm --prefix "$bundle/contract" ci --ignore-scripts --no-audit --no-fund
 npm --prefix "$bundle/contract" run typecheck
 npm --prefix "$bundle/contract" test
 go build -o "$work/mosaic-event-contract" ./cmd/mosaic-event-contract
 npm --prefix "$bundle/contract" run check -- "$work/mosaic-event-contract"
+node "$root/internal/mosaicevent/vendor/2/stamp.mjs" --check
+go test ./internal/mosaicevent/ -count=1 -run 'TestCorpusPerVersion|TestV2DriftAndCrossVersionBundles|TestSetDispatchesOnSchemaVersion'

@@ -1,0 +1,19 @@
+[
+  {
+    "type": "tool-approval-request",
+    "approvalId": "a",
+    "toolCallId": "t",
+    "approvalDescriptor": {
+      "availableDecisions": [
+        "accept",
+        "cancel"
+      ]
+    },
+    "inputSchemaInput": {
+      "command": "echo fixture"
+    },
+    "reason": "consent",
+    "signature": "fixture",
+    "isAutomatic": false
+  }
+]
