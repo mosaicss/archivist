@@ -64,7 +64,11 @@ type codexThreadParams struct {
 	ApprovalsReviewer string         `json:"approvalsReviewer"`
 	Sandbox           string         `json:"sandbox"`
 	Config            map[string]any `json:"config,omitempty"`
-	Ephemeral         *bool          `json:"ephemeral,omitempty"`
+	// DeveloperInstructions is Mosaic's research guidance (Story 78.31): a
+	// separate developer message that keeps Codex's base prompt
+	// (baseInstructions would replace it, so it is never sent).
+	DeveloperInstructions string `json:"developerInstructions,omitempty"`
+	Ephemeral             *bool  `json:"ephemeral,omitempty"`
 	// ExcludeTurns (resume) returns thread metadata without its history.
 	ExcludeTurns bool `json:"excludeTurns,omitempty"`
 }

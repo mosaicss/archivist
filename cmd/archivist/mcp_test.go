@@ -16,10 +16,12 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/mosaicss/archivist/internal/cmd"
+	"github.com/mosaicss/archivist/internal/guidance"
 	"github.com/spf13/cobra"
 )
 
@@ -598,8 +600,17 @@ func TestMCPServe_StdioSubprocess(t *testing.T) {
 	}
 	bin := buildTestBinary(t)
 
+	const live = "Live agent guidance from chat-api.\n"
+	var guidanceAuth atomic.Value
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/agent-guidance" {
+			// Story 78.31: the startup fetch, unauthenticated, agent-ui compact for an ak_ token.
+			guidanceAuth.Store(r.Header.Get("Authorization") + "|" + r.URL.RawQuery)
+			_ = json.NewEncoder(w).Encode(map[string]any{"schemaVersion": guidance.SchemaVersion,
+				"surface": "agent-ui", "form": "compact", "digest": guidance.Digest(live), "text": live})
+			return
+		}
 		_, _ = w.Write([]byte(`{"results":[{"id":"c1","url":"https://mosaic-finance.com/filings/f1/?c=c1&t=k.m"}],"entity_resolution":null,"truncated":false,"next_cursor":null}`))
 	}))
 	t.Cleanup(srv.Close)
@@ -613,6 +624,12 @@ func TestMCPServe_StdioSubprocess(t *testing.T) {
 		t.Fatalf("initialize over stdio failed: %v", err)
 	}
 	defer func() { _ = cs.Close() }()
+	if got := cs.InitializeResult().Instructions; got != strings.TrimRight(live, "\n")+"\n"+mcpExitNotes {
+		t.Errorf("initialize instructions over stdio: %q", got)
+	}
+	if got, _ := guidanceAuth.Load().(string); got != "|form=compact&surface=agent-ui" {
+		t.Errorf("guidance request (auth|query) %q", got)
+	}
 
 	res, err := cs.ListTools(context.Background(), nil)
 	if err != nil {
@@ -647,7 +664,8 @@ func TestMCPServe_StdioRawToolsListJSON(t *testing.T) {
 	bin := buildTestBinary(t)
 
 	proc := exec.Command(bin, "mcp", "serve")
-	proc.Env = append(os.Environ(), "ARCHIVIST_TOKEN=mc_pat_testtoken", "HOME="+t.TempDir())
+	// A refused local port: the startup guidance fetch never leaves the host.
+	proc.Env = append(os.Environ(), "ARCHIVIST_TOKEN=mc_pat_testtoken", "HOME="+t.TempDir(), "ARCHIVIST_BASE_URL=http://127.0.0.1:1")
 	stdin, err := proc.StdinPipe()
 	if err != nil {
 		t.Fatal(err)

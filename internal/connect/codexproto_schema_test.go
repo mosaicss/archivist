@@ -246,7 +246,7 @@ func TestCodexProtoMatchesSchema(t *testing.T) {
 		nested map[string]string   // field -> definition of its struct ("" = open JSON, unchecked)
 		only   map[string][]string // definition -> the only fields sent to it (shared structs)
 	}
-	threadFields := []string{"model", "cwd", "approvalPolicy", "approvalsReviewer", "sandbox", "config"}
+	threadFields := []string{"model", "cwd", "approvalPolicy", "approvalsReviewer", "sandbox", "config", "developerInstructions"}
 	for _, m := range []structMap{
 		{v: codexInitializeParams{}, defs: []string{"InitializeParams"},
 			nested: map[string]string{"clientInfo": "ClientInfo", "capabilities": "InitializeCapabilities"}},

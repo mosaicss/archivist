@@ -567,7 +567,7 @@ func TestClassifyMint(t *testing.T) {
 
 func TestClaudeArgsAreFixed(t *testing.T) {
 	cfg := ClaudeConfig{Bin: "/usr/bin/claude", Model: "claude-sonnet-5", Effort: "low", SettingSources: "", Executable: "/opt/archivist"}
-	args := claudeArgs(cfg, "/state/run/x/mcp.json", "/tmp/cwd", "abc")
+	args := claudeArgs(cfg, "/state/run/x/mcp.json", "/state/run/x/mosaic-guidance.md", "/tmp/cwd", "abc")
 	joined := strings.Join(args, " ")
 	for _, banned := range []string{"--permission-mode", "--bare", "--dangerously-skip-permissions"} {
 		if strings.Contains(joined, banned) {
@@ -576,6 +576,16 @@ func TestClaudeArgsAreFixed(t *testing.T) {
 	}
 	if args[len(args)-2] != "--add-dir" || args[len(args)-1] != "/tmp/cwd" {
 		t.Fatalf("--add-dir must be last: %v", args)
+	}
+	// Story 78.31: the research guidance file, right before --add-dir; never
+	// the inline or replacing system prompt flags.
+	if args[len(args)-4] != "--append-system-prompt-file" || args[len(args)-3] != "/state/run/x/mosaic-guidance.md" {
+		t.Fatalf("guidance flag must precede --add-dir: %v", args)
+	}
+	for _, a := range args {
+		if a == "--system-prompt" || a == "--system-prompt-file" || a == "--append-system-prompt" {
+			t.Fatalf("unexpected system prompt flag %s", a)
+		}
 	}
 	for i, a := range args {
 		if a == "--setting-sources" && args[i+1] != "" {

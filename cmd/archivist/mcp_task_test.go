@@ -220,7 +220,8 @@ func TestMCPServe_TokenFlagsExclusiveAndFileValidated(t *testing.T) {
 	}
 	run := func(args ...string) (int, string) {
 		c := exec.Command(bin, args...)
-		c.Env = append(os.Environ(), "HOME="+dir, "ARCHIVIST_TOKEN=")
+		// A refused local port: the startup guidance fetch never leaves the host.
+		c.Env = append(os.Environ(), "HOME="+dir, "ARCHIVIST_TOKEN=", "ARCHIVIST_BASE_URL=http://127.0.0.1:1")
 		c.Stdin = strings.NewReader("")
 		out, _ := c.CombinedOutput()
 		return c.ProcessState.ExitCode(), string(out)

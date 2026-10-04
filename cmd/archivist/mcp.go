@@ -19,11 +19,14 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode/utf16"
 
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/mosaicss/archivist/internal/auth"
+	"github.com/mosaicss/archivist/internal/client"
 	"github.com/mosaicss/archivist/internal/cmd"
+	"github.com/mosaicss/archivist/internal/guidance"
 	"github.com/mosaicss/archivist/internal/taskscope"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -61,6 +64,10 @@ type toolSpec struct {
 	// FlagFor maps schema property names to pflag names (date_from -> date-from).
 	FlagFor map[string]string
 	Schema  *jsonschema.Schema
+	// PinJSON (task mode, Story 78.31) drops the format argument and always
+	// dispatches --format=json, the server body unchanged, so each passage's
+	// cite_as reaches the agent (the table format keeps only url).
+	PinJSON bool
 }
 
 // collectTools walks the Cobra tree depth-first and returns one toolSpec per
@@ -206,19 +213,54 @@ func sanitizeIdent(s string) string {
 
 // ─── mcp serve command ───────────────────────────────────────────────────────
 
-// mcpInstructions is sent to hosts in the initialize result (T4.5).
-const mcpInstructions = "Research SEC and SEDAR filings. Start with search to find passages, " +
-	"then read around them with read_passage (a passage and its neighbours), read_section " +
-	"(a whole section) or toc (a filing's section headers). Every passage carries a " +
-	"permalink url that opens it in Mosaic's filing viewer. That url is the only link: " +
-	"cite only url, for each claim. When present, exchange_document_id (with " +
-	"exchange_document_kind) is the filing's identifier at its exchange or regulator, an " +
-	"identifier to quote, not a link. " +
-	"Use companies_search to resolve a company name to the symbol that search takes. " +
-	"Tools mirror the archivist CLI verbs 1:1 and return the same JSON the CLI prints when " +
-	"piped; a truncated result carries next_cursor, which the cursor argument takes. " +
-	"Agent access needs a Mosaic Pro account (exit code 4 otherwise) and counts toward a " +
-	"monthly fair use limit (exit code 7 when reached)."
+// Server instructions (T4.5, Story 78.31) are Mosaic's compact research
+// guidance, the text chat-api serves at GET /agent-guidance (fetched at
+// startup, embedded copy otherwise), plus these exit code notes. A task token
+// (Mosaic is the UI: cite_as citations) takes the mosaic-ui guidance, any other
+// token the agent-ui guidance (cite each passage url as a markdown link).
+const mcpExitNotes = "Tool errors name an archivist exit code: 2 bad arguments, 3 nothing found, " +
+	"4 no credential or no Mosaic Pro account, 6 ambiguous symbol, 7 monthly fair use limit reached."
+
+// Hosts cut MCP instructions at 2048 characters (Claude Code); the exit code
+// notes get at most 200 of them.
+const (
+	mcpInstructionsMax = 2048
+	mcpExitNotesMax    = 200
+)
+
+// guidanceSurface is the guidance surface for a token mode.
+func guidanceSurface(taskMode bool) string {
+	if taskMode {
+		return guidance.SurfaceMosaicUI
+	}
+	return guidance.SurfaceAgentUI
+}
+
+// jsLen is a string's length in UTF-16 code units, the unit hosts count.
+func jsLen(s string) int { return len(utf16.Encode([]rune(s))) }
+
+// mcpInstructionsFrom joins the compact guidance and the exit code notes. A
+// live text too long to fit is replaced by the embedded one, which always fits.
+func mcpInstructionsFrom(g guidance.Text, surface string) string {
+	join := func(body string) string { return strings.TrimRight(body, "\n") + "\n" + mcpExitNotes }
+	text := join(g.Body)
+	if jsLen(text) > mcpInstructionsMax {
+		text = join(guidance.Embedded(surface, guidance.FormCompact).Body)
+	}
+	return text
+}
+
+// embeddedMCPInstructions is the instructions with no fetch (the builders
+// tests use; mcp serve itself fetches).
+func embeddedMCPInstructions(taskMode bool) string {
+	surface := guidanceSurface(taskMode)
+	return mcpInstructionsFrom(guidance.Embedded(surface, guidance.FormCompact), surface)
+}
+
+// fetchMCPGuidance fetches the compact guidance (a variable for tests).
+var fetchMCPGuidance = func(ctx context.Context, baseURL, surface string) guidance.Text {
+	return guidance.Fetch(ctx, baseURL, surface, guidance.FormCompact)
+}
 
 // exitCodeNames mirrors internal/cmd/exitcodes.go (architecture E36 §11.4).
 // Dispatch stamps these on MCP error results so agents can self-correct.
@@ -319,7 +361,18 @@ Claude Desktop config:
 				}
 				pub = &publishConfig{SessionID: publishSession, Dir: publishDir}
 			}
-			server, count := buildMCPServerTask(newRoot, version, src, taskMode, pub)
+			surface := guidanceSurface(taskMode)
+			ctx := c.Context()
+			if ctx == nil {
+				ctx = context.Background()
+			}
+			g := fetchMCPGuidance(ctx, client.ResolveBaseURL(), surface)
+			if g.Source == guidance.SourceLive {
+				_, _ = fmt.Fprintf(c.ErrOrStderr(), "archivist mcp serve: research guidance %s %s (%s)\n", surface, g.Source, g.Digest)
+			} else {
+				_, _ = fmt.Fprintf(c.ErrOrStderr(), "archivist mcp serve: research guidance %s %s (%s; live fetch: %s)\n", surface, g.Source, g.Digest, g.Reason)
+			}
+			server, count := buildMCPServerFull(newRoot, version, src, taskMode, pub, mcpInstructionsFrom(g, surface))
 			mode := ""
 			if taskMode {
 				mode = ", task mode"
@@ -389,14 +442,22 @@ func buildMCPServerWith(newRoot func() *cobra.Command, version string, src token
 // buildMCPServerTask is buildMCPServerWith plus, in task mode with a
 // session, the publish_artifact tool (Story 78.18).
 func buildMCPServerTask(newRoot func() *cobra.Command, version string, src tokenSource, taskMode bool, pub *publishConfig) (*mcp.Server, int) {
+	return buildMCPServerFull(newRoot, version, src, taskMode, pub, embeddedMCPInstructions(taskMode))
+}
+
+// buildMCPServerFull is buildMCPServerTask with the server instructions given.
+func buildMCPServerFull(newRoot func() *cobra.Command, version string, src tokenSource, taskMode bool, pub *publishConfig, instructions string) (*mcp.Server, int) {
 	server := mcp.NewServer(
 		&mcp.Implementation{Name: "archivist", Version: version},
-		&mcp.ServerOptions{Instructions: mcpInstructions},
+		&mcp.ServerOptions{Instructions: instructions},
 	)
 	count := 0
 	for _, spec := range collectTools(newRoot()) {
 		if taskMode && !taskscope.ToolAllowed(spec.Name) {
 			continue
+		}
+		if taskMode {
+			spec = pinJSONFormat(spec)
 		}
 		count++
 		// Untyped AddTool on purpose: schemas are walker-built at runtime;
@@ -422,6 +483,30 @@ func buildMCPServerTask(newRoot func() *cobra.Command, version string, src token
 }
 
 func boolPtr(b bool) *bool { return &b }
+
+// pinJSONFormat removes a tool's format argument and marks it to dispatch
+// --format=json (task mode). A tool without a format flag is unchanged.
+func pinJSONFormat(spec toolSpec) toolSpec {
+	if _, ok := spec.FlagFor["format"]; !ok {
+		return spec
+	}
+	flagFor := make(map[string]string, len(spec.FlagFor))
+	for k, v := range spec.FlagFor {
+		if k != "format" {
+			flagFor[k] = v
+		}
+	}
+	schema := *spec.Schema
+	props := make(map[string]*jsonschema.Schema, len(schema.Properties))
+	for k, v := range schema.Properties {
+		if k != "format" {
+			props[k] = v
+		}
+	}
+	schema.Properties = props
+	spec.FlagFor, spec.Schema, spec.PinJSON = flagFor, &schema, true
+	return spec
+}
 
 // newToolHandler returns the dispatch handler for one tool. Each call decodes
 // the raw arguments, builds argv, and executes a FRESH root command with
@@ -533,6 +618,9 @@ func buildArgv(spec toolSpec, rawArgs json.RawMessage, tokenOverride string) (ar
 		}
 	}
 
+	if spec.PinJSON {
+		argv = append(argv, "--format=json")
+	}
 	if tokenOverride != "" {
 		argv = append(argv, "--token", tokenOverride)
 	}

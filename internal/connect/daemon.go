@@ -14,6 +14,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/mosaicss/archivist/internal/client"
+	"github.com/mosaicss/archivist/internal/guidance"
 	"github.com/mosaicss/archivist/internal/mosaicevent"
 )
 
@@ -47,6 +48,9 @@ type Config struct {
 	ChatAPIURL string
 	// Dial overrides the websocket dialer (tests).
 	Dial func(ctx context.Context, u string, opts *websocket.DialOptions) (*websocket.Conn, *http.Response, error)
+	// Guidance fetches Mosaic's research guidance once per spawn (Story
+	// 78.31); nil = guidance.Fetch against ChatAPIURL (tests inject one).
+	Guidance func(ctx context.Context, surface, form string) guidance.Text
 	// SignIn names the harness ("claude" or "codex") that is installed but
 	// logged out (session-bound sandbox mode, RunSession): the session signs
 	// it in (posture 1) before its first turn. Its Bin stays configured.
@@ -70,7 +74,9 @@ type Daemon struct {
 	environ     func() []string
 	tempDir     string
 	chatAPIURL  string
-	dial        func(ctx context.Context, u string, opts *websocket.DialOptions) (*websocket.Conn, *http.Response, error)
+	// fetchGuidance returns the research guidance for a spawn (Story 78.31).
+	fetchGuidance func(ctx context.Context, surface, form string) guidance.Text
+	dial          func(ctx context.Context, u string, opts *websocket.DialOptions) (*websocket.Conn, *http.Response, error)
 	// sandbox is the session-bound mode (RunSession, Story 78.22): no user
 	// socket, and a failed session ends the daemon.
 	sandbox bool
@@ -114,6 +120,12 @@ func New(cfg Config) (*Daemon, error) {
 	}
 	if d.chatAPIURL == "" {
 		d.chatAPIURL = client.ResolveBaseURL()
+	}
+	d.fetchGuidance = cfg.Guidance
+	if d.fetchGuidance == nil {
+		d.fetchGuidance = func(ctx context.Context, surface, form string) guidance.Text {
+			return guidance.Fetch(ctx, d.chatAPIURL, surface, form)
+		}
 	}
 	if d.appVersion == "" {
 		d.appVersion = "dev"

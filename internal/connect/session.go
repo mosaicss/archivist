@@ -12,6 +12,7 @@ import (
 
 	"github.com/mosaicss/archivist/internal/auth"
 	"github.com/mosaicss/archivist/internal/client"
+	"github.com/mosaicss/archivist/internal/guidance"
 	"github.com/mosaicss/archivist/internal/taskscope"
 )
 
@@ -330,6 +331,14 @@ func (s *session) spawn(ctx context.Context, resumeID string) (err error) {
 	if err := s.ensureToken(ctx); err != nil {
 		return fmt.Errorf("task token: %w", err)
 	}
+	// Story 78.31: Mosaic's research guidance for this spawn (Mosaic is the
+	// UI: cite_as citations). Live from chat-api, else the embedded copy.
+	g := s.d.fetchGuidance(ctx, guidance.SurfaceMosaicUI, guidance.FormFull)
+	if g.Source == guidance.SourceLive {
+		s.log.Printf("research guidance %s (%s)", g.Source, g.Digest)
+	} else {
+		s.log.Printf("research guidance %s (%s; live fetch: %s)", g.Source, g.Digest, g.Reason)
+	}
 	if s.rec.Cwd == "" {
 		return errors.New("session has no working directory")
 	}
@@ -339,7 +348,7 @@ func (s *session) spawn(ctx context.Context, resumeID string) (err error) {
 		}
 	}
 	if s.isCodex() {
-		return s.spawnCodex(ctx, resumeID)
+		return s.spawnCodex(ctx, resumeID, g.Body)
 	}
 	env, err := BuildChildEnv(s.d.environ(), nil)
 	if err != nil {
@@ -353,7 +362,11 @@ func (s *session) spawn(ctx context.Context, resumeID string) (err error) {
 	if !st.Subscription() {
 		return &proofError{fmt.Sprintf("Claude Code is not logged in with a claude.ai subscription (loggedIn=%v, authMethod=%q)", st.LoggedIn, st.AuthMethod)}
 	}
-	args := claudeArgs(cfg, s.mcpFile, s.rec.Cwd, resumeID)
+	guidanceFile, err := s.writeGuidance(g.Body)
+	if err != nil {
+		return fmt.Errorf("research guidance: %w", err)
+	}
+	args := claudeArgs(cfg, s.mcpFile, guidanceFile, s.rec.Cwd, resumeID)
 	proc, err := StartProc(ProcSpec{Bin: cfg.Bin, Args: args, Env: env, Dir: s.rec.Cwd, Log: s.log})
 	if err != nil {
 		return fmt.Errorf("start claude: %w", err)
@@ -368,6 +381,24 @@ func (s *session) spawn(ctx context.Context, resumeID string) (err error) {
 		s.snapTimer = time.NewTimer(codexSnapshotEvery)
 	}
 	return nil
+}
+
+// guidanceFileName is the research guidance file Claude reads, in the
+// session's private run directory (outside the cwd).
+const guidanceFileName = "mosaic-guidance.md"
+
+// writeGuidance writes the research guidance file (0600) for Claude's
+// --append-system-prompt-file; a failure fails the spawn closed.
+func (s *session) writeGuidance(body string) (string, error) {
+	dir, err := s.d.store.RunDir(s.id)
+	if err != nil {
+		return "", err
+	}
+	path := filepath.Join(dir, guidanceFileName)
+	if err := writeFileAtomic(path, []byte(body)); err != nil {
+		return "", err
+	}
+	return path, nil
 }
 
 // errCapacity means every live-process slot is taken.
