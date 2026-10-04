@@ -1,0 +1,11 @@
+[
+  {
+    "type": "data-session-controls",
+    "data": {
+      "mode": "auto_edits",
+      "maxMode": "full_auto",
+      "model": "",
+      "effort": "high"
+    }
+  }
+]

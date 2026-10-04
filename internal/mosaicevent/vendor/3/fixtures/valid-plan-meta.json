@@ -1,0 +1,25 @@
+[
+  {
+    "type": "data-plan",
+    "data": {
+      "entries": [
+        {
+          "content": "x",
+          "priority": "low",
+          "status": "in_progress",
+          "_meta": {
+            "vendor": 1
+          }
+        },
+        {
+          "content": "y",
+          "priority": "medium",
+          "status": "completed"
+        }
+      ],
+      "_meta": {
+        "wholeUpdate": true
+      }
+    }
+  }
+]

@@ -1,0 +1,185 @@
+[
+  {
+    "type": "start",
+    "messageId": "fixture-id-2",
+    "messageMetadata": {
+      "schemaVersion": "mosaic-event/3"
+    }
+  },
+  {
+    "type": "text-start",
+    "id": "msg_0d2e50b3b7b07bdb016abdf665f4e887d19f7474fa669d5386"
+  },
+  {
+    "type": "text-delta",
+    "id": "msg_0d2e50b3b7b07bdb016abdf665f4e887d19f7474fa669d5386",
+    "delta": "I"
+  },
+  {
+    "type": "text-delta",
+    "id": "msg_0d2e50b3b7b07bdb016abdf665f4e887d19f7474fa669d5386",
+    "delta": "’ll"
+  },
+  {
+    "type": "text-delta",
+    "id": "msg_0d2e50b3b7b07bdb016abdf665f4e887d19f7474fa669d5386",
+    "delta": " run"
+  },
+  {
+    "type": "text-delta",
+    "id": "msg_0d2e50b3b7b07bdb016abdf665f4e887d19f7474fa669d5386",
+    "delta": " only"
+  },
+  {
+    "type": "text-delta",
+    "id": "msg_0d2e50b3b7b07bdb016abdf665f4e887d19f7474fa669d5386",
+    "delta": " the"
+  },
+  {
+    "type": "text-delta",
+    "id": "msg_0d2e50b3b7b07bdb016abdf665f4e887d19f7474fa669d5386",
+    "delta": " requested"
+  },
+  {
+    "type": "text-delta",
+    "id": "msg_0d2e50b3b7b07bdb016abdf665f4e887d19f7474fa669d5386",
+    "delta": " shell"
+  },
+  {
+    "type": "text-delta",
+    "id": "msg_0d2e50b3b7b07bdb016abdf665f4e887d19f7474fa669d5386",
+    "delta": " command"
+  },
+  {
+    "type": "text-delta",
+    "id": "msg_0d2e50b3b7b07bdb016abdf665f4e887d19f7474fa669d5386",
+    "delta": " in"
+  },
+  {
+    "type": "text-delta",
+    "id": "msg_0d2e50b3b7b07bdb016abdf665f4e887d19f7474fa669d5386",
+    "delta": " the"
+  },
+  {
+    "type": "text-delta",
+    "id": "msg_0d2e50b3b7b07bdb016abdf665f4e887d19f7474fa669d5386",
+    "delta": " current"
+  },
+  {
+    "type": "text-delta",
+    "id": "msg_0d2e50b3b7b07bdb016abdf665f4e887d19f7474fa669d5386",
+    "delta": " directory"
+  },
+  {
+    "type": "text-delta",
+    "id": "msg_0d2e50b3b7b07bdb016abdf665f4e887d19f7474fa669d5386",
+    "delta": "."
+  },
+  {
+    "type": "text-end",
+    "id": "msg_0d2e50b3b7b07bdb016abdf665f4e887d19f7474fa669d5386"
+  },
+  {
+    "type": "tool-input-available",
+    "toolCallId": "exec-fixture-id-4",
+    "toolName": "commandExecution",
+    "input": {
+      "command": "/bin/bash -lc 'touch spike-78-3.txt && echo spike-78-3'",
+      "cwd": "/fixture/workdir"
+    }
+  },
+  {
+    "type": "tool-approval-request",
+    "approvalId": "fixture-id-2:approval:0",
+    "toolCallId": "exec-fixture-id-4",
+    "approvalDescriptor": {
+      "kind": "command",
+      "threadId": "fixture-id-1",
+      "turnId": "fixture-id-2",
+      "itemId": "exec-fixture-id-4",
+      "startedAtMs": 1790834279983,
+      "environmentId": "local",
+      "command": "/bin/bash -lc 'touch spike-78-3.txt && echo spike-78-3'",
+      "cwd": "/fixture/workdir",
+      "commandActions": [
+        {
+          "type": "unknown",
+          "command": "touch spike-78-3.txt && echo spike-78-3"
+        }
+      ],
+      "proposedExecpolicyAmendment": [
+        "touch",
+        "spike-78-3.txt"
+      ],
+      "availableDecisions": [
+        "accept",
+        {
+          "acceptWithExecpolicyAmendment": {
+            "execpolicy_amendment": [
+              "touch",
+              "spike-78-3.txt"
+            ]
+          }
+        },
+        "cancel"
+      ]
+    }
+  },
+  {
+    "type": "tool-approval-response",
+    "approvalId": "fixture-id-2:approval:0",
+    "approved": false,
+    "reason": "decline"
+  },
+  {
+    "type": "tool-output-denied",
+    "toolCallId": "exec-fixture-id-4"
+  },
+  {
+    "type": "data-usage",
+    "data": {
+      "inputTokens": 15066,
+      "outputTokens": 113,
+      "cachedInputTokens": 11008,
+      "reasoningTokens": 0,
+      "model": "codex-captured"
+    }
+  },
+  {
+    "type": "text-start",
+    "id": "msg_0d2e50b3b7b07bdb016abdf668ce4487d1b4d2a0882c53c342"
+  },
+  {
+    "type": "text-delta",
+    "id": "msg_0d2e50b3b7b07bdb016abdf668ce4487d1b4d2a0882c53c342",
+    "delta": "Decl"
+  },
+  {
+    "type": "text-delta",
+    "id": "msg_0d2e50b3b7b07bdb016abdf668ce4487d1b4d2a0882c53c342",
+    "delta": "ined"
+  },
+  {
+    "type": "text-delta",
+    "id": "msg_0d2e50b3b7b07bdb016abdf668ce4487d1b4d2a0882c53c342",
+    "delta": "."
+  },
+  {
+    "type": "text-end",
+    "id": "msg_0d2e50b3b7b07bdb016abdf668ce4487d1b4d2a0882c53c342"
+  },
+  {
+    "type": "data-usage",
+    "data": {
+      "inputTokens": 30290,
+      "outputTokens": 120,
+      "cachedInputTokens": 25088,
+      "reasoningTokens": 0,
+      "model": "codex-captured"
+    }
+  },
+  {
+    "type": "finish",
+    "finishReason": "stop"
+  }
+]

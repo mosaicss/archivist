@@ -1,0 +1,12 @@
+[
+  {
+    "type": "data-usage",
+    "data": {
+      "inputTokens": 1,
+      "outputTokens": 2,
+      "reasoningTokens": 3,
+      "cachedInputTokens": 4,
+      "model": "m"
+    }
+  }
+]

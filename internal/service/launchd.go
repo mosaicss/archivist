@@ -73,7 +73,7 @@ func (l *launchd) Install(ctx context.Context) (InstallReport, error) {
 		return rep, err
 	}
 	existed := fileExists(path)
-	plist := RenderLaunchdPlist(l.opts.Binary, l.opts.Home, LogPath(l.opts.Home), l.opts.Env)
+	plist := RenderLaunchdPlist(l.opts.Binary, l.opts.Home, LogPath(l.opts.Home), l.opts.Args, l.opts.Env)
 	if err := writeFileAtomic(path, []byte(plist), 0o644); err != nil {
 		return rep, err
 	}
@@ -145,6 +145,9 @@ func (l *launchd) Uninstall(ctx context.Context) (bool, error) {
 // may not have written its pid yet, so a loaded job gets about 5 s for it.
 func (l *launchd) Status(ctx context.Context) (Status, error) {
 	st := Status{Manager: l.Name(), Path: l.Path(), Installed: fileExists(l.Path())}
+	if st.Installed {
+		st.Args = installedArgs(st.Path)
+	}
 	loaded, err := l.loaded(ctx)
 	if err != nil {
 		return st, err

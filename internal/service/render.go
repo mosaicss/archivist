@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"encoding/xml"
 	"fmt"
+	"html"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"unicode"
 )
@@ -69,12 +71,13 @@ func hasControl(s string) bool {
 }
 
 // RenderSystemdUnit renders the systemd user unit that runs
-// `<bin> connect --service`. Restart=on-failure restarts a crash after 10 s;
+// `<bin> connect --service [args...]` (args: the daemon flags the install
+// chose, such as --max-permission <mode>). Restart=on-failure restarts a crash after 10 s;
 // a clean exit (Ctrl-C equivalent, superseded, revoked key, feature off, no
 // harness) stays stopped. KillMode=mixed sends SIGTERM to the daemon only,
 // so it can stop its harness sessions and revoke their tokens, then SIGKILL
 // to whatever is left after TimeoutStopSec.
-func RenderSystemdUnit(bin string, env []EnvVar) string {
+func RenderSystemdUnit(bin string, args []string, env []EnvVar) string {
 	var b strings.Builder
 	b.WriteString("# Written by archivist connect --install. Remove with: archivist connect --uninstall\n")
 	b.WriteString("[Unit]\n")
@@ -82,7 +85,11 @@ func RenderSystemdUnit(bin string, env []EnvVar) string {
 	b.WriteString("Documentation=https://github.com/mosaicss/archivist\n\n")
 	b.WriteString("[Service]\n")
 	b.WriteString("Type=simple\n")
-	fmt.Fprintf(&b, "ExecStart=%s connect --service\n", systemdQuote(bin, true))
+	fmt.Fprintf(&b, "ExecStart=%s connect --service", systemdQuote(bin, true))
+	for _, a := range args {
+		b.WriteString(" " + systemdArg(a))
+	}
+	b.WriteString("\n")
 	for _, e := range env {
 		fmt.Fprintf(&b, "Environment=%s\n", systemdQuote(e.Key+"="+e.Value, false))
 	}
@@ -108,10 +115,22 @@ func systemdQuote(s string, command bool) string {
 	return `"` + q + `"`
 }
 
+// systemdArg is one ExecStart= argument: bare when it holds only
+// characters systemd passes through unchanged, else double quoted.
+func systemdArg(s string) string {
+	if plainArg.MatchString(s) {
+		return s
+	}
+	return systemdQuote(s, true)
+}
+
+var plainArg = regexp.MustCompile(`^[A-Za-z0-9._:/=+-]+$`)
+
 // RenderLaunchdPlist renders the launchd agent that runs
-// `<bin> connect --service` at login. KeepAlive SuccessfulExit false
+// `<bin> connect --service [args...]` at login (ProgramArguments, one
+// string per argument, no shell). KeepAlive SuccessfulExit false
 // restarts only a non-zero exit, no sooner than ThrottleInterval seconds.
-func RenderLaunchdPlist(bin, home, logPath string, env []EnvVar) string {
+func RenderLaunchdPlist(bin, home, logPath string, args []string, env []EnvVar) string {
 	var b strings.Builder
 	b.WriteString(`<?xml version="1.0" encoding="UTF-8"?>` + "\n")
 	b.WriteString(`<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">` + "\n")
@@ -122,7 +141,7 @@ func RenderLaunchdPlist(bin, home, logPath string, env []EnvVar) string {
 	}
 	kv("Label", Label)
 	b.WriteString("\t<key>ProgramArguments</key>\n\t<array>\n")
-	for _, a := range []string{bin, "connect", "--service"} {
+	for _, a := range append([]string{bin, "connect", "--service"}, args...) {
 		fmt.Fprintf(&b, "\t\t<string>%s</string>\n", xmlEscape(a))
 	}
 	b.WriteString("\t</array>\n")
@@ -148,4 +167,74 @@ func xmlEscape(s string) string {
 	var buf bytes.Buffer
 	_ = xml.EscapeText(&buf, []byte(s))
 	return buf.String()
+}
+
+// ServiceArgs returns the arguments after `connect --service` in a unit or
+// plist this package rendered (systemd ExecStart= or launchd
+// ProgramArguments), or nil when there are none or the file is not one of
+// ours.
+func ServiceArgs(content string) []string {
+	var argv []string
+	if strings.Contains(content, "<plist") {
+		_, rest, ok := strings.Cut(content, "<key>ProgramArguments</key>")
+		if !ok {
+			return nil
+		}
+		block, _, ok := strings.Cut(rest, "</array>")
+		if !ok {
+			return nil
+		}
+		for _, m := range plistString.FindAllStringSubmatch(block, -1) {
+			argv = append(argv, html.UnescapeString(m[1]))
+		}
+	} else {
+		for _, line := range strings.Split(content, "\n") {
+			if v, ok := strings.CutPrefix(line, "ExecStart="); ok {
+				argv = systemdSplit(v)
+				break
+			}
+		}
+	}
+	if len(argv) <= 3 || argv[1] != "connect" || argv[2] != "--service" {
+		return nil
+	}
+	return argv[3:]
+}
+
+var plistString = regexp.MustCompile(`<string>([^<]*)</string>`)
+
+// systemdSplit undoes RenderSystemdUnit's ExecStart= quoting: words split on
+// spaces, double quoted words with backslash escapes, %% and $$ halved.
+func systemdSplit(line string) []string {
+	var out []string
+	var cur strings.Builder
+	inWord, quoted := false, false
+	for i := 0; i < len(line); i++ {
+		c := line[i]
+		switch {
+		case quoted && c == '\\' && i+1 < len(line):
+			i++
+			cur.WriteByte(line[i])
+		case c == '"':
+			quoted = !quoted
+			inWord = true
+		case !quoted && (c == ' ' || c == '\t'):
+			if inWord {
+				out = append(out, cur.String())
+				cur.Reset()
+				inWord = false
+			}
+		case (c == '%' || c == '$') && i+1 < len(line) && line[i+1] == c:
+			i++
+			cur.WriteByte(c)
+			inWord = true
+		default:
+			cur.WriteByte(c)
+			inWord = true
+		}
+	}
+	if inWord {
+		out = append(out, cur.String())
+	}
+	return out
 }

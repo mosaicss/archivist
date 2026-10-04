@@ -1,0 +1,29 @@
+[
+  {
+    "type": "data-session-controls",
+    "data": {
+      "mode": "read_only",
+      "maxMode": "ask",
+      "model": "claude-opus-5-5[1m]",
+      "effort": "xhigh"
+    }
+  },
+  {
+    "type": "data-session-controls",
+    "data": {
+      "mode": "read_only",
+      "maxMode": "ask",
+      "model": "Ab.:_[]-9b.:_[]-9b.:_[]-9b.:_[]-9b.:_[]-9b.:_[]-9b.:_[]-9b.:_[]-9b.:_[]-9b.:_[]-9b.:_[]-9b.:_[]-9b.:_[]-9b.:_[]-9b.:_[]-91234567",
+      "effort": "ab0_-b0_-b0_-b0_-b0_-b0_-b0_-z9c"
+    }
+  },
+  {
+    "type": "data-session-controls",
+    "data": {
+      "mode": "read_only",
+      "maxMode": "ask",
+      "model": "7",
+      "effort": "x"
+    }
+  }
+]

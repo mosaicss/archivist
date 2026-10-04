@@ -1,0 +1,11 @@
+[
+  {
+    "type": "data-artifact",
+    "data": {
+      "artifactId": "fixture",
+      "name": "fixture",
+      "mediaType": "fixture",
+      "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  }
+]

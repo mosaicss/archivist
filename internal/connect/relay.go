@@ -220,7 +220,9 @@ type link struct {
 	log       *Logger
 	onConnect func(l *live)
 	onCommand func(l *live, in *Inbound)
-	dial      func(ctx context.Context, u string, opts *websocket.DialOptions) (*websocket.Conn, *http.Response, error)
+	// onError sees a relay error first; true means it was handled.
+	onError func(code string) bool
+	dial    func(ctx context.Context, u string, opts *websocket.DialOptions) (*websocket.Conn, *http.Response, error)
 	// connected is closed after the first successful dial (tests, status).
 	connectedOnce sync.Once
 	connected     chan struct{}
@@ -406,6 +408,9 @@ func (k *link) read(ctx context.Context, l *live) {
 // a reply on success, so an event-class error belongs to the oldest event
 // still in flight on this socket.
 func (k *link) handleError(l *live, code string) {
+	if k.onError != nil && k.onError(code) {
+		return
+	}
 	switch {
 	case permanentEventErrors[code]:
 		if cid, ok := l.popHead(); ok && k.outbox != nil {

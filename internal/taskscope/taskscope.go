@@ -62,6 +62,14 @@ var ToolRoutes = map[string][]string{
 // call goes through the harness's permission prompt (the approval card).
 func ApprovalRequired(name string) bool { return name == PublishTool }
 
+// ReadTools are the Mosaic read tools (Story 78.32): a session answers them
+// allow in every permission mode, on both harnesses, without an approval
+// card. They only search and read filings; publish_artifact is not one.
+var ReadTools = []string{"search", "companies_search", "companies_get", "read_passage", "read_section", "toc"}
+
+// IsReadTool reports a Mosaic read tool (by its MCP tool name).
+func IsReadTool(name string) bool { return contains(ReadTools, name) && !ApprovalRequired(name) }
+
 // ToolAllowed reports whether every route the tool calls is allowed under
 // the minted scopes.
 func ToolAllowed(name string) bool { return ToolAllowedFor(name, Scopes) }

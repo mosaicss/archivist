@@ -22,8 +22,21 @@
 //	exit            start streaming, then exit 3 mid-turn
 //	wait <ms>       sleep, then reply "waited"
 //	big <bytes>     write one stdout line of that many bytes
+//	askmcp <tool>   ask can_use_tool for mcp__archivist__<tool> (a harness
+//	                that prompts for an allowed tool) and report the decision
+//	edit <path>     ask can_use_tool for Edit and report the decision
 //
 // config.json "exitBeforeInit": true exits 3 on the first turn before init.
+//
+// Permission modes (Story 78.32): --permission-mode must be one of Claude
+// Code's modes; init reports it (config.json "permissionMode" overrides
+// the report, for proof tests). A set_permission_mode control request is
+// answered at once (success with the mode, then a system/status frame) and
+// recorded in $HOME/.fakeclaude/modes.jsonl; switching to bypassPermissions
+// needs --allow-dangerously-skip-permissions (or a bypassPermissions
+// launch), config.json "setModeError" refuses every switch and
+// "setModeHang" never answers one; "setModeSilent" applies the switch
+// without answering it.
 //
 // `auth login --claudeai` imitates Claude Code 2.1.285's sign-in (Story
 // 78.22): it requires a terminal, prints the link (OSC 8 hyperlink and
@@ -65,6 +78,9 @@ type config struct {
 	LoginAuthMethod string `json:"loginAuthMethod"`
 	LoginNoURL      bool   `json:"loginNoURL"`
 	LoginEnter      bool   `json:"loginEnter"`
+	SetModeError    bool   `json:"setModeError"`
+	SetModeHang     bool   `json:"setModeHang"`
+	SetModeSilent   bool   `json:"setModeSilent"`
 }
 
 var (
@@ -74,10 +90,64 @@ var (
 	stdout  = bufio.NewWriter(os.Stdout)
 	cfg     = loadConfig()
 	session string
+	// mode is the live permission mode (guarded by modeMu).
+	modeMu      sync.Mutex
+	mode        string
+	allowBypass bool
 )
 
+var claudeModes = map[string]bool{"default": true, "manual": true, "acceptEdits": true, "plan": true,
+	"bypassPermissions": true, "auto": true, "dontAsk": true}
+
+func currentMode() string {
+	modeMu.Lock()
+	defer modeMu.Unlock()
+	return mode
+}
+
+// setPermissionMode answers a set_permission_mode control request.
+func setPermissionMode(f map[string]any) {
+	req, _ := f["request"].(map[string]any)
+	want, _ := req["mode"].(string)
+	_ = os.MkdirAll(base, 0o700)
+	if fh, err := os.OpenFile(filepath.Join(base, "modes.jsonl"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600); err == nil {
+		b, _ := json.Marshal(map[string]any{"mode": want, "request_id": f["request_id"]})
+		_, _ = fh.Write(append(b, '\n'))
+		_ = fh.Close()
+	}
+	fail := func(msg string) {
+		emit(map[string]any{"type": "control_response", "response": map[string]any{"subtype": "error",
+			"request_id": f["request_id"], "error": msg}})
+	}
+	modeMu.Lock()
+	bypassOK := allowBypass
+	modeMu.Unlock()
+	switch {
+	case cfg.SetModeHang:
+		return // never answered (a process about to stop)
+	case cfg.SetModeError:
+		fail("fakeclaude: set_permission_mode refused")
+		return
+	case !claudeModes[want]:
+		fail("Invalid permission mode: " + want)
+		return
+	case want == "bypassPermissions" && !bypassOK:
+		fail("Cannot set permission mode to bypassPermissions because the session was not launched with --dangerously-skip-permissions")
+		return
+	}
+	modeMu.Lock()
+	mode = want
+	modeMu.Unlock()
+	if cfg.SetModeSilent {
+		return // applied, but the answer never comes (or comes late)
+	}
+	emit(map[string]any{"type": "control_response", "response": map[string]any{"subtype": "success",
+		"request_id": f["request_id"], "response": map[string]any{"mode": want}}})
+	emit(map[string]any{"type": "system", "subtype": "status", "permissionMode": want, "session_id": session})
+}
+
 func loadConfig() config {
-	c := config{LoggedIn: true, AuthMethod: "claude.ai", APIKeySource: "none", PermissionMode: "default"}
+	c := config{LoggedIn: true, AuthMethod: "claude.ai", APIKeySource: "none"}
 	if b, err := os.ReadFile(filepath.Join(base, "config.json")); err == nil {
 		_ = json.Unmarshal(b, &c)
 	}
@@ -123,18 +193,37 @@ func main() {
 	flags := parseFlags(args[1:])
 	record(args, flags)
 	for _, required := range []string{"--input-format", "--output-format", "--verbose", "--include-partial-messages",
-		"--strict-mcp-config", "--mcp-config", "--permission-prompt-tool", "--setting-sources", "--tools", "--allowedTools", "--add-dir"} {
+		"--strict-mcp-config", "--mcp-config", "--permission-prompt-tool", "--setting-sources", "--tools", "--allowedTools", "--add-dir",
+		"--settings"} {
 		if _, ok := flags[required]; !ok {
 			fmt.Fprintln(os.Stderr, "fakeclaude: missing "+required)
 			os.Exit(2)
 		}
 	}
-	for _, banned := range []string{"--permission-mode", "--bare", "--dangerously-skip-permissions"} {
+	for _, banned := range []string{"--bare", "--dangerously-skip-permissions"} {
 		if _, ok := flags[banned]; ok {
 			fmt.Fprintln(os.Stderr, "fakeclaude: refused "+banned)
 			os.Exit(2)
 		}
 	}
+	mode = "default"
+	if m, ok := flags["--permission-mode"]; ok {
+		if !claudeModes[m] {
+			fmt.Fprintln(os.Stderr, "fakeclaude: invalid --permission-mode "+m)
+			os.Exit(2)
+		}
+		mode = m
+	}
+	if mode == "manual" {
+		mode = "default"
+	}
+	var flagSettings map[string]any
+	if json.Unmarshal([]byte(flags["--settings"]), &flagSettings) != nil {
+		fmt.Fprintln(os.Stderr, "fakeclaude: --settings is not a JSON object")
+		os.Exit(2)
+	}
+	_, allowBypass = flags["--allow-dangerously-skip-permissions"]
+	allowBypass = allowBypass || mode == "bypassPermissions"
 	session = uuid()
 	if id := flags["--resume"]; id != "" {
 		session = id
@@ -149,6 +238,10 @@ func main() {
 		for sc.Scan() {
 			var f map[string]any
 			if json.Unmarshal(sc.Bytes(), &f) == nil {
+				if req, _ := f["request"].(map[string]any); f["type"] == "control_request" && req["subtype"] == "set_permission_mode" {
+					setPermissionMode(f) // answered at once, even mid-turn
+					continue
+				}
 				frames <- f
 			}
 		}
@@ -236,8 +329,12 @@ func (r *runner) initFrame() {
 		}
 		servers = append(servers, map[string]any{"name": "archivist", "status": "connected"})
 	}
+	reported := currentMode()
+	if cfg.PermissionMode != "" {
+		reported = cfg.PermissionMode
+	}
 	emit(map[string]any{"type": "system", "subtype": "init", "session_id": session, "cwd": mustCwd(),
-		"apiKeySource": cfg.APIKeySource, "permissionMode": cfg.PermissionMode, "tools": tools,
+		"apiKeySource": cfg.APIKeySource, "permissionMode": reported, "tools": tools,
 		"mcp_servers": servers, "plugins": []any{}, "claude_code_version": "2.1.280", "model": "fake-model"})
 }
 
@@ -272,6 +369,10 @@ func (r *runner) turn(text string) bool {
 		}
 	case "bash":
 		return r.ask("Bash", map[string]any{"command": arg})
+	case "askmcp":
+		return r.ask("mcp__archivist__"+arg, map[string]any{"query": "revenue"})
+	case "edit":
+		return r.ask("Edit", map[string]any{"file_path": arg, "old_string": "a", "new_string": "b"})
 	case "write":
 		return r.ask("Write", map[string]any{"file_path": arg, "content": "x"})
 	case "mcp":
@@ -344,13 +445,19 @@ func (r *runner) toolResult(id string, content any, isErr bool) {
 }
 
 func (r *runner) result(isErr bool, reason, text string) {
+	// The main loop assistant snapshot with its usage (partials already
+	// streamed it, so the daemon only reads the context use from it).
+	emit(map[string]any{"type": "assistant", "session_id": session, "parent_tool_use_id": nil,
+		"message": map[string]any{"id": fmt.Sprintf("msg_fake_%s_%d", session[:8], r.msgN), "type": "message",
+			"role": "assistant", "model": "fake-model", "content": []any{}, "usage": map[string]any{
+				"input_tokens": 3, "cache_read_input_tokens": 1000, "cache_creation_input_tokens": 200, "output_tokens": 5}}})
 	subtype := "success"
 	if isErr {
 		subtype = "error_during_execution"
 	}
 	emit(map[string]any{"type": "result", "subtype": subtype, "is_error": isErr, "terminal_reason": reason,
 		"session_id": session, "result": text, "usage": map[string]any{"input_tokens": 3, "output_tokens": 5,
-			"cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}, "modelUsage": map[string]any{"fake-model": map[string]any{}}})
+			"cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}, "modelUsage": map[string]any{"fake-model": map[string]any{"contextWindow": 1000000}}})
 }
 
 func (r *runner) ask(tool string, input map[string]any) bool {

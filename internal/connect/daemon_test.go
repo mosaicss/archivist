@@ -54,9 +54,20 @@ type harness struct {
 	codexOff    bool // detect Codex as usable but leave the adapter unconfigured
 	codexModel  string
 	codexEffort string
-	d           *Daemon
-	cancel      context.CancelFunc
-	done        chan error
+	// maxMode is the permission ceiling (Story 78.32, "" = the default),
+	// sessionMode the session-bound start's mode and debugLog turns on
+	// debug lines.
+	maxMode     Mode
+	sessionMode Mode
+	// sessionModel and sessionEffort are the session-bound start's
+	// --model and --effort.
+	sessionModel, sessionEffort string
+	debugLog                    bool
+	// claudeEffort is the --claude-effort machine flag.
+	claudeEffort string
+	d            *Daemon
+	cancel       context.CancelFunc
+	done         chan error
 }
 
 func newHarness(t *testing.T, fakeCfg map[string]any) *harness {
@@ -108,15 +119,18 @@ func (h *harness) start() {
 		codexCfg = CodexConfig{Bin: testCodexBinary(h.t), Version: "0.160.0", Model: h.codexModel, Effort: h.codexEffort,
 			OwnerHome: h.codexOwner(), Executable: archivistBin, BaseURL: h.api.srv.URL}
 	}
+	logger := NewLogger(h.log)
+	logger.SetDebug(h.debugLog)
 	d, err := New(Config{
 		API:      api,
 		RelayURL: h.relay.url(),
 		StateDir: filepath.Join(h.home, ".archivist", "connect"),
 		Claude: ClaudeConfig{Bin: claudeBin, SettingSources: DefaultSettingSources, Executable: archivistBin,
-			BaseURL: h.api.srv.URL},
+			BaseURL: h.api.srv.URL, Effort: h.claudeEffort},
 		Codex:       codexCfg,
 		MaxSessions: h.max,
-		Log:         NewLogger(h.log),
+		MaxMode:     h.maxMode,
+		Log:         logger,
 		Detect: func(ctx context.Context) Detection {
 			if h.codex {
 				return DetectWith(ctx, DetectOptions{LookPath: lookPath, Run: ExecRunner, RunCombined: ExecCombinedRunner,
@@ -253,8 +267,22 @@ func TestDaemonSessionLifecycle(t *testing.T) {
 		t.Fatalf("text %q", h.relay.text(sid))
 	}
 	first := h.relay.payloads(sid)
-	if first[0]["type"] != "data-session-status" || first[2]["type"] != "start" {
-		t.Fatalf("event order %v", first[:3])
+	if first[0]["type"] != "data-session-status" || first[2]["type"] != "data-session-controls" || first[3]["type"] != "start" {
+		t.Fatalf("event order %v", first[:4])
+	}
+	// mosaic-event/3 (Story 78.32): the running session's controls (no model
+	// or effort set anywhere), and data-usage with the harness context use:
+	// the last main loop assistant usage (3 + 1000 + 200 + 5) and the
+	// result's modelUsage contextWindow.
+	if d := fmt.Sprint(first[2]["data"]); d != "map[maxMode:auto_edits mode:ask]" {
+		t.Fatalf("session controls %s", d)
+	}
+	usage := h.relay.eventsOf(sid, "data-usage")
+	if len(usage) != 1 || usage[0]["schemaVersion"] != "mosaic-event/3" {
+		t.Fatalf("usage %v", usage)
+	}
+	if d := usage[0]["payload"].(map[string]any)["data"].(map[string]any); d["contextTokens"] != float64(1208) || d["contextWindow"] != float64(1000000) {
+		t.Fatalf("usage context %v", d)
 	}
 
 	// Child environment and fixed flags.

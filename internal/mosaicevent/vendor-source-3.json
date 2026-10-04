@@ -1,0 +1,10 @@
+{
+  "schemaVersion": "mosaic-event/3",
+  "repository": "https://forge.hive.mosaic-finance.com/tunc/mosaic.git",
+  "sourceCommit": "04e777a00a955cfcdeaea271e0ae06b8c5baadd3",
+  "bundleDigest": "dae6f6383fe4a8f1395feb0c8437bcf23fdfab2a8026408e849294c16fc6ff27",
+  "bundlePath": "reference/schemas/mosaic-event/3",
+  "vendoredPath": "internal/mosaicevent/vendor/3",
+  "capturedAt": "2026-10-04",
+  "sdkModule": "github.com/grafana/ai-sdk@v0.1.0-alpha.1"
+}

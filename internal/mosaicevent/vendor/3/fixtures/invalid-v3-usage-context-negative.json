@@ -1,0 +1,11 @@
+[
+  {
+    "type": "data-usage",
+    "data": {
+      "inputTokens": 1200,
+      "outputTokens": 300,
+      "model": "claude-opus-5-5[1m]",
+      "contextTokens": -1
+    }
+  }
+]

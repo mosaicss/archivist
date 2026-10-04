@@ -125,19 +125,34 @@ func (o *Outbox) Emit(c Chunk) int {
 	return queued
 }
 
-// eventVersion is the contract version an event type is stamped with:
-// mosaic-event/2 only for data-auth-prompt (its optional code and expiresAt),
-// mosaic-event/1 for everything else, so ordinary turns stay readable by
-// relays and consumers that predate v2.
-func eventVersion(typ string) string {
-	if typ == "data-auth-prompt" {
+// eventVersion is the contract version a chunk is stamped with:
+// mosaic-event/3 for data-session-controls and for a data-usage that carries
+// contextTokens or contextWindow (Story 78.32; a data-usage without them stays
+// mosaic-event/1), mosaic-event/2 for data-auth-prompt (its optional code and
+// expiresAt), mosaic-event/1 for everything else, so the rest of a turn stays
+// readable by relays and consumers that predate v2 and v3. A relay must
+// accept v3 before a release that stamps it: an older relay refuses these
+// events.
+func eventVersion(c Chunk) string {
+	switch c["type"] {
+	case "data-session-controls":
+		return mosaicevent.Version3
+	case "data-usage":
+		if d, ok := c["data"].(map[string]any); ok {
+			_, tokens := d["contextTokens"]
+			_, window := d["contextWindow"]
+			if tokens || window {
+				return mosaicevent.Version3
+			}
+		}
+	case "data-auth-prompt":
 		return mosaicevent.Version2
 	}
 	return mosaicevent.Version
 }
 
 func (o *Outbox) envelope(typ string, seq int64, p Chunk) envelope {
-	return envelope{Kind: "event", SchemaVersion: eventVersion(typ), Seq: seq,
+	return envelope{Kind: "event", SchemaVersion: eventVersion(p), Seq: seq,
 		TS: o.now().UnixMilli(), CorrelationID: fmt.Sprintf("%s:%d", o.runID, seq),
 		Origin: "daemon", Type: typ, Payload: p}
 }

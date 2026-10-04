@@ -30,6 +30,9 @@ type CodexTranslator struct {
 	rOrder    []string
 	files     map[string]json.RawMessage // fileChange item id -> changes
 	Skipped   int
+	// Context is the latest context use report (Story 78.32); the session
+	// adds it to data-usage (mosaic-event/3).
+	Context contextUsage
 }
 
 // NewCodexTranslator returns an empty translator.
@@ -125,6 +128,10 @@ func (t *CodexTranslator) In(method, rpcID string, params json.RawMessage) []Chu
 		return []Chunk{{"type": "tool-approval-request", "approvalId": approvalID,
 			"toolCallId": str(p, "itemId"), "approvalDescriptor": descriptor}}
 	case "thread/tokenUsage/updated":
+		// The latest report only: one without last leaves the context unknown.
+		u, _ := codexContextUsage(params)
+		u.Model = t.Model
+		t.Context = u
 		var tu struct {
 			TokenUsage struct {
 				Total map[string]json.RawMessage `json:"total"`

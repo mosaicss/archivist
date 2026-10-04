@@ -44,13 +44,26 @@ type codexAccountRead struct {
 
 // codexModelList is the model/list response.
 type codexModelList struct {
-	Data []struct {
-		ID        string `json:"id"`
-		Model     string `json:"model"`
-		IsDefault bool   `json:"isDefault"`
-		Hidden    bool   `json:"hidden"`
-	} `json:"data"`
-	NextCursor *string `json:"nextCursor"`
+	Data       []codexModel `json:"data"`
+	NextCursor *string      `json:"nextCursor"`
+}
+
+// codexModel is one model/list entry (the session controls catalogue,
+// Story 78.32, reads its name and reasoning efforts).
+type codexModel struct {
+	ID                        string                       `json:"id"`
+	Model                     string                       `json:"model"`
+	DisplayName               string                       `json:"displayName"`
+	IsDefault                 bool                         `json:"isDefault"`
+	Hidden                    bool                         `json:"hidden"`
+	DefaultReasoningEffort    *string                      `json:"defaultReasoningEffort"`
+	SupportedReasoningEfforts []codexReasoningEffortOption `json:"supportedReasoningEfforts"`
+}
+
+// codexReasoningEffortOption is one supportedReasoningEfforts entry.
+type codexReasoningEffortOption struct {
+	ReasoningEffort string `json:"reasoningEffort"`
+	Description     string `json:"description"`
 }
 
 // codexThreadParams is thread/start, or thread/resume when ThreadID is set.
@@ -102,9 +115,15 @@ type codexTextInput struct {
 	TextElements []any  `json:"text_elements"`
 }
 
+// codexTurnStartParams is turn/start. The approval policy, sandbox policy,
+// model and effort apply to this turn and the ones after (Story 78.32).
 type codexTurnStartParams struct {
-	ThreadID string           `json:"threadId"`
-	Input    []codexTextInput `json:"input"`
+	ThreadID       string           `json:"threadId"`
+	Input          []codexTextInput `json:"input"`
+	ApprovalPolicy string           `json:"approvalPolicy,omitempty"`
+	SandboxPolicy  map[string]any   `json:"sandboxPolicy,omitempty"`
+	Model          string           `json:"model,omitempty"`
+	Effort         string           `json:"effort,omitempty"`
 }
 
 type codexTurnRef struct {

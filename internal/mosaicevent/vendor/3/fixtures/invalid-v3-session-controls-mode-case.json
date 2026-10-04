@@ -1,0 +1,9 @@
+[
+  {
+    "type": "data-session-controls",
+    "data": {
+      "mode": "Ask",
+      "maxMode": "full_auto"
+    }
+  }
+]

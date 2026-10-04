@@ -1,0 +1,36 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://mosaic-finance.com/schemas/mosaic-event/3/data-session-controls.json",
+  "type": "object",
+  "properties": {
+    "mode": {
+      "enum": [
+        "read_only",
+        "ask",
+        "auto_edits",
+        "full_auto"
+      ]
+    },
+    "maxMode": {
+      "enum": [
+        "read_only",
+        "ask",
+        "auto_edits",
+        "full_auto"
+      ]
+    },
+    "model": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:\\[\\]-]{0,127}$"
+    },
+    "effort": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_-]{0,31}$"
+    }
+  },
+  "required": [
+    "mode",
+    "maxMode"
+  ],
+  "additionalProperties": false
+}

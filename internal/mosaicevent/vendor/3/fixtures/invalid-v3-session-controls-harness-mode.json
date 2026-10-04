@@ -1,0 +1,9 @@
+[
+  {
+    "type": "data-session-controls",
+    "data": {
+      "mode": "bypassPermissions",
+      "maxMode": "full_auto"
+    }
+  }
+]

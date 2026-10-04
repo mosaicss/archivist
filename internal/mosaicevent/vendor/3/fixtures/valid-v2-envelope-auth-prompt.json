@@ -1,0 +1,22 @@
+[
+  {
+    "kind": "event",
+    "schemaVersion": "mosaic-event/3",
+    "seq": 1,
+    "ts": 0,
+    "correlationId": "event-1",
+    "origin": "daemon",
+    "type": "data-auth-prompt",
+    "payload": {
+      "type": "data-auth-prompt",
+      "data": {
+        "promptId": "fixture",
+        "provider": "codex",
+        "message": "fixture",
+        "url": "https://auth.openai.com/codex/device",
+        "code": "ABCD-1234",
+        "expiresAt": 1791000000000
+      }
+    }
+  }
+]

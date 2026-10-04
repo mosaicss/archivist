@@ -1,0 +1,62 @@
+[
+  {
+    "type": "start",
+    "messageId": "chat-api-current-workspace",
+    "messageMetadata": {
+      "schemaVersion": "mosaic-event/3"
+    }
+  },
+  {
+    "type": "data-conversation-id",
+    "data": {
+      "conversationId": "conv-workspace-fixture"
+    },
+    "transient": true
+  },
+  {
+    "type": "start-step"
+  },
+  {
+    "type": "reasoning-start",
+    "id": "r1"
+  },
+  {
+    "type": "reasoning-delta",
+    "id": "r1",
+    "delta": "Answering from memory."
+  },
+  {
+    "type": "reasoning-end",
+    "id": "r1"
+  },
+  {
+    "type": "text-start",
+    "id": "t1"
+  },
+  {
+    "type": "text-delta",
+    "id": "t1",
+    "delta": "Water is a material risk."
+  },
+  {
+    "type": "text-end",
+    "id": "t1"
+  },
+  {
+    "type": "finish-step"
+  },
+  {
+    "type": "data-usage",
+    "data": {
+      "inputTokens": 900,
+      "outputTokens": 120,
+      "reasoningTokens": 30,
+      "cachedInputTokens": 200,
+      "model": "gemini-3.8-flash"
+    },
+    "transient": true
+  },
+  {
+    "type": "finish"
+  }
+]

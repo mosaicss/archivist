@@ -1,0 +1,22 @@
+[
+  {
+    "type": "data-auth-prompt",
+    "data": {
+      "promptId": "fixture",
+      "provider": "codex",
+      "message": "fixture",
+      "url": "https://auth.openai.com/codex/device",
+      "expiresAt": 0
+    }
+  },
+  {
+    "type": "data-auth-prompt",
+    "data": {
+      "promptId": "fixture",
+      "provider": "codex",
+      "message": "fixture",
+      "url": "https://auth.openai.com/codex/device",
+      "expiresAt": 9007199254740991
+    }
+  }
+]

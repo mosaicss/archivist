@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -55,6 +56,9 @@ type Config struct {
 	// logged out (session-bound sandbox mode, RunSession): the session signs
 	// it in (posture 1) before its first turn. Its Bin stays configured.
 	SignIn string
+	// MaxMode is this machine's permission ceiling (Story 78.32, "" =
+	// DefaultMaxMode): no session runs above it, whatever the relay sends.
+	MaxMode Mode
 }
 
 // Daemon is a running `archivist connect`.
@@ -80,6 +84,16 @@ type Daemon struct {
 	// sandbox is the session-bound mode (RunSession, Story 78.22): no user
 	// socket, and a failed session ends the daemon.
 	sandbox bool
+	// maxMode is the permission ceiling (Story 78.32).
+	maxMode Mode
+	// Codex model list probe (Story 78.32): codexProbed closes when it ends;
+	// codexCat (guarded by mu) is empty after a failure.
+	probeOnce       sync.Once
+	codexProbed     chan struct{}
+	codexCat        []modelEntry
+	controlsRefused atomic.Bool
+	// controlsSentAt is the last controls send (unix ns, 0 = none pending).
+	controlsSentAt atomic.Int64
 
 	mu       sync.Mutex
 	signIn   string // harness awaiting its posture-1 sign-in (guarded by mu)
@@ -108,7 +122,14 @@ func New(cfg Config) (*Daemon, error) {
 		maxSessions: cfg.MaxSessions,
 		log:         cfg.Log, parser: parser, store: store, detect: cfg.Detect, runner: cfg.Runner,
 		environ: cfg.Environ, tempDir: cfg.TempDir, dial: cfg.Dial, signIn: cfg.SignIn, chatAPIURL: cfg.ChatAPIURL,
-		sessions: map[string]*session{}, starting: map[string]bool{}, tokens: map[string]bool{}}
+		sessions: map[string]*session{}, starting: map[string]bool{}, tokens: map[string]bool{},
+		maxMode: cfg.MaxMode, codexProbed: make(chan struct{})}
+	if d.maxMode == "" {
+		d.maxMode = DefaultMaxMode
+	}
+	if _, ok := ParseMode(string(d.maxMode)); !ok {
+		return nil, fmt.Errorf("permission ceiling %q is not one of %s", d.maxMode, modeIDs())
+	}
 	if d.maxSessions <= 0 {
 		d.maxSessions = DefaultMaxSessions
 	}
@@ -145,6 +166,9 @@ func New(cfg Config) (*Daemon, error) {
 	return d, nil
 }
 
+// MaxMode is the daemon's effective permission ceiling (Story 78.32).
+func (d *Daemon) MaxMode() Mode { return d.maxMode }
+
 // Run serves until ctx ends (nil), another daemon supersedes this one
 // (ErrSuperseded) or a fatal condition (*FatalError). Every child process is
 // stopped and every live task token revoked before it returns.
@@ -176,14 +200,19 @@ func (d *Daemon) Run(ctx context.Context) error {
 				d.store.RemoveCodexHome(rec.SessionID)
 				continue
 			}
+			if d.reclamp(rec) {
+				_ = d.store.Save(rec) // a lowered ceiling holds for the resumed session
+			}
 			d.attach(sessCtx, rec, "", false)
 		}
 	}
 
+	d.startCodexProbe(sessCtx)
 	user := newLink("user socket", UserSocket, "", d.api, d.relayURL, nil, d.log)
 	if d.dial != nil {
 		user.dial = d.dial
 	}
+	user.onError = d.relayRefusedControls
 	user.onConnect = func(l *live) {
 		det := d.detect(ctx)
 		caps := det.Capabilities()
@@ -194,6 +223,13 @@ func (d *Daemon) Run(ctx context.Context) error {
 		}
 		l.Send(capabilitiesFrame(caps))
 		d.log.Printf("capabilities reported: %+v", caps)
+		// Then the session controls (Story 78.32), once the Codex model
+		// list probe is done (bounded); the capabilities never wait.
+		d.wg.Add(1)
+		go func() {
+			defer d.wg.Done()
+			d.sendControls(sessCtx, l)
+		}()
 	}
 	user.onCommand = func(l *live, in *Inbound) {
 		switch in.Kind {
@@ -331,6 +367,10 @@ func (d *Daemon) handleStart(ctx context.Context, l *live, in *Inbound) *session
 		d.refuseStart(ctx, l, in, "The session belongs to another agent.", true)
 		return nil
 	}
+	if problem := d.startProblem(ctx, in); problem != "" {
+		d.refuseStart(ctx, l, in, problem, true)
+		return nil
+	}
 	if !d.acquireSlot(nil) {
 		d.refuseStart(ctx, l, in, fmt.Sprintf("archivist connect already runs %d live sessions.", d.maxSessions), true)
 		return nil
@@ -342,7 +382,8 @@ func (d *Daemon) handleStart(ctx context.Context, l *live, in *Inbound) *session
 		return nil
 	}
 	rec := &SessionRecord{SessionID: sid, Agent: in.Agent, StartCorrelationID: in.CorrelationID, Cwd: cwd,
-		ExpiresAt: info.ExpiresAt, Status: "active", CreatedAt: now}
+		ExpiresAt: info.ExpiresAt, Status: "active", CreatedAt: now,
+		Mode: string(d.startMode(in)), Model: in.Model, Effort: in.Effort}
 	if err := d.store.Save(rec); err != nil {
 		d.releaseSlot()
 		_ = os.RemoveAll(cwd)
@@ -350,7 +391,7 @@ func (d *Daemon) handleStart(ctx context.Context, l *live, in *Inbound) *session
 		return nil
 	}
 	ack()
-	d.log.Printf("session %s starting (cwd %s)", sid, cwd)
+	d.log.Printf("session %s starting (cwd %s, mode %s, ceiling %s)", sid, cwd, rec.Mode, d.maxMode)
 	return d.attach(ctx, rec, in.Prompt, true)
 }
 
@@ -565,6 +606,13 @@ type SessionStart struct {
 	SessionID string
 	Agent     string
 	Prompt    string
+	// Mode is the session's permission mode ("" = the sandbox default),
+	// clamped to the ceiling (Story 78.32).
+	Mode Mode
+	// Model and Effort are the session's model and effort ("" = the
+	// machine flags), checked against this daemon's catalogue by
+	// handleStart like a relay start's.
+	Model, Effort string
 }
 
 // ValidSessionID reports a relay session UUID.
@@ -603,8 +651,9 @@ func (d *Daemon) RunSession(ctx context.Context, st SessionStart) error {
 		SweepAllOrphans()
 		d.revokeLeftovers()
 	}()
+	d.startCodexProbe(sessCtx)
 	in := &Inbound{Kind: "start_session", CorrelationID: "sandbox-" + newRunID(), SessionID: st.SessionID,
-		Agent: st.Agent, Prompt: st.Prompt}
+		Agent: st.Agent, Prompt: st.Prompt, Mode: string(st.Mode), Model: st.Model, Effort: st.Effort}
 	s := d.handleStart(sessCtx, nil, in)
 	if s == nil {
 		return &FatalError{Code: "START_REFUSED", Message: "the session did not start (see the log above)"}

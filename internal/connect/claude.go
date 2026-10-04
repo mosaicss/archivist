@@ -3,18 +3,25 @@ package connect
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/mosaicss/archivist/internal/taskscope"
 )
 
 // Claude Code invocation (Story 78.16). Every flag is fixed here; the relay
-// supplies only the prompt text. Never --permission-mode, --bare or
-// --dangerously-skip-permissions.
+// supplies only the prompt text and the session control ids (Story 78.32).
+// --permission-mode is always passed, mapped from the session's mode
+// (controls.go); --allow-dangerously-skip-permissions only under a
+// full_auto ceiling. Never --bare, --dangerously-skip-permissions, or the
+// auto and dontAsk modes.
 
-// ClaudeBuiltinTools are the built-in tools a session may use; every
-// non-read action still asks through the approval card.
+// ClaudeBuiltinTools are the built-in tools a session may use; whether a
+// call asks through the approval card is the session's mode's decision.
 const ClaudeBuiltinTools = "Bash,Read,Edit,Write,Glob,Grep"
+
+// claudeFlagSettings is the --settings value of every launch (Story 78.32).
+const claudeFlagSettings = `{"useAutoModeDuringPlan":false}`
 
 // DefaultSettingSources keeps user, project and local settings out of the
 // session (no settings env, apiKeyHelper, hooks or plugins). Claude Code
@@ -31,6 +38,11 @@ type ClaudeConfig struct {
 	Executable string
 	// BaseURL is passed to `mcp serve` only when ARCHIVIST_BASE_URL is set.
 	BaseURL string
+	// PermissionMode is the session's --permission-mode and AllowBypass the
+	// full_auto ceiling's --allow-dangerously-skip-permissions (Story 78.32;
+	// set per session by claudeLaunchConfig, "" = default).
+	PermissionMode string
+	AllowBypass    bool
 }
 
 // archivistAllowedTools pre-allows the task mode archivist tools, except
@@ -62,6 +74,14 @@ func claudeArgs(cfg ClaudeConfig, mcpConfigPath, guidancePath, cwd, resumeID str
 		"--tools", ClaudeBuiltinTools,
 		"--allowedTools", archivistAllowedTools(),
 	}
+	mode := cfg.PermissionMode
+	if mode == "" {
+		mode = "default"
+	}
+	args = append(args, "--permission-mode", mode)
+	if cfg.AllowBypass {
+		args = append(args, "--allow-dangerously-skip-permissions")
+	}
 	if cfg.Model != "" {
 		args = append(args, "--model", cfg.Model)
 	}
@@ -71,6 +91,11 @@ func claudeArgs(cfg ClaudeConfig, mcpConfigPath, guidancePath, cwd, resumeID str
 	if resumeID != "" {
 		args = append(args, "--resume="+resumeID)
 	}
+	// Plan mode (read_only) must never let the auto mode classifier approve
+	// shell commands: set on every launch, so a later switch to plan holds
+	// too (verified on 2.1.280: get_settings reports it from flagSettings
+	// alongside --setting-sources "").
+	args = append(args, "--settings", claudeFlagSettings)
 	// The file form: no argv length limit, and print mode reads it on resume too.
 	args = append(args, "--append-system-prompt-file", guidancePath)
 	// Last: --add-dir is variadic, so nothing may follow its value.
@@ -124,6 +149,12 @@ func controlError(requestID, msg string) map[string]any {
 		"subtype": "error", "request_id": requestID, "error": msg}}
 }
 
+// setModeFrame asks Claude Code to switch the permission mode (Story 78.32).
+func setModeFrame(requestID, mode string) map[string]any {
+	return map[string]any{"type": "control_request", "request_id": requestID,
+		"request": map[string]any{"subtype": "set_permission_mode", "mode": mode}}
+}
+
 func interruptFrame(requestID string) map[string]any {
 	return map[string]any{"type": "control_request", "request_id": requestID,
 		"request": map[string]any{"subtype": "interrupt"}}
@@ -154,14 +185,16 @@ type controlRequest struct {
 	ToolUseID string          `json:"tool_use_id"`
 }
 
-// initProblem returns why an init frame fails the subscription proof.
-func initProblem(f claudeFrame) string {
+// initProblem returns why an init frame fails the subscription proof:
+// permissionMode must be one of modes (the session's mapped mode, or one a
+// pending set_permission_mode asked for).
+func initProblem(f claudeFrame, modes []string) string {
 	var problems []string
 	if f.APIKeySource != "none" {
 		problems = append(problems, fmt.Sprintf("apiKeySource is %q, not \"none\"", f.APIKeySource))
 	}
-	if f.PermissionMode != "default" {
-		problems = append(problems, fmt.Sprintf("permissionMode is %q, not \"default\"", f.PermissionMode))
+	if len(modes) == 0 || !slices.Contains(modes, f.PermissionMode) {
+		problems = append(problems, fmt.Sprintf("permissionMode is %q, not \"%s\"", f.PermissionMode, strings.Join(modes, "\" or \"")))
 	}
 	return strings.Join(problems, "; ")
 }

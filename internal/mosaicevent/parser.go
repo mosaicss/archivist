@@ -1,5 +1,5 @@
-// Package mosaicevent validates mosaic-event/1 and mosaic-event/2 before decoding the supported
-// Grafana wire types. Each version has its own vendored bundle and parser; a Set dispatches on
+// Package mosaicevent validates mosaic-event/1, mosaic-event/2 and mosaic-event/3 before decoding
+// the supported Grafana wire types. Each version has its own vendored bundle and parser; a Set dispatches on
 // the input's schemaVersion.
 package mosaicevent
 
@@ -26,6 +26,10 @@ const Version = "mosaic-event/1"
 // relay-origin data-session-status envelopes.
 const Version2 = "mosaic-event/2"
 
+// Version3 adds the optional data-usage contextTokens and contextWindow and the
+// data-session-controls part (Story 78.32).
+const Version3 = "mosaic-event/3"
+
 // Explicit patterns keep installed Node dependencies and generated files out of the binary.
 //
 //go:embed vendor/1/*.json vendor/1/*.sha256 vendor/1/*.md vendor/1/fixtures/*.json vendor/1/fixtures/raw/* vendor/1/contract/*.ts vendor/1/contract/*.json vendor/1/contract/.npmrc
@@ -36,6 +40,11 @@ var assets embed.FS
 //go:embed vendor/2/*.json vendor/2/*.sha256 vendor/2/*.md vendor/2/*.mjs vendor/2/fixtures/*.json
 var assetsV2 embed.FS
 
+// The v3 bundle has the same layout as v2.
+//
+//go:embed vendor/3/*.json vendor/3/*.sha256 vendor/3/*.md vendor/3/*.mjs vendor/3/fixtures/*.json
+var assetsV3 embed.FS
+
 // bundles maps each supported version to its embedded vendored bundle.
 var bundles = map[string]struct {
 	fs  embed.FS
@@ -43,6 +52,7 @@ var bundles = map[string]struct {
 }{
 	Version:  {assets, "vendor/1"},
 	Version2: {assetsV2, "vendor/2"},
+	Version3: {assetsV3, "vendor/3"},
 }
 
 // Parsed retains exact input bytes: SDK serialization omits some optional v7 fields.

@@ -1697,6 +1697,26 @@
    "title": "PermissionsRequestApprovalResponse",
    "type": "object"
   },
+  "ReasoningEffort": {
+   "description": "A non-empty reasoning effort value advertised by the model.",
+   "minLength": 1,
+   "type": "string"
+  },
+  "ReasoningEffortOption": {
+   "properties": {
+    "description": {
+     "type": "string"
+    },
+    "reasoningEffort": {
+     "$ref": "#/definitions/ReasoningEffort"
+    }
+   },
+   "required": [
+    "description",
+    "reasoningEffort"
+   ],
+   "type": "object"
+  },
   "ReasoningSummaryTextDeltaNotification": {
    "$schema": "http://json-schema.org/draft-07/schema#",
    "properties": {

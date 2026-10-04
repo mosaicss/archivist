@@ -1,0 +1,7 @@
+[
+  {
+    "type": "tool-output-error",
+    "toolCallId": "fixture",
+    "errorText": "fixture"
+  }
+]

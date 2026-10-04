@@ -8,7 +8,8 @@ import (
 
 // Set holds one parser per supported version (each from its own vendored bundle) and validates
 // an input with the version it declares, as the relay does: mosaic-event/1 inputs go to the v1
-// bundle, mosaic-event/2 inputs to the v2 bundle, anything else is refused.
+// bundle, mosaic-event/2 inputs to the v2 bundle, mosaic-event/3 inputs to the v3 bundle,
+// anything else is refused.
 type Set struct {
 	parsers map[string]*Parser
 }

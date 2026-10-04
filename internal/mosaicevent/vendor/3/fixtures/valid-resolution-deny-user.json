@@ -1,0 +1,16 @@
+[
+  {
+    "kind": "event",
+    "schemaVersion": "mosaic-event/3",
+    "seq": 1,
+    "ts": 0,
+    "correlationId": "resolved:a",
+    "origin": "relay",
+    "type": "approval_resolved",
+    "payload": {
+      "correlationId": "a",
+      "decision": "deny",
+      "reason": "user"
+    }
+  }
+]

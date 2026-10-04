@@ -13,6 +13,7 @@ import (
 type Logger struct {
 	w      io.Writer
 	prefix string
+	debug  bool
 }
 
 // NewLogger writes to w.
@@ -23,7 +24,21 @@ func (l *Logger) With(prefix string) *Logger {
 	if l == nil {
 		return nil
 	}
-	return &Logger{w: l.w, prefix: l.prefix + prefix + " "}
+	return &Logger{w: l.w, prefix: l.prefix + prefix + " ", debug: l.debug}
+}
+
+// SetDebug turns Debugf lines on (loggers derived later inherit it).
+func (l *Logger) SetDebug(on bool) {
+	if l != nil {
+		l.debug = on
+	}
+}
+
+// Debugf logs one line when debug lines are on.
+func (l *Logger) Debugf(format string, args ...any) {
+	if l != nil && l.debug {
+		l.Printf("debug: "+format, args...)
+	}
 }
 
 // Printf logs one line.

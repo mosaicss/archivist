@@ -335,7 +335,10 @@ func emittedEnvelopes(t *testing.T, o *Outbox) []map[string]any {
 	return out
 }
 
-func TestOutboxStampsV2OnlyOnAuthPrompts(t *testing.T) {
+// Each event carries its contract version: v3 for data-session-controls and
+// a data-usage with context fields (Story 78.32; without them v1, so an
+// older relay keeps accepting usage), v2 for auth prompts, v1 otherwise.
+func TestOutboxStampsVersionPerEventType(t *testing.T) {
 	o := newTestOutbox(t)
 	deadline := time.UnixMilli(1_791_000_000_000)
 	for _, c := range []Chunk{
@@ -344,6 +347,10 @@ func TestOutboxStampsV2OnlyOnAuthPrompts(t *testing.T) {
 		authPromptChunk("claude", "claude-signin-x", "https://claude.com/cai/oauth/authorize?x=1", "send the code", "", deadline),
 		{"type": "start", "messageId": "m", "messageMetadata": map[string]any{"schemaVersion": mosaicevent.Version}},
 		{"type": "text-delta", "id": "a", "delta": "hi"},
+		{"type": "data-usage", "data": map[string]any{"inputTokens": 1, "outputTokens": 2, "model": "m", "contextTokens": 3, "contextWindow": 4}},
+		{"type": "data-usage", "data": map[string]any{"inputTokens": 1, "outputTokens": 2, "model": "m"}},
+		{"type": "data-usage", "data": map[string]any{"inputTokens": 1, "outputTokens": 2, "model": "m", "contextWindow": 4}},
+		{"type": "data-session-controls", "data": map[string]any{"mode": "ask", "maxMode": "auto_edits", "model": "opus", "effort": "high"}},
 	} {
 		if n := o.Emit(c); n != 1 {
 			t.Fatalf("%v queued %d", c["type"], n)
@@ -354,7 +361,8 @@ func TestOutboxStampsV2OnlyOnAuthPrompts(t *testing.T) {
 		got = append(got, env["type"].(string)+"="+env["schemaVersion"].(string))
 	}
 	want := "data-session-status=mosaic-event/1,data-auth-prompt=mosaic-event/2,data-auth-prompt=mosaic-event/2," +
-		"start=mosaic-event/1,text-delta=mosaic-event/1"
+		"start=mosaic-event/1,text-delta=mosaic-event/1,data-usage=mosaic-event/3,data-usage=mosaic-event/1," +
+		"data-usage=mosaic-event/3,data-session-controls=mosaic-event/3"
 	if strings.Join(got, ",") != want {
 		t.Fatalf("stamps %v", got)
 	}
@@ -370,6 +378,13 @@ func TestOutboxStampsV2OnlyOnAuthPrompts(t *testing.T) {
 	// v2-only content on a v1-stamped event is refused, never sent.
 	if n := o.Emit(Chunk{"type": "data-session-status", "data": map[string]any{"sessionId": unitSID, "status": "lost"}}); n != 0 {
 		t.Fatal("a v1 event with a v2 status was queued")
+	}
+	// Session controls and usage the v3 contract refuses are dropped.
+	if n := o.Emit(Chunk{"type": "data-session-controls", "data": map[string]any{"mode": "root", "maxMode": "ask"}}); n != 0 {
+		t.Fatal("an invalid data-session-controls was queued")
+	}
+	if n := o.Emit(Chunk{"type": "data-usage", "data": map[string]any{"inputTokens": 1, "outputTokens": 2, "model": "m", "contextWindow": -1}}); n != 0 {
+		t.Fatal("a data-usage with a negative window was queued")
 	}
 	// An auth prompt the v2 contract refuses is dropped.
 	bad := authPromptChunk("codex", "login-2", "", "m", "", deadline)
@@ -569,9 +584,37 @@ func TestClaudeArgsAreFixed(t *testing.T) {
 	cfg := ClaudeConfig{Bin: "/usr/bin/claude", Model: "claude-sonnet-5", Effort: "low", SettingSources: "", Executable: "/opt/archivist"}
 	args := claudeArgs(cfg, "/state/run/x/mcp.json", "/state/run/x/mosaic-guidance.md", "/tmp/cwd", "abc")
 	joined := strings.Join(args, " ")
-	for _, banned := range []string{"--permission-mode", "--bare", "--dangerously-skip-permissions"} {
+	// Story 78.32: never the bypass flag, --bare or the auto/dontAsk modes;
+	// --permission-mode is always passed (default when unset), and the allow
+	// flag only under a full_auto ceiling.
+	for _, banned := range []string{"--bare", "--dangerously-skip-permissions", "--allow-dangerously-skip-permissions",
+		"--permission-mode auto", "--permission-mode dontAsk"} {
 		if strings.Contains(joined, banned) {
 			t.Fatalf("banned flag %s", banned)
+		}
+	}
+	if !strings.Contains(joined, "--permission-mode default") {
+		t.Fatalf("no --permission-mode default: %s", joined)
+	}
+	// Plan mode never lets the auto mode classifier approve shell commands.
+	if !strings.Contains(joined, `--settings {"useAutoModeDuringPlan":false} --append-system-prompt-file /state/run/x/mosaic-guidance.md --add-dir /tmp/cwd`) {
+		t.Fatalf("no --settings before the guidance file and --add-dir: %s", joined)
+	}
+	for _, m := range Modes {
+		c := cfg
+		c.PermissionMode = claudePermissionMode(m)
+		c.AllowBypass = m == ModeFullAuto
+		a := claudeArgs(c, "/m", "/g.md", "/tmp/cwd", "")
+		j := strings.Join(a, " ")
+		if !strings.Contains(j, "--permission-mode "+claudePermissionMode(m)) || strings.Contains(j, "--dangerously-skip-permissions ") ||
+			strings.Contains(j, "--permission-mode auto") || strings.Contains(j, "--permission-mode dontAsk") {
+			t.Errorf("%s: args %s", m, j)
+		}
+		if strings.Contains(j, "--allow-dangerously-skip-permissions") != (m == ModeFullAuto) {
+			t.Errorf("%s: allow flag %s", m, j)
+		}
+		if a[len(a)-2] != "--add-dir" {
+			t.Errorf("%s: --add-dir not last", m)
 		}
 	}
 	if args[len(args)-2] != "--add-dir" || args[len(args)-1] != "/tmp/cwd" {
@@ -611,14 +654,20 @@ func TestClaudeArgsAreFixed(t *testing.T) {
 	if !strings.Contains(string(raw), `"env":{"ARCHIVIST_BASE_URL":"http://127.0.0.1:1"}`) {
 		t.Fatalf("mcp env %s", raw)
 	}
-	if problem := initProblem(claudeFrame{APIKeySource: "none", PermissionMode: "default"}); problem != "" {
+	if problem := initProblem(claudeFrame{APIKeySource: "none", PermissionMode: "default"}, []string{"default"}); problem != "" {
+		t.Fatal(problem)
+	}
+	if problem := initProblem(claudeFrame{APIKeySource: "none", PermissionMode: "plan"}, []string{"default", "plan"}); problem != "" {
 		t.Fatal(problem)
 	}
 	for _, f := range []claudeFrame{{APIKeySource: "ANTHROPIC_API_KEY", PermissionMode: "default"},
-		{APIKeySource: "none", PermissionMode: "auto"}, {}} {
-		if initProblem(f) == "" {
+		{APIKeySource: "none", PermissionMode: "auto"}, {APIKeySource: "none", PermissionMode: "bypassPermissions"}, {}} {
+		if initProblem(f, []string{"default"}) == "" {
 			t.Errorf("init %+v passed", f)
 		}
+	}
+	if initProblem(claudeFrame{APIKeySource: "none", PermissionMode: "default"}, nil) == "" {
+		t.Error("init passed with no expected mode")
 	}
 }
 

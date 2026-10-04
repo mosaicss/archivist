@@ -1,0 +1,20 @@
+[
+  {
+    "kind": "event",
+    "schemaVersion": "mosaic-event/3",
+    "seq": 1,
+    "ts": 0,
+    "correlationId": "event-1",
+    "origin": "daemon",
+    "type": "data-session-controls",
+    "payload": {
+      "type": "data-session-controls",
+      "data": {
+        "mode": "auto_edits",
+        "maxMode": "full_auto",
+        "model": "opus",
+        "effort": "high"
+      }
+    }
+  }
+]
