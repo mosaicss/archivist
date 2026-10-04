@@ -324,10 +324,11 @@ func newSearchCmd(version string) *cobra.Command {
 	c := &cobra.Command{
 		Use:   "search <query>",
 		Short: "Search filing passages; every result carries a permalink to cite",
-		Long: `Search SEC and SEDAR filing passages. Each result is a passage with its
-filing, company, form, date, section and a permalink url that opens the
-passage in Mosaic's filing viewer. Filter with --symbol (e.g. AAPL:US; find
-one with 'companies search'), --formtype, --date-from and --date-to. Page
+		Long: `Search global filing passages (SEC, SEDAR+, KAP and expanding). Each result
+is a passage with its filing, company, form, date, section and a permalink url
+that opens the passage in Mosaic's filing viewer. Filter with --symbol (e.g.
+AAPL for a US listing, ABX:CA for a Canadian one; find one with 'companies
+search'), --formtype, --date-from and --date-to. Page
 with --cursor when a response is truncated. --mode broad searches without
 filters. Exit 3 when nothing matched, 6 when the symbol matches several
 issuers (rerun with the full TICKER:EXCHANGE symbol).`,
@@ -337,7 +338,7 @@ issuers (rerun with the full TICKER:EXCHANGE symbol).`,
 			return runSearch(cmd, args, version, &f)
 		},
 	}
-	c.Flags().StringVar(&f.symbol, "symbol", "", "Limit to one company by symbol, e.g. AAPL:US (at most 20 characters)")
+	c.Flags().StringVar(&f.symbol, "symbol", "", "Limit to one company by symbol, e.g. AAPL (US) or ABX:CA (at most 20 characters)")
 	c.Flags().StringVar(&f.formtype, "formtype", "", "Limit to one form type, e.g. 10-K (at most 50 characters)")
 	c.Flags().StringVar(&f.dateFrom, "date-from", "", "Earliest filing date, YYYY-MM-DD")
 	c.Flags().StringVar(&f.dateTo, "date-to", "", "Latest filing date, YYYY-MM-DD")

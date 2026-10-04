@@ -17,12 +17,13 @@ following the research guidance below. Mosaic runs no model for the CLI.
    archivist companies search "Shopify" --format json
    ```
 
-   Take `symbol` from the best result, for example `SHOP:US`.
+   Take `symbol` from the best result, for example `SHOP` (US listings are bare
+   tickers; Canadian ones end in `:CA`, like `ABX:CA`).
 
 2. **Search for passages:**
 
    ```sh
-   archivist search "revenue growth drivers" --symbol SHOP:US --formtype 10-K --format json
+   archivist search "revenue growth drivers" --symbol SHOP --formtype 10-K --format json
    ```
 
    Each result is a passage record: `id` (the chunk id), `filing_id`,
@@ -42,8 +43,8 @@ following the research guidance below. Mosaic runs no model for the CLI.
 
 ## Research guidance
 
-Mosaic's research guidance for agents, the same text `archivist mcp serve` and
-the hosted Mosaic MCP server give their hosts. In the tool names, `search` is
+Mosaic's research guidance for agents in its agent-ui full form; `archivist mcp
+serve` gives its hosts the compact form of the same guidance. In the tool names, `search` is
 `archivist search`, `read_passage` is `archivist read passage`, `read_section`
 is `archivist read section`, `toc` is `archivist toc` and `companies_search` is
 `archivist companies search`.
@@ -93,8 +94,9 @@ Two "latest" intents:
 For news, wide windows bury critical events under routine filings; start tight.
 
 # Citation Rules
-- Every passage carries url, its Mosaic permalink. Cite each claim with the url of the passage that supports it as a markdown link [label](url), for example [Barrick 2025 AIF, Mineral Reserves](https://mosaic-finance.com/filings/<filing_id>/p/<chunk_id>/<token>/).
+- Cite each claim with the url of the passage that supports it, its Mosaic permalink, as a markdown link [label](url), for example [Barrick 2025 AIF, Mineral Reserves](https://mosaic-finance.com/filings/<filing_id>/p/<chunk_id>/<token>/).
 - Copy each url exactly as given, unchanged and complete; it opens that passage in the Mosaic viewer and stops working if any part is dropped.
+- When a passage's url is null, cite the company, form, filing date and section instead, without a link.
 - Never cite a bare url, a url you built or changed, or a url no tool returned.
 - Citations appear inline within sentences, next to the claim they support.
 - Do NOT cite general knowledge or your own reasoning.
@@ -118,7 +120,7 @@ For news, wide windows bury critical events under routine filings; start tight.
 
 | Flag | Meaning |
 |------|---------|
-| `--symbol` | One company, e.g. `AAPL:US` (at most 20 characters) |
+| `--symbol` | One company, e.g. `AAPL` (US) or `ABX:CA` (at most 20 characters) |
 | `--formtype` | One form type, e.g. `10-K`, `40-F`, `Annual information form` |
 | `--date-from`, `--date-to` | Filing date range, `YYYY-MM-DD` |
 | `--mode` | `semantic` (default, takes filters) or `broad` (no filters) |

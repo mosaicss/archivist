@@ -46,6 +46,7 @@ For news, wide windows bury critical events under routine filings; start tight.
 - One id per bracket, inline within sentences: [cite:1.2] [cite:3.1]. WRONG: [cite:1.2, 3.1], [1.2].
 - Never invent, change, guess or renumber an id; only cite ids you saw in a tool result. Ids are stable for the whole conversation.
 - When a passage has no cite_as, cite its url as a markdown link [label](url) instead, copied exactly and complete.
+- When it has neither cite_as nor url, cite the company, form, filing date and section instead, without a link.
 - Do NOT cite general knowledge or your own reasoning.
 
 # Behavioral Constraints
