@@ -705,3 +705,61 @@ func TestDetectCodexLogin(t *testing.T) {
 		t.Errorf("no owner home: %+v", caps[1])
 	}
 }
+
+// Story 78.31: an oversized tool output keeps as much as fits the 64 KiB frame
+// (not a 16 KB preview), and a Codex MCP result carrying its payload twice drops
+// the text copy of structuredContent before anything is cut.
+func TestToolOutputFitsTheFrame(t *testing.T) {
+	payloadOf := func(o *Outbox) any {
+		var env struct {
+			Payload map[string]any `json:"payload"`
+		}
+		raw := o.After(0)[0].raw
+		if len(raw) > maxFrameBytes {
+			t.Fatalf("frame %d bytes", len(raw))
+		}
+		_ = json.Unmarshal(raw, &env)
+		return env.Payload["output"]
+	}
+
+	// A large research result (chat-api allows 100k characters), quotes escaped twice.
+	passages := make([]any, 0, 200)
+	for i := range 200 {
+		passages = append(passages, map[string]any{"id": fmt.Sprintf("c%03d", i), "cite_as": fmt.Sprintf("[cite:1.%d]", i+1),
+			"snippet": strings.Repeat(`passage "text" `, 30)})
+	}
+	body, _ := json.Marshal(map[string]any{"results": passages})
+	o := newTestOutbox(t)
+	if o.Emit(Chunk{"type": "tool-output-available", "toolCallId": "t", "output": []any{map[string]any{"type": "text", "text": string(body)}}}) != 1 {
+		t.Fatal("large tool output not sent")
+	}
+	cut, _ := payloadOf(o).(string)
+	if !strings.Contains(cut, "truncated by archivist connect") || len(cut) < 40_000 {
+		t.Fatalf("kept %d bytes; want the frame filled, far past the old 16000 byte preview", len(cut))
+	}
+
+	// Codex: content text equal to structuredContent; dropping the copy makes it fit uncut.
+	structured := map[string]any{"results": passages[:60]}
+	text, _ := json.Marshal(structured)
+	if len(text) < maxFrameBytes/2 || 2*len(text) < maxFrameBytes {
+		t.Fatalf("fixture %d bytes does not need the dedup", len(text))
+	}
+	o2 := newTestOutbox(t)
+	out := map[string]any{"content": []any{map[string]any{"type": "text", "text": string(text)}}, "structuredContent": structured}
+	if o2.Emit(Chunk{"type": "tool-output-available", "toolCallId": "t", "output": out}) != 1 {
+		t.Fatal("codex output not sent")
+	}
+	got, _ := payloadOf(o2).(map[string]any)
+	if got == nil || len(got["content"].([]any)) != 0 || got["structuredContent"] == nil {
+		t.Fatalf("duplicate text not dropped: %T", payloadOf(o2))
+	}
+	if raw := string(o2.After(0)[0].raw); strings.Contains(raw, "truncated by archivist connect") {
+		t.Fatal("a deduplicated output that fits was cut")
+	}
+
+	// Text that differs from structuredContent is kept.
+	if _, changed := dropDuplicateText(map[string]any{"content": []any{map[string]any{"type": "text", "text": `{"other":1}`}},
+		"structuredContent": map[string]any{"results": []any{}}}); changed {
+		t.Fatal("non duplicate text dropped")
+	}
+}

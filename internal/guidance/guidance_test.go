@@ -68,7 +68,7 @@ func TestEmbeddedContent(t *testing.T) {
 		if !strings.Contains(body, "SEC, SEDAR+, KAP and expanding") || strings.Contains(body, "SEC and SEDAR") {
 			t.Errorf("%v: global filings wording", p)
 		}
-		if !strings.Contains(body, "url is the only link in any result") || !strings.Contains(body, "never as a link") &&
+		if !strings.Contains(body, "url is the only link in any result") || !strings.Contains(body, "never a link") &&
 			!strings.Contains(body, "not a link") {
 			t.Errorf("%v: no Mosaic only link rule", p)
 		}

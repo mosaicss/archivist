@@ -460,8 +460,7 @@ func TestMCPServer_InstructionsCiteOnlyURL(t *testing.T) {
 		for _, want := range []string{
 			"url is the only link in any result: cite only Mosaic links",
 			"including an exchange's or regulator's own pages",
-			"exchange_document_id (with exchange_document_kind)",
-			"never as a link",
+			"exchange_document_id is an identifier to quote, never a link",
 		} {
 			if !strings.Contains(got, want) {
 				t.Errorf("instructions missing %q:\n%s", want, got)

@@ -3,6 +3,7 @@ package connect
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"unicode/utf8"
 )
 
@@ -13,7 +14,9 @@ const (
 	maxDepth      = 32
 	maxValues     = 20000
 	truncMarker   = "\n…[truncated by archivist connect: kept %d of %d bytes]"
-	previewBytes  = 16000
+	// previewBytes cuts error texts, tool inputs and diffs. A tool output is
+	// fitted to the frame instead (fitToolOutput, Story 78.31).
+	previewBytes = 16000
 )
 
 // deltaKey returns (field, id) for chunk types that coalesce and split.
@@ -125,7 +128,7 @@ func fit(c Chunk, wrap func(Chunk) ([]byte, error)) (pieces []Chunk, notes []str
 	reduced := copyChunk(c)
 	switch c["type"] {
 	case "tool-output-available":
-		reduced["output"] = truncateValue(c["output"])
+		return fitToolOutput(c, wrap)
 	case "tool-output-error", "tool-input-error", "error":
 		if s, ok := c["errorText"].(string); ok {
 			reduced["errorText"] = truncateString(s, previewBytes)
@@ -161,6 +164,104 @@ func fit(c Chunk, wrap func(Chunk) ([]byte, error)) (pieces []Chunk, notes []str
 		return nil, nil, fmt.Errorf("%v chunk still exceeds the relay frame after truncation", c["type"])
 	}
 	return []Chunk{reduced}, []string{fmt.Sprintf("truncated %v", c["type"])}, nil
+}
+
+// fitToolOutput fits an oversized tool output into one frame (Story 78.31).
+// A Codex MCP result carrying its payload twice (text content equal to
+// structuredContent) first drops the duplicate text; if the frame still does
+// not fit, the output (as JSON text) is cut to the largest prefix whose
+// encoded frame fits, with the truncation marker, so a large research result
+// keeps every passage that fits in 64 KiB rather than its first 16 KB.
+func fitToolOutput(c Chunk, wrap func(Chunk) ([]byte, error)) ([]Chunk, []string, error) {
+	var notes []string
+	output := c["output"]
+	if deduped, ok := dropDuplicateText(output); ok {
+		output = deduped
+		reduced := copyChunk(c)
+		reduced["output"] = deduped
+		notes = append(notes, "dropped the text copy of structuredContent")
+		if raw, err := wrap(reduced); err == nil && len(raw) <= maxFrameBytes && bounded(reduced) {
+			return []Chunk{reduced}, notes, nil
+		}
+	}
+	text, ok := output.(string)
+	if !ok {
+		raw, err := json.Marshal(output)
+		if err != nil {
+			text = "[unrepresentable value removed by archivist connect]"
+		} else {
+			text = string(raw)
+		}
+	}
+	try := func(keep int) (Chunk, bool) {
+		reduced := copyChunk(c)
+		reduced["output"] = truncateString(text, keep)
+		raw, err := wrap(reduced)
+		return reduced, err == nil && len(raw) <= maxFrameBytes
+	}
+	// The largest kept prefix whose encoded frame fits (escaping inflates).
+	lo, hi := 0, len(text)
+	best, fits := try(0)
+	if !fits {
+		return nil, nil, fmt.Errorf("%v chunk exceeds the relay frame even when emptied", c["type"])
+	}
+	for lo < hi {
+		mid := lo + (hi-lo+1)/2
+		if piece, ok := try(mid); ok {
+			best, lo = piece, mid
+		} else {
+			hi = mid - 1
+		}
+	}
+	return []Chunk{best}, append(notes, fmt.Sprintf("truncated %v to %d of %d bytes", c["type"], lo, len(text))), nil
+}
+
+// dropDuplicateText removes the text content items of an MCP tool result
+// whose JSON equals its structuredContent (Codex sends both). ok reports a
+// change.
+func dropDuplicateText(output any) (any, bool) {
+	m, isMap := output.(map[string]any)
+	if !isMap || m["structuredContent"] == nil {
+		return output, false
+	}
+	content, isList := m["content"].([]any)
+	if !isList {
+		return output, false
+	}
+	kept := make([]any, 0, len(content))
+	for _, item := range content {
+		block, _ := item.(map[string]any)
+		text, isText := block["text"].(string)
+		var parsed any
+		if isText && block["type"] == "text" && json.Unmarshal([]byte(text), &parsed) == nil &&
+			reflect.DeepEqual(parsed, normalizeJSON(m["structuredContent"])) {
+			continue
+		}
+		kept = append(kept, item)
+	}
+	if len(kept) == len(content) {
+		return output, false
+	}
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	out["content"] = kept
+	return out, true
+}
+
+// normalizeJSON round-trips v through JSON so numbers and maps compare like a
+// freshly decoded value.
+func normalizeJSON(v any) any {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return v
+	}
+	var out any
+	if json.Unmarshal(raw, &out) != nil {
+		return v
+	}
+	return out
 }
 
 // truncateValue renders v as JSON text cut to previewBytes with a marker.
