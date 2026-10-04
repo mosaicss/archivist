@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mosaicss/archivist/internal/service"
 	"github.com/spf13/cobra"
 )
 
@@ -250,7 +251,25 @@ func runUpdate(ctx context.Context, cmd *cobra.Command, current string) error {
 	_, _ = fmt.Fprintf(cmd.OutOrStdout(),
 		"Updated from v%s to v%s. Run 'archivist version' to confirm.\n",
 		normalCurrent, normalLatest)
+	if home, err := os.UserHomeDir(); err == nil {
+		if hint := serviceRestartHint(home, os.Getenv("XDG_CONFIG_HOME")); hint != "" {
+			_, _ = fmt.Fprintln(cmd.OutOrStdout(), hint)
+		}
+	}
 	return nil
+}
+
+// serviceRestartHint is the one line telling a user whose background service
+// is installed to restart it on the new binary; the running service keeps the
+// old one until then. Empty when no unit or plist exists.
+func serviceRestartHint(home, configHome string) string {
+	if !filepath.IsAbs(configHome) {
+		configHome = ""
+	}
+	if _, ok := service.InstalledPath(home, configHome); !ok {
+		return ""
+	}
+	return "Your background service still runs the old version. Run 'archivist connect --install' to restart it on the new one."
 }
 
 // releasePlatform is the release archive's platform part. goreleaser ships

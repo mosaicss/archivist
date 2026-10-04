@@ -238,7 +238,9 @@ code exits 4: get a new code in Mosaic. The redeem request is sent once and
 never retried. If `ARCHIVIST_TOKEN` is set it still takes precedence in that
 terminal, and `--pair` warns about it. Pairing again replaces the saved key;
 the earlier key stays active, and `--pair` says so (masked) so you can
-revoke it in Mosaic.
+revoke it in Mosaic. A `~/.archivist/credentials` symlink (dotfiles) is kept:
+the key is written to the file it points to, which is created when it does
+not exist yet.
 
 `--install` writes a launchd agent on macOS
 (`~/Library/LaunchAgents/com.mosaic-finance.archivist.connect.plist`, loaded
@@ -260,13 +262,15 @@ stopped until `archivist connect --install`, the next login (macOS, Linux
 without lingering) or the next boot. Running `--install` again restarts it
 on the current binary. The install script does that on every update;
 after `archivist update` or `brew upgrade`, run `archivist connect --install`
-yourself so the service runs the new binary. `archivist connect --uninstall`
+yourself so the service runs the new binary (`archivist update` reminds you
+when a service is installed). `archivist connect --uninstall`
 stops and removes it and keeps the saved key.
 
 `--status` exits 0 when the service is running (Linux: the unit is active;
 macOS: the job is loaded and the daemon in `service.pid` is alive) and a key
 is saved, else 1, and prints the last log line. A loaded launchd job whose
-daemon has stopped shows "loaded, not running". `--pair`, `--install`,
+daemon has stopped shows "loaded, not running"; a job loaded a moment ago gets
+about 5 seconds to write its pid first. `--pair`, `--install`,
 `--uninstall` and `--status` are used one at a time.
 
 Windows: `install.ps1 -Pair CODE` installs and pairs; background connect is

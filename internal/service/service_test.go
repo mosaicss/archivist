@@ -323,6 +323,41 @@ func TestLaunchdStatusAndUninstall(t *testing.T) {
 	}
 }
 
+// A just bootstrapped daemon gets about 5 s to write its pid before the
+// loaded job is reported not running; the sleep is injected, nothing waits.
+func TestLaunchdStatusWaitsForStartingDaemon(t *testing.T) {
+	f := &fakeRunner{answers: map[string][]Result{"launchctl print": {{}}}}
+	opts := testOpts(t, f)
+	var slept time.Duration
+	polls := 0
+	opts.Sleep = func(d time.Duration) {
+		slept += d
+		polls++
+		if polls == 3 {
+			if _, err := WritePID(opts.Home, os.Getpid()); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	m := newLaunchd(opts)
+	st, err := m.Status(context.Background())
+	if err != nil || !st.Loaded || !st.Running || polls != 3 {
+		t.Fatalf("pid appears while polling: %+v %v polls=%d", st, err, polls)
+	}
+	if err := os.Remove(PIDPath(opts.Home)); err != nil {
+		t.Fatal(err)
+	}
+	slept, polls = 0, 0
+	m.opts.Sleep = func(d time.Duration) { slept += d; polls++ }
+	st, err = m.Status(context.Background())
+	if err != nil || !st.Loaded || st.Running {
+		t.Fatalf("pid never appears: %+v %v", st, err)
+	}
+	if slept < 4*time.Second || slept > 6*time.Second {
+		t.Fatalf("waited %v in %d polls, want about 5 s", slept, polls)
+	}
+}
+
 // WritePID's remover leaves a pid file another daemon has since replaced.
 func TestWritePIDRemoverKeepsNewerDaemon(t *testing.T) {
 	home := t.TempDir()

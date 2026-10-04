@@ -159,6 +159,16 @@ func New(opts Options) (Manager, error) {
 	return newPlatform(opts)
 }
 
+// InstalledPath is this platform's unit or plist path and whether that file
+// exists; false where no background service exists (Windows).
+func InstalledPath(home, configHome string) (string, bool) {
+	m, err := New(Options{Home: home, ConfigHome: configHome})
+	if err != nil {
+		return "", false
+	}
+	return m.Path(), fileExists(m.Path())
+}
+
 // LogPath is the service mode log file, ~/.archivist/connect/connect.log.
 func LogPath(home string) string {
 	return filepath.Join(home, ".archivist", "connect", "connect.log")

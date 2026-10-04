@@ -9,10 +9,12 @@
 # install.sh under a throwaway HOME with stub systemctl and loginctl first on
 # PATH. Nothing touches the real ~/.archivist, ~/.config or service manager.
 #
-# Asserts: install + pair + unit written; a tampered archive exits 1 with
-# nothing installed; a failed service install after pairing prints the
-# resume step and exits non-zero; --no-service still reinstalls a service
-# that is already installed.
+# Asserts: install + pair + unit written; a re-pair saves the new key and
+# notes the earlier one (masked only), and --no-service still reinstalls a
+# service that is already installed; an update without --pair reinstalls the
+# service; a stale brew channel with no installed cask installs directly; a
+# failed service install after pairing prints the resume step and exits
+# non-zero; a tampered archive exits 1 with nothing installed.
 
 set -euo pipefail
 
@@ -137,7 +139,7 @@ run_install() {
   mkdir -p "$home"
   env -i \
     HOME="$home" \
-    PATH="$WORK/stubs:/usr/local/bin:/usr/bin:/bin" \
+    PATH="${EXTRA_PATH:+$EXTRA_PATH:}$WORK/stubs:/usr/local/bin:/usr/bin:/bin" \
     TMPDIR="$WORK" \
     LANG=C.UTF-8 \
     STUB_LOG="$WORK/calls.log" \
@@ -184,7 +186,55 @@ set -e
 $OUT"
 grep -q 'systemctl --user enable --now archivist-connect.service' "$WORK/calls.log" \
   || fail "--no-service did not restart the installed service"
-pass "--no-service restarts an installed service on the new key"
+OLD_KEY="ak_replay_abcde12345$(printf 'x%.0s' $(seq 1 24))"
+NEW_KEY="ak_replay_abcde12346$(printf 'x%.0s' $(seq 1 24))"
+[ "$(cat "$CRED")" = "$NEW_KEY" ] || fail "re-pair did not save the new key"
+case "$OUT" in *"Note: the key saved here before (ak_replay_...xxx) is still active."*) ;; *) fail "no earlier key note:
+$OUT" ;; esac
+case "$OUT" in *"$OLD_KEY"*|*"$NEW_KEY"*) fail "a full key was printed" ;; esac
+pass "re-pair saves the new key, notes the earlier one masked, and --no-service restarts the installed service"
+
+# --- 2b. an update without --pair reinstalls the installed service ------------
+: > "$WORK/calls.log"
+REDEEMS_BEFORE="$(wc -l < "$WORK/redeem.log")"
+set +e
+OUT="$(run_install "$H1" v9.9.9 2>&1)"
+CODE=$?
+set -e
+[ "$CODE" = 0 ] || fail "update only exited $CODE:
+$OUT"
+grep -q 'systemctl --user enable --now archivist-connect.service' "$WORK/calls.log" \
+  || fail "update only did not rerun connect --install"
+[ "$(wc -l < "$WORK/redeem.log")" = "$REDEEMS_BEFORE" ] || fail "update only called redeem"
+[ "$(cat "$CRED")" = "$NEW_KEY" ] || fail "update only changed the saved key"
+pass "update without --pair reruns connect --install"
+
+# --- 2c. a stale brew channel with no installed cask installs directly --------
+H5="$WORK/home5"
+mkdir -p "$H5/.archivist" "$WORK/brewstub"
+printf 'brew\n' > "$H5/.archivist/install-channel"
+cat > "$WORK/brewstub/brew" <<'SH'
+#!/bin/sh
+echo "brew $*" >> "$STUB_LOG"
+case "$*" in
+  "list --cask "*) exit 1 ;;
+esac
+echo "unexpected brew call: $*" >&2
+exit 3
+SH
+chmod 0755 "$WORK/brewstub/brew"
+: > "$WORK/calls.log"
+set +e
+OUT="$(EXTRA_PATH="$WORK/brewstub" run_install "$H5" v9.9.9 2>&1)"
+CODE=$?
+set -e
+[ "$CODE" = 0 ] || fail "stale brew channel exited $CODE:
+$OUT"
+grep -q '^brew list --cask archivist$' "$WORK/calls.log" || fail "the cask was not checked"
+if grep -q '^brew upgrade' "$WORK/calls.log"; then fail "brew upgrade ran for a missing cask"; fi
+[ -x "$H5/.local/bin/archivist" ] || fail "stale brew channel did not install directly"
+[ "$(tr -d '[:space:]' < "$H5/.archivist/install-channel")" = curl-sh ] || fail "channel file not rewritten to curl-sh"
+pass "stale brew channel without the cask installs directly and records curl-sh"
 
 # --- 3. a failed service install after pairing prints the resume step --------
 H3="$WORK/home3"

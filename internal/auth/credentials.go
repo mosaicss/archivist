@@ -161,18 +161,50 @@ func SaveToken(token string) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return "", fmt.Errorf("create %s: %w", filepath.Dir(path), err)
 	}
-	target := path
-	if info, lerr := os.Lstat(path); lerr == nil && info.Mode()&os.ModeSymlink != 0 {
-		resolved, rerr := filepath.EvalSymlinks(path)
-		if rerr != nil {
-			return "", fmt.Errorf("resolve credentials link %s: %w", path, rerr)
+	target, err := credentialsTarget(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve credentials link %s: %w", path, err)
+	}
+	if target != path {
+		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+			return "", fmt.Errorf("create %s: %w", filepath.Dir(target), err)
 		}
-		target = resolved
 	}
 	if err := writeFileAtomic(target, []byte(token+"\n")); err != nil {
 		return "", fmt.Errorf("write credentials file %s: %w", path, err)
 	}
 	return path, nil
+}
+
+// credentialsTarget is the file SaveToken replaces: path itself, or, when
+// path is a symlink (dotfiles), the file it points to, so the link survives.
+// A link whose target does not exist yet (a fresh dotfiles checkout) is
+// followed with os.Readlink, relative targets against the link's directory.
+func credentialsTarget(path string) (string, error) {
+	target := path
+	for hops := 0; ; hops++ {
+		info, err := os.Lstat(target)
+		if errors.Is(err, os.ErrNotExist) {
+			return target, nil
+		}
+		if err != nil {
+			return "", err
+		}
+		if info.Mode()&os.ModeSymlink == 0 {
+			return target, nil
+		}
+		if hops >= 40 {
+			return "", errors.New("too many levels of symbolic links")
+		}
+		next, err := os.Readlink(target)
+		if err != nil {
+			return "", err
+		}
+		if !filepath.IsAbs(next) {
+			next = filepath.Join(filepath.Dir(target), next)
+		}
+		target = next
+	}
 }
 
 // writeFileAtomic writes data to a 0600 temporary file in path's directory,

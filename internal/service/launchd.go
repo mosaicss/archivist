@@ -49,6 +49,7 @@ const (
 	launchdUnloadWait   = 40 // polls (10 s)
 	launchdBootstraps   = 4
 	launchdBootstrapGap = time.Second
+	launchdStartWait    = 20 // polls (5 s) for a just started daemon's pid
 )
 
 // Install writes the plist, boots out a loaded copy and waits until it has
@@ -139,7 +140,9 @@ func (l *launchd) Uninstall(ctx context.Context) (bool, error) {
 
 // Status reads launchctl print's exit code (loaded or not) and the daemon's
 // service.pid: a loaded job whose daemon exited 0 (superseded, no harness,
-// revoked key) stays loaded, so running also needs that pid alive.
+// revoked key) stays loaded, so running also needs that pid alive. A daemon
+// bootstrapped a moment ago (install.sh runs --status right after --install)
+// may not have written its pid yet, so a loaded job gets about 5 s for it.
 func (l *launchd) Status(ctx context.Context) (Status, error) {
 	st := Status{Manager: l.Name(), Path: l.Path(), Installed: fileExists(l.Path())}
 	loaded, err := l.loaded(ctx)
@@ -147,6 +150,17 @@ func (l *launchd) Status(ctx context.Context) (Status, error) {
 		return st, err
 	}
 	st.Loaded = loaded
-	st.Running = loaded && l.opts.alive(readPID(l.opts.Home))
-	return st, nil
+	if !loaded {
+		return st, nil
+	}
+	for i := 0; ; i++ {
+		if l.opts.alive(readPID(l.opts.Home)) {
+			st.Running = true
+			return st, nil
+		}
+		if i >= launchdStartWait || ctx.Err() != nil {
+			return st, nil
+		}
+		l.opts.sleep(launchdPoll)
+	}
 }

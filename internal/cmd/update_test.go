@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
+	"github.com/mosaicss/archivist/internal/service"
 	"github.com/spf13/cobra"
 )
 
@@ -157,6 +159,39 @@ func TestReleasePlatform(t *testing.T) {
 	for in, want := range cases {
 		if got := releasePlatform(in[0], in[1]); got != want {
 			t.Errorf("%v: %s, want %s", in, got, want)
+		}
+	}
+}
+
+// After a self update, an installed background service gets a one line
+// hint to restart it on the new binary; no unit or plist, no hint.
+func TestServiceRestartHint(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no background service on windows")
+	}
+	home := t.TempDir()
+	if hint := serviceRestartHint(home, ""); hint != "" {
+		t.Fatalf("hint without a service: %q", hint)
+	}
+	path, ok := service.InstalledPath(home, "")
+	if ok || path == "" {
+		t.Fatalf("InstalledPath before install: %q %v", path, ok)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("unit"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	hint := serviceRestartHint(home, "relative/ignored")
+	if !strings.Contains(hint, "archivist connect --install") || strings.Contains(hint, "\n") {
+		t.Fatalf("hint %q", hint)
+	}
+	// An absolute XDG_CONFIG_HOME moves the Linux unit; the hint follows it.
+	if runtime.GOOS == "linux" {
+		xdg := t.TempDir()
+		if hint := serviceRestartHint(home, xdg); hint != "" {
+			t.Fatalf("hint for a unit outside XDG_CONFIG_HOME: %q", hint)
 		}
 	}
 }
