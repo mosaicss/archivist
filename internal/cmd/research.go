@@ -331,7 +331,8 @@ AAPL for a US listing, ABX:CA for a Canadian one; find one with 'companies
 search'), --formtype, --date-from and --date-to. Page
 with --cursor when a response is truncated. --mode broad searches without
 filters. Exit 3 when nothing matched, 6 when the symbol matches several
-issuers (rerun with the full TICKER:EXCHANGE symbol).`,
+issuers (rerun with the exact symbol 'companies search' returns: bare for US
+listings, ending in :CA or :TR otherwise).`,
 		Args:        cobra.MaximumNArgs(1),
 		Annotations: researchAnnotations("Search filings", "0,2,3,4,5,6,7"),
 		RunE: func(cmd *cobra.Command, args []string) error {

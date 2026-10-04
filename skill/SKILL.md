@@ -43,8 +43,9 @@ following the research guidance below. Mosaic runs no model for the CLI.
 
 ## Research guidance
 
-Mosaic's research guidance for agents in its agent-ui full form; `archivist mcp
-serve` gives its hosts the compact form of the same guidance. In the tool names, `search` is
+Mosaic's research guidance for agents in its agent-ui full form. `archivist mcp
+serve` gives its hosts the agent-ui compact form, or with a task token (`archivist
+connect`) the mosaic-ui compact form, which cites each passage's `cite_as`. In the tool names, `search` is
 `archivist search`, `read_passage` is `archivist read passage`, `read_section`
 is `archivist read section`, `toc` is `archivist toc` and `companies_search` is
 `archivist companies search`.
