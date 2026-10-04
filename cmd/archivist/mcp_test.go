@@ -443,31 +443,34 @@ func TestMCPServer_SearchRoundTrip(t *testing.T) {
 	}
 }
 
-// TestMCPServer_InstructionsCiteOnlyURL: the initialize instructions name the
-// permalink url as the only link to cite and the exchange document id as an
-// identifier, never a link (78-drop-source-urls).
+// TestMCPServer_InstructionsCiteOnlyURL: the initialize instructions (the
+// guidance derived compact text, Story 78.31) name the permalink url as the
+// only link to cite and the exchange document id as an identifier, never a
+// link (78-drop-source-urls), for both token modes.
 func TestMCPServer_InstructionsCiteOnlyURL(t *testing.T) {
 	cs := newMCPSession(t, "")
 	init := cs.InitializeResult()
 	if init == nil {
 		t.Fatal("no initialize result")
 	}
-	got := init.Instructions
-	if got != mcpInstructions {
-		t.Fatalf("initialize instructions differ from mcpInstructions:\n%s", got)
+	if init.Instructions != embeddedMCPInstructions(false) {
+		t.Fatalf("initialize instructions differ from the embedded agent-ui guidance:\n%s", init.Instructions)
 	}
-	for _, want := range []string{
-		"That url is the only link: cite only url",
-		"exchange_document_id (with exchange_document_kind)",
-		"an identifier to quote, not a link",
-	} {
-		if !strings.Contains(got, want) {
-			t.Errorf("instructions missing %q:\n%s", want, got)
+	for _, got := range []string{init.Instructions, embeddedMCPInstructions(true)} {
+		for _, want := range []string{
+			"url is the only link in any result: cite only Mosaic links",
+			"including an exchange's or regulator's own pages",
+			"exchange_document_id (with exchange_document_kind)",
+			"never as a link",
+		} {
+			if !strings.Contains(got, want) {
+				t.Errorf("instructions missing %q:\n%s", want, got)
+			}
 		}
-	}
-	for _, banned := range []string{"source_url", "sec.gov", "quotemedia", "sedarplus", "kap.org.tr"} {
-		if strings.Contains(strings.ToLower(got), banned) {
-			t.Errorf("instructions mention %q:\n%s", banned, got)
+		for _, banned := range []string{"source_url", "sec.gov", "quotemedia", "sedarplus", "kap.org.tr", "tmx"} {
+			if strings.Contains(strings.ToLower(got), banned) {
+				t.Errorf("instructions mention %q:\n%s", banned, got)
+			}
 		}
 	}
 }

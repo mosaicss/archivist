@@ -68,8 +68,14 @@ func TestEmbeddedContent(t *testing.T) {
 		if !strings.Contains(body, "SEC, SEDAR+, KAP and expanding") || strings.Contains(body, "SEC and SEDAR") {
 			t.Errorf("%v: global filings wording", p)
 		}
-		if !strings.Contains(body, "Never output source_url") {
-			t.Errorf("%v: no upstream URL rule", p)
+		if !strings.Contains(body, "url is the only link in any result") || !strings.Contains(body, "never as a link") &&
+			!strings.Contains(body, "not a link") {
+			t.Errorf("%v: no Mosaic only link rule", p)
+		}
+		for _, banned := range []string{"source_url", "sec.gov", "quotemedia", "sedarplus", "kap.org.tr", "tmx"} {
+			if strings.Contains(strings.ToLower(body), banned) {
+				t.Errorf("%v: mentions %q", p, banned)
+			}
 		}
 		if p[1] == FormCompact && (len(body) > 2048-200-1 || strings.ContainsAny(body, "-–—")) {
 			t.Errorf("%v: compact length %d or a hyphen", p, len(body))
