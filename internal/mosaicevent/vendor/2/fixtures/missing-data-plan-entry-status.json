@@ -1,0 +1,13 @@
+[
+  {
+    "type": "data-plan",
+    "data": {
+      "entries": [
+        {
+          "content": "fixture",
+          "priority": "high"
+        }
+      ]
+    }
+  }
+]

@@ -35,12 +35,13 @@ type outEntry struct {
 }
 
 // Outbox orders a session's outgoing events. Each event is wrapped once,
-// validated by the mosaic-event/1 parser and stored, so every resend is
-// byte-identical; acknowledged events leave the outbox.
+// stamped with its contract version (eventVersion), validated by that
+// version's parser and stored, so every resend is byte-identical;
+// acknowledged events leave the outbox.
 type Outbox struct {
-	parser *mosaicevent.Parser
-	log    *Logger
-	now    func() time.Time
+	parsers *mosaicevent.Set
+	log     *Logger
+	now     func() time.Time
 
 	mu      sync.Mutex
 	runID   string
@@ -52,8 +53,8 @@ type Outbox struct {
 }
 
 // NewOutbox returns an outbox whose correlation ids are <runID>:<seq>.
-func NewOutbox(parser *mosaicevent.Parser, log *Logger) *Outbox {
-	o := &Outbox{parser: parser, log: log, now: time.Now, runID: newRunID(),
+func NewOutbox(parsers *mosaicevent.Set, log *Logger) *Outbox {
+	o := &Outbox{parsers: parsers, log: log, now: time.Now, runID: newRunID(),
 		notify: make(chan struct{}, 1), drained: make(chan struct{})}
 	close(o.drained)
 	return o
@@ -96,7 +97,7 @@ func (o *Outbox) Emit(c Chunk) int {
 			err = fmt.Errorf("frame of %d bytes", len(raw))
 		}
 		if err == nil {
-			_, err = o.parser.Parse(raw, "envelope")
+			_, err = o.parsers.Parser(env.SchemaVersion).Parse(raw, "envelope")
 		}
 		if err != nil {
 			o.dropped++
@@ -124,8 +125,19 @@ func (o *Outbox) Emit(c Chunk) int {
 	return queued
 }
 
+// eventVersion is the contract version an event type is stamped with:
+// mosaic-event/2 only for data-auth-prompt (its optional code and expiresAt),
+// mosaic-event/1 for everything else, so ordinary turns stay readable by
+// relays and consumers that predate v2.
+func eventVersion(typ string) string {
+	if typ == "data-auth-prompt" {
+		return mosaicevent.Version2
+	}
+	return mosaicevent.Version
+}
+
 func (o *Outbox) envelope(typ string, seq int64, p Chunk) envelope {
-	return envelope{Kind: "event", SchemaVersion: mosaicevent.Version, Seq: seq,
+	return envelope{Kind: "event", SchemaVersion: eventVersion(typ), Seq: seq,
 		TS: o.now().UnixMilli(), CorrelationID: fmt.Sprintf("%s:%d", o.runID, seq),
 		Origin: "daemon", Type: typ, Payload: p}
 }

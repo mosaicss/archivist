@@ -1,0 +1,32 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://mosaic-finance.com/schemas/mosaic-event/2/data-patch.json",
+  "type": "object",
+  "properties": {
+    "toolCallId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "path": {
+      "type": "string",
+      "minLength": 1
+    },
+    "diff": {
+      "type": "string"
+    },
+    "operation": {
+      "enum": [
+        "add",
+        "update",
+        "delete"
+      ]
+    }
+  },
+  "required": [
+    "toolCallId",
+    "path",
+    "diff",
+    "operation"
+  ],
+  "additionalProperties": false
+}

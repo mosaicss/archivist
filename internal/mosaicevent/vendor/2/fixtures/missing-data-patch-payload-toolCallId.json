@@ -1,0 +1,10 @@
+[
+  {
+    "type": "data-patch",
+    "data": {
+      "path": "fixture",
+      "diff": "fixture",
+      "operation": "add"
+    }
+  }
+]

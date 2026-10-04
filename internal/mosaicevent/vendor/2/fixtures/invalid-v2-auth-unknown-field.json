@@ -1,0 +1,13 @@
+[
+  {
+    "type": "data-auth-prompt",
+    "data": {
+      "promptId": "fixture",
+      "provider": "codex",
+      "message": "fixture",
+      "url": "https://auth.openai.com/codex/device",
+      "code": "ABCD-1234",
+      "verificationUri": "https://x"
+    }
+  }
+]

@@ -1,0 +1,8 @@
+[
+  {
+    "type": "text-delta",
+    "id": "a",
+    "delta": "x",
+    "unknown": true
+  }
+]

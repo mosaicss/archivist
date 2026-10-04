@@ -1,0 +1,9 @@
+[
+  {
+    "type": "data-permission-scope",
+    "data": {
+      "approvalId": "a",
+      "scope": "allow_always"
+    }
+  }
+]

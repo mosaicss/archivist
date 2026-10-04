@@ -1,0 +1,18 @@
+[
+  {
+    "kind": "event",
+    "schemaVersion": "mosaic-event/1",
+    "seq": 1,
+    "ts": 0,
+    "correlationId": "event-1",
+    "origin": "relay",
+    "type": "data-session-status",
+    "payload": {
+      "type": "data-session-status",
+      "data": {
+        "sessionId": "7c1b6a0e-3f52-4c1d-9a8e-2b4f6d8e0a11",
+        "status": "running"
+      }
+    }
+  }
+]

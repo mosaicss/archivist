@@ -1,0 +1,7 @@
+[
+  {
+    "type": "tool-output-error",
+    "toolCallId": "synthetic-failed-mcp",
+    "errorText": "MCP tool call failed"
+  }
+]

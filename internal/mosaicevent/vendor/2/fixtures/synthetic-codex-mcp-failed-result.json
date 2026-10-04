@@ -1,0 +1,7 @@
+[
+  {
+    "type": "tool-output-error",
+    "toolCallId": "synthetic-failed-mcp-result",
+    "errorText": "{\"content\":[{\"type\":\"text\",\"text\":\"Permission denied: document access revoked\"}],\"structuredContent\":null,\"_meta\":null}"
+  }
+]

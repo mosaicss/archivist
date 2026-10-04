@@ -97,7 +97,7 @@ func (f *fakeChatAPI) mintCount() int {
 type consumer struct {
 	t      *testing.T
 	env    e2eEnv
-	parser *mosaicevent.Parser
+	parser *mosaicevent.Set
 }
 
 func (c *consumer) headers() http.Header {
@@ -201,7 +201,7 @@ func (u *userConsumer) claudeOnline() bool {
 type stream struct {
 	t      *testing.T
 	ws     *websocket.Conn
-	parser *mosaicevent.Parser
+	parser *mosaicevent.Set
 	mu     sync.Mutex
 	events []map[string]any
 	raw    []string
@@ -439,7 +439,7 @@ func liveSessionProcesses() []string {
 func TestE2EFakeClaude(t *testing.T) {
 	env := loadE2E(t)
 	claudeBin, archivistBin := testBinaries(t)
-	parser, err := mosaicevent.New()
+	parser, err := mosaicevent.NewSet()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -650,7 +650,7 @@ func TestE2ELive(t *testing.T) {
 	if evidence == "" {
 		t.Fatal("CONNECT_E2E_EVIDENCE is required for live runs")
 	}
-	parser, _ := mosaicevent.New()
+	parser, _ := mosaicevent.NewSet()
 	api := newFakeChatAPI(t, env.key)
 	home, _ := os.UserHomeDir()
 	daemonEnv := []string{

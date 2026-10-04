@@ -57,7 +57,7 @@ func TestE2EFakeCodex(t *testing.T) {
 	env := loadE2E(t)
 	_, archivistBin := testBinaries(t)
 	codexBin := testCodexBinary(t)
-	parser, err := mosaicevent.New()
+	parser, err := mosaicevent.NewSet()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -289,7 +289,7 @@ func TestE2ELiveCodex(t *testing.T) {
 	if evidence == "" {
 		t.Fatal("CONNECT_E2E_EVIDENCE is required for live runs")
 	}
-	parser, _ := mosaicevent.New()
+	parser, _ := mosaicevent.NewSet()
 	api := newFakeChatAPI(t, env.key)
 	home, _ := os.UserHomeDir()
 	daemonEnv := []string{

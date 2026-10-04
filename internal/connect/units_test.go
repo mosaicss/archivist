@@ -229,7 +229,7 @@ func TestCoalescer(t *testing.T) {
 }
 
 func newTestOutbox(t *testing.T) *Outbox {
-	p, err := mosaicevent.New()
+	p, err := mosaicevent.NewSet()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -318,6 +318,98 @@ func TestOutboxFrameGuard(t *testing.T) {
 	o4 := newTestOutbox(t)
 	if n := o4.Emit(Chunk{"type": "start", "messageId": strings.Repeat("m", 70_000), "messageMetadata": map[string]any{"schemaVersion": mosaicevent.Version}}); n != 0 {
 		t.Fatal("oversized start sent")
+	}
+}
+
+// emittedEnvelopes decodes the outbox's queued envelopes.
+func emittedEnvelopes(t *testing.T, o *Outbox) []map[string]any {
+	t.Helper()
+	var out []map[string]any
+	for _, e := range o.After(0) {
+		var env map[string]any
+		if err := json.Unmarshal(e.raw, &env); err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, env)
+	}
+	return out
+}
+
+func TestOutboxStampsV2OnlyOnAuthPrompts(t *testing.T) {
+	o := newTestOutbox(t)
+	deadline := time.UnixMilli(1_791_000_000_000)
+	for _, c := range []Chunk{
+		{"type": "data-session-status", "data": map[string]any{"sessionId": unitSID, "status": "starting"}},
+		authPromptChunk("codex", "login-1", "https://auth.openai.com/codex/device", "enter ABCD-1234", "ABCD-1234", deadline),
+		authPromptChunk("claude", "claude-signin-x", "https://claude.com/cai/oauth/authorize?x=1", "send the code", "", deadline),
+		{"type": "start", "messageId": "m", "messageMetadata": map[string]any{"schemaVersion": mosaicevent.Version}},
+		{"type": "text-delta", "id": "a", "delta": "hi"},
+	} {
+		if n := o.Emit(c); n != 1 {
+			t.Fatalf("%v queued %d", c["type"], n)
+		}
+	}
+	var got []string
+	for _, env := range emittedEnvelopes(t, o) {
+		got = append(got, env["type"].(string)+"="+env["schemaVersion"].(string))
+	}
+	want := "data-session-status=mosaic-event/1,data-auth-prompt=mosaic-event/2,data-auth-prompt=mosaic-event/2," +
+		"start=mosaic-event/1,text-delta=mosaic-event/1"
+	if strings.Join(got, ",") != want {
+		t.Fatalf("stamps %v", got)
+	}
+	envs := emittedEnvelopes(t, o)
+	codex := envs[1]["payload"].(map[string]any)["data"].(map[string]any)
+	if codex["code"] != "ABCD-1234" || codex["expiresAt"] != float64(1_791_000_000_000) || codex["message"] != "enter ABCD-1234" {
+		t.Fatalf("codex prompt %v", codex)
+	}
+	claude := envs[2]["payload"].(map[string]any)["data"].(map[string]any)
+	if _, ok := claude["code"]; ok || claude["expiresAt"] != float64(1_791_000_000_000) {
+		t.Fatalf("claude prompt %v", claude)
+	}
+	// v2-only content on a v1-stamped event is refused, never sent.
+	if n := o.Emit(Chunk{"type": "data-session-status", "data": map[string]any{"sessionId": unitSID, "status": "lost"}}); n != 0 {
+		t.Fatal("a v1 event with a v2 status was queued")
+	}
+	// An auth prompt the v2 contract refuses is dropped.
+	bad := authPromptChunk("codex", "login-2", "", "m", "", deadline)
+	bad["data"].(map[string]any)["code"] = "has space"
+	if n := o.Emit(bad); n != 0 {
+		t.Fatal("an invalid auth prompt was queued")
+	}
+}
+
+func TestAuthPromptOmitsCodeTheContractRefuses(t *testing.T) {
+	deadline := time.Now().Add(5 * time.Minute)
+	long := strings.Repeat("A", 64)
+	for _, c := range []struct {
+		code string
+		keep bool
+	}{
+		{"FAKE-1234", true},
+		{long, true},
+		{"!~", true},
+		{"", false},
+		{long + "A", false},
+		{"ABCD 1234", false},
+		{"ABCD\t1234", false},
+		{"ABCD-1234\n", false},
+		{"ÄBCD-1234", false},
+		{"ABCD\x7f", false},
+		{"ABCD\x00", false},
+	} {
+		chunk := authPromptChunk("codex", "login", "https://auth.openai.com/codex/device", "enter the code", c.code, deadline)
+		data := chunk["data"].(map[string]any)
+		if _, ok := data["code"]; ok != c.keep {
+			t.Errorf("code %q kept=%v, want %v", c.code, ok, c.keep)
+		}
+		if data["expiresAt"] != deadline.UnixMilli() || data["message"] != "enter the code" {
+			t.Errorf("code %q: prompt %v", c.code, data)
+		}
+		// Every prompt the daemon builds is a valid v2 event.
+		if n := newTestOutbox(t).Emit(chunk); n != 1 {
+			t.Errorf("code %q: prompt not queued", c.code)
+		}
 	}
 }
 

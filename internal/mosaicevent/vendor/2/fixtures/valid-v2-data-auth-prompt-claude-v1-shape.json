@@ -1,0 +1,11 @@
+[
+  {
+    "type": "data-auth-prompt",
+    "data": {
+      "promptId": "fixture",
+      "provider": "claude",
+      "message": "fixture",
+      "url": "https://claude.ai/oauth"
+    }
+  }
+]

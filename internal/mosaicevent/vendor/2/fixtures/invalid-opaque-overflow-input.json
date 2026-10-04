@@ -1,0 +1,12 @@
+[
+  {
+    "type": "tool-input-available",
+    "toolCallId": "opaque",
+    "toolName": "synthetic",
+    "input": {
+      "nested": [
+        1e400
+      ]
+    }
+  }
+]

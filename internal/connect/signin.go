@@ -22,10 +22,12 @@ import (
 // Posture-1 sign-in (Story 78.22). In the session-bound sandbox mode a
 // harness that is installed but logged out signs in before the first turn:
 // the user gets a data-auth-prompt on the session socket and completes the
-// login in a browser. mosaic-event/1 has no code or expiry fields, so the
-// code (Codex) and the expiry travel in the prompt's message. The login
-// result is never trusted on its own: the session's normal subscription
-// proof (claude auth status, Codex account/read) runs afterwards.
+// login in a browser. The prompt is a mosaic-event/2 data-auth-prompt: it
+// carries the Codex device code as code and the sign-in deadline as
+// expiresAt, and its message keeps the full text (code and expiry included)
+// so a renderer that ignores the v2 fields still works. The login result is
+// never trusted on its own: the session's normal subscription proof (claude
+// auth status, Codex account/read) runs afterwards.
 
 // signInTimeout bounds one sign-in (a var so tests can shorten it).
 var signInTimeout = 5 * time.Minute
@@ -95,14 +97,41 @@ func (s *session) signInCommand(c sessionCmd) (text string, stop bool) {
 	return "", false
 }
 
-// emitAuthPrompt sends the sign-in card (mosaic-event/1 data-auth-prompt).
-func (s *session) emitAuthPrompt(provider, promptID, link, message string) {
+// emitAuthPrompt sends the sign-in card (a mosaic-event/2 data-auth-prompt;
+// the outbox stamps that version on this event type only). code is set only
+// when it fits the contract; expiresAt is the sign-in deadline.
+func (s *session) emitAuthPrompt(provider, promptID, link, message, code string, deadline time.Time) {
 	s.flushCoalesced()
-	data := map[string]any{"promptId": promptID, "provider": provider, "message": message}
+	s.outbox.Emit(authPromptChunk(provider, promptID, link, message, code, deadline))
+}
+
+// authPromptChunk builds the data-auth-prompt chunk. A code the contract
+// would refuse is left out (the message still carries it) rather than
+// dropping the whole prompt as an invalid event.
+func authPromptChunk(provider, promptID, link, message, code string, deadline time.Time) Chunk {
+	data := map[string]any{"promptId": promptID, "provider": provider, "message": message,
+		"expiresAt": deadline.UnixMilli()}
 	if link != "" {
 		data["url"] = link
 	}
-	s.outbox.Emit(Chunk{"type": "data-auth-prompt", "data": data})
+	if authCode(code) {
+		data["code"] = code
+	}
+	return Chunk{"type": "data-auth-prompt", "data": data}
+}
+
+// authCode reports whether code fits the mosaic-event/2 data-auth-prompt
+// code: 1 to 64 printable ASCII characters, no whitespace ("!" to "~").
+func authCode(code string) bool {
+	if code == "" || len(code) > 64 {
+		return false
+	}
+	for i := 0; i < len(code); i++ {
+		if code[i] < '!' || code[i] > '~' {
+			return false
+		}
+	}
+	return true
 }
 
 // expiryText is the plain-English expiry carried in a prompt message.
@@ -230,7 +259,7 @@ func (s *session) signInCodex(ctx context.Context, deadline time.Time) (signInRe
 	s.emitAuthPrompt("codex", start.LoginID, start.VerificationURL, fmt.Sprintf(
 		"Sign in to Codex with ChatGPT: open the link, sign in, then enter the code %s. %s "+
 			"Device code login must be enabled in your ChatGPT security settings.",
-		start.UserCode, expiryText(deadline)))
+		start.UserCode, expiryText(deadline)), start.UserCode, deadline)
 	s.log.Printf("codex device code sign-in prompt sent (login %s)", start.LoginID)
 
 	timer := time.NewTimer(time.Until(deadline))
@@ -367,7 +396,7 @@ func (s *session) signInClaude(ctx context.Context, deadline time.Time) (signInR
 					prompted = true
 					s.emitAuthPrompt("claude", "claude-signin-"+s.outbox.RunID(), link,
 						"Sign in to Claude Code with your Claude subscription: open the link and sign in, "+
-							"then send the code the page shows as your next message. "+expiryText(deadline))
+							"then send the code the page shows as your next message. "+expiryText(deadline), "", deadline)
 					s.log.Printf("claude sign-in prompt sent")
 				}
 			}

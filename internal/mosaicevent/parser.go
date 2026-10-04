@@ -1,4 +1,6 @@
-// Package mosaicevent validates mosaic-event/1 before decoding the supported Grafana wire types.
+// Package mosaicevent validates mosaic-event/1 and mosaic-event/2 before decoding the supported
+// Grafana wire types. Each version has its own vendored bundle and parser; a Set dispatches on
+// the input's schemaVersion.
 package mosaicevent
 
 import (
@@ -17,43 +19,87 @@ import (
 	aisdk "github.com/grafana/ai-sdk"
 )
 
+// Version is mosaic-event/1: New, FromBundle and VerifyBundle keep meaning this version.
 const Version = "mosaic-event/1"
+
+// Version2 adds the optional data-auth-prompt code and expiresAt, the session status lost and
+// relay-origin data-session-status envelopes.
+const Version2 = "mosaic-event/2"
 
 // Explicit patterns keep installed Node dependencies and generated files out of the binary.
 //
 //go:embed vendor/1/*.json vendor/1/*.sha256 vendor/1/*.md vendor/1/fixtures/*.json vendor/1/fixtures/raw/* vendor/1/contract/*.ts vendor/1/contract/*.json vendor/1/contract/.npmrc
 var assets embed.FS
 
+// The v2 bundle has no contract package: schemas, corpus, fixtures, provenance and stamp.mjs.
+//
+//go:embed vendor/2/*.json vendor/2/*.sha256 vendor/2/*.md vendor/2/*.mjs vendor/2/fixtures/*.json
+var assetsV2 embed.FS
+
+// bundles maps each supported version to its embedded vendored bundle.
+var bundles = map[string]struct {
+	fs  embed.FS
+	dir string
+}{
+	Version:  {assets, "vendor/1"},
+	Version2: {assetsV2, "vendor/2"},
+}
+
 // Parsed retains exact input bytes: SDK serialization omits some optional v7 fields.
 type Parsed struct {
+	// Version is the contract version that accepted the input.
+	Version    string
 	Raw        json.RawMessage
 	Chunk      *aisdk.UIMessageChunk
 	Origin     string
 	Resolution json.RawMessage
 }
 
+// Parser validates one contract version from its own bundle.
 type Parser struct {
 	bundle   fs.FS
 	chunk    *jsonschema.Resolved
 	envelope *jsonschema.Resolved
 	Digest   string
+	// Version is the bundle's schemaVersion.
+	Version string
 }
 
+// New returns the mosaic-event/1 parser.
 func New() (*Parser, error) {
-	bundle, err := fs.Sub(assets, "vendor/1")
+	return NewVersion(Version)
+}
+
+// NewVersion returns the parser of a supported version from its embedded bundle.
+func NewVersion(version string) (*Parser, error) {
+	b, ok := bundles[version]
+	if !ok {
+		return nil, fmt.Errorf("unsupported contract version %q", version)
+	}
+	bundle, err := fs.Sub(b.fs, b.dir)
 	if err != nil {
 		return nil, err
 	}
-	return FromBundle(bundle)
+	return FromBundleVersion(bundle, version)
 }
 
 // FromBundle is also used by drift tests; schema references can only resolve from this bundle.
+// It accepts only a mosaic-event/1 bundle.
 func FromBundle(bundle fs.FS) (*Parser, error) {
-	digest, err := VerifyBundle(bundle)
+	return FromBundleVersion(bundle, Version)
+}
+
+// FromBundleVersion verifies bundle as the given version (manifest, inventory, bytes and schema
+// identifiers) and compiles its chunk and envelope schemas.
+func FromBundleVersion(bundle fs.FS, version string) (*Parser, error) {
+	if _, ok := bundles[version]; !ok {
+		return nil, fmt.Errorf("unsupported contract version %q", version)
+	}
+	digest, err := VerifyBundleVersion(bundle, version)
 	if err != nil {
 		return nil, err
 	}
-	p := &Parser{bundle: bundle, Digest: digest}
+	p := &Parser{bundle: bundle, Digest: digest, Version: version}
 	// Schema identifiers belong to the canonical bundle, not CLI endpoint constants.
 	rootBytes, err := fs.ReadFile(bundle, "chunk.json")
 	if err != nil {
@@ -66,7 +112,8 @@ func FromBundle(bundle fs.FS) (*Parser, error) {
 		return nil, err
 	}
 	rootURI, err := url.Parse(header.ID)
-	if err != nil || rootURI.Scheme != "https" || rootURI.Host == "" {
+	if err != nil || rootURI.Scheme != "https" || rootURI.Host == "" ||
+		!strings.HasSuffix(rootURI.Path, "/"+version+"/chunk.json") {
 		return nil, fmt.Errorf("invalid canonical schema identifier")
 	}
 	schemaBase := rootURI.ResolveReference(&url.URL{Path: "."}).String()
@@ -122,7 +169,7 @@ func (p *Parser) Parse(raw []byte, kind string) (*Parsed, error) {
 	if err := schema.Validate(value); err != nil {
 		return nil, err
 	}
-	parsed := &Parsed{Raw: append(json.RawMessage(nil), raw...)}
+	parsed := &Parsed{Version: p.Version, Raw: append(json.RawMessage(nil), raw...)}
 	chunk := raw
 	if kind == "envelope" {
 		var envelope struct {
@@ -189,7 +236,7 @@ func (p *Parser) Report() (*Report, error) {
 	if err := json.Unmarshal(data, &corpus); err != nil {
 		return nil, err
 	}
-	if corpus.Version != Version || len(corpus.Cases) == 0 {
+	if corpus.Version != p.Version || len(corpus.Cases) == 0 {
 		return nil, fmt.Errorf("invalid corpus version/count")
 	}
 	seen := map[string]bool{}
@@ -208,7 +255,7 @@ func (p *Parser) Report() (*Report, error) {
 	if !valid || !invalid {
 		return nil, fmt.Errorf("missing positive/negative corpus")
 	}
-	report := &Report{SchemaVersion: Version, BundleDigest: p.Digest}
+	report := &Report{SchemaVersion: p.Version, BundleDigest: p.Digest}
 	for _, c := range corpus.Cases {
 		data, err := fs.ReadFile(p.bundle, c.Input)
 		if err != nil {
@@ -237,8 +284,14 @@ func sum(data []byte) string {
 	return hex.EncodeToString(hash[:])
 }
 
-// VerifyBundle rejects changed, missing, extra and differently versioned vendored assets.
+// VerifyBundle rejects changed, missing, extra and differently versioned vendored assets of a
+// mosaic-event/1 bundle.
 func VerifyBundle(bundle fs.FS) (string, error) {
+	return VerifyBundleVersion(bundle, Version)
+}
+
+// VerifyBundleVersion is VerifyBundle for a bundle that must declare version.
+func VerifyBundleVersion(bundle fs.FS, version string) (string, error) {
 	bytes, err := fs.ReadFile(bundle, "manifest.json")
 	if err != nil {
 		return "", err
@@ -258,7 +311,7 @@ func VerifyBundle(bundle fs.FS) (string, error) {
 	if err := json.Unmarshal(bytes, &manifest); err != nil {
 		return "", err
 	}
-	if manifest.Version != Version || len(manifest.Files) == 0 {
+	if manifest.Version != version || len(manifest.Files) == 0 {
 		return "", fmt.Errorf("invalid bundle version/count")
 	}
 	var actual []string
