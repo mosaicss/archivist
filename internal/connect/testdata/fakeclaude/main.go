@@ -198,7 +198,17 @@ func record(args []string, flags map[string]string) {
 	}
 	sort.Strings(keys)
 	cwd, _ := os.Getwd()
-	b, _ := json.MarshalIndent(map[string]any{"args": args, "envKeys": keys, "cwd": cwd, "pid": os.Getpid()}, "", "  ")
+	run := map[string]any{"args": args, "envKeys": keys, "cwd": cwd, "pid": os.Getpid()}
+	// Story 78.31: the appended system prompt file's content, as Claude reads it.
+	if path, ok := flags["--append-system-prompt-file"]; ok {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "fakeclaude: --append-system-prompt-file:", err)
+			os.Exit(1)
+		}
+		run["appendSystemPrompt"] = string(b)
+	}
+	b, _ := json.MarshalIndent(run, "", "  ")
 	_ = os.WriteFile(filepath.Join(dir, fmt.Sprintf("%d.json", os.Getpid())), b, 0o600)
 }
 

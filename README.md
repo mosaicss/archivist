@@ -86,7 +86,7 @@ For CI and scripting, `ARCHIVIST_TOKEN=ak_...` overrides the saved file, and
 archivist companies search "Shopify"
 
 # 2. Search its filings
-archivist search "revenue growth drivers" --symbol SHOP:US --formtype 10-K
+archivist search "revenue growth drivers" --symbol SHOP --formtype 10-K
 
 # 3. Read around a hit (ids come from the search results)
 archivist read passage <chunk_id> --window 2
@@ -98,7 +98,7 @@ On a terminal, `search` prints a table:
 
 ```text
 CHUNK_ID  FILING_ID  SYMBOL   FORM  DATE        SECTION                SNIPPET                               URL
-5f0c…     a9d2…      SHOP:US  10-K  2026-02-12  Item 7. Management's…  Revenue grew 26% driven by growth in…  https://mosaic-finance.com/filings/a9d2…/?c=5f0c…&t=…
+5f0c…     a9d2…      SHOP     10-K  2026-02-12  Item 7. Management's…  Revenue grew 26% driven by growth in…  https://mosaic-finance.com/filings/a9d2…/?c=5f0c…&t=…
 ```
 
 Piped or redirected, every verb prints JSON instead: the server response,

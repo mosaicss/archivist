@@ -45,8 +45,10 @@ func archivistAllowedTools() string {
 	return strings.Join(out, ",")
 }
 
-// claudeArgs builds the fixed argv for one session process.
-func claudeArgs(cfg ClaudeConfig, mcpConfigPath, cwd, resumeID string) []string {
+// claudeArgs builds the fixed argv for one session process. guidancePath is
+// Mosaic's research guidance (Story 78.31), appended to Claude Code's default
+// system prompt; the setting sources stay empty, so it is the only addition.
+func claudeArgs(cfg ClaudeConfig, mcpConfigPath, guidancePath, cwd, resumeID string) []string {
 	args := []string{
 		"-p",
 		"--input-format", "stream-json",
@@ -69,6 +71,8 @@ func claudeArgs(cfg ClaudeConfig, mcpConfigPath, cwd, resumeID string) []string 
 	if resumeID != "" {
 		args = append(args, "--resume="+resumeID)
 	}
+	// The file form: no argv length limit, and print mode reads it on resume too.
+	args = append(args, "--append-system-prompt-file", guidancePath)
 	// Last: --add-dir is variadic, so nothing may follow its value.
 	return append(args, "--add-dir", cwd)
 }

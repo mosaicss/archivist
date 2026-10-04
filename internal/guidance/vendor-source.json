@@ -1,0 +1,26 @@
+{
+  "schemaVersion": "mosaic-agent-guidance/1",
+  "repository": "https://forge.hive.mosaic-finance.com/tunc/mosaic.git",
+  "sourceCommit": "23c69589cba3c8f4d445e31e8887eab1544d7a75",
+  "snapshotPath": "reference/schemas/agent-guidance/1",
+  "vendoredPath": "internal/guidance/vendor/1",
+  "capturedAt": "2026-10-04",
+  "files": [
+    {
+      "path": "agent-ui.full.md",
+      "sha256": "c19a3669382ed62cf97242f99247c523a5d38900c31643d1919ec52611ad3bec"
+    },
+    {
+      "path": "agent-ui.compact.md",
+      "sha256": "feb0c3d2d5c16c27b3da2dd279b799f800140aff8e917517f6b82fd198100aad"
+    },
+    {
+      "path": "mosaic-ui.full.md",
+      "sha256": "7a4bbc01cfd8651329a4ed281b99f2664ff7e5b053ee91f1d8c388b482862222"
+    },
+    {
+      "path": "mosaic-ui.compact.md",
+      "sha256": "3310de1c04d0e91bf77ee2a6c3fbe3f80c97db41b75f6aec69c7a9570b0e3671"
+    }
+  ]
+}

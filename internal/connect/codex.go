@@ -225,7 +225,7 @@ type codexPending struct {
 
 // spawnCodex starts the app-server and runs the handshake and the
 // subscription proof; nothing reaches the relay before it passes.
-func (s *session) spawnCodex(ctx context.Context, threadID string) error {
+func (s *session) spawnCodex(ctx context.Context, threadID, instructions string) error {
 	cfg := s.d.codex
 	home, err := s.codexHome(threadID != "")
 	if err != nil {
@@ -252,7 +252,7 @@ func (s *session) spawnCodex(ctx context.Context, threadID string) error {
 	s.running, s.turnActive = false, false
 	s.ctr.reset()
 	s.art.reset()
-	if err := s.codexHandshake(ctx, home, threadID); err != nil {
+	if err := s.codexHandshake(ctx, home, threadID, instructions); err != nil {
 		s.stopProcess(true)
 		return err
 	}
@@ -266,7 +266,9 @@ func (s *session) spawnCodex(ctx context.Context, threadID string) error {
 // thread/start or thread/resume and the archivist MCP server reaching
 // ready. Notifications and requests that arrive meanwhile stay queued, in
 // order, for the session loop.
-func (s *session) codexHandshake(ctx context.Context, home, threadID string) error {
+// instructions (Mosaic's research guidance) travel as developerInstructions on
+// both thread/start and thread/resume.
+func (s *session) codexHandshake(ctx context.Context, home, threadID, instructions string) error {
 	c := s.cx
 	hctx, cancel := context.WithTimeout(ctx, codexHandshakeTimeout)
 	defer cancel()
@@ -302,7 +304,7 @@ func (s *session) codexHandshake(ctx context.Context, home, threadID string) err
 		}
 	}
 	params := codexThreadParams{ThreadID: threadID, Model: model, Cwd: s.rec.Cwd, ApprovalPolicy: "untrusted",
-		ApprovalsReviewer: "user", Sandbox: "workspace-write"}
+		ApprovalsReviewer: "user", Sandbox: "workspace-write", DeveloperInstructions: instructions}
 	if s.d.codex.Effort != "" {
 		params.Config = map[string]any{"model_reasoning_effort": s.d.codex.Effort}
 	}
