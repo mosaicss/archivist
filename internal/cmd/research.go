@@ -61,7 +61,10 @@ func researchAnnotations(title, exitCodes string) map[string]string {
 }
 
 // PassageRecord is one passage as chat-api returns it (§10.2). Unknown
-// values arrive as null.
+// values arrive as null. url is the only link; when held, the server also
+// sends exchange_document_id and exchange_document_kind (an SEC accession
+// number or a KAP disclosure index, plain text), which only the table view
+// ignores: --format json and the MCP tools print the server body as is.
 type PassageRecord struct {
 	ID              *string `json:"id"`
 	FilingID        *string `json:"filing_id"`
@@ -75,7 +78,6 @@ type PassageRecord struct {
 	ChunkIndex      *int    `json:"chunk_index"`
 	Snippet         *string `json:"snippet"`
 	URL             *string `json:"url"`
-	SourceURL       *string `json:"source_url"`
 }
 
 // page carries the continuation fields every research response has.

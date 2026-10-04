@@ -87,7 +87,6 @@ func passageJSON(id string, idx int, url any) map[string]any {
 		"chunk_index":     idx,
 		"snippet":         "The Company's business\n\tcan be affected by many   factors, including supply chain disruption and more text past sixty runes.",
 		"url":             url,
-		"source_url":      nil,
 	}
 }
 
@@ -164,6 +163,45 @@ func TestSearchJSONOffTTYIsServerBodyReindented(t *testing.T) {
 	}
 	if stdout != want.String()+"\n" {
 		t.Errorf("JSON output is not the indented server body\ngot:\n%s\nwant:\n%s", stdout, want.String())
+	}
+}
+
+// TestSearchJSONPassesExchangeDocumentIDThrough: a body with the exchange
+// document id keys and no source_url prints unchanged (re-indented) as JSON,
+// and the table view still decodes it.
+func TestSearchJSONPassesExchangeDocumentIDThrough(t *testing.T) {
+	rec := passageJSON(testChunkID, 3, testPermalink)
+	rec["exchange_document_id"] = "0000320193-25-000079"
+	rec["exchange_document_kind"] = "sec_accession_number"
+	plain := passageJSON("22222222-3333-4444-8555-666666666666", 4, testPermalink)
+	body := searchBody(t, []map[string]any{rec, plain}, false, nil, nil)
+	srv := newStub(t, 200, nil, body)
+
+	stdout, _, code := runVerb(t, srv.URL, "search", "risk factors", "--format", "json")
+	if code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	var want bytes.Buffer
+	if err := json.Indent(&want, []byte(body), "", "  "); err != nil {
+		t.Fatal(err)
+	}
+	if stdout != want.String()+"\n" {
+		t.Errorf("JSON output is not the indented server body\ngot:\n%s\nwant:\n%s", stdout, want.String())
+	}
+	if !strings.Contains(stdout, `"exchange_document_id": "0000320193-25-000079"`) ||
+		!strings.Contains(stdout, `"exchange_document_kind": "sec_accession_number"`) {
+		t.Errorf("JSON output lost the exchange document id:\n%s", stdout)
+	}
+	if strings.Contains(stdout, "source_url") {
+		t.Errorf("JSON output gained a source_url key:\n%s", stdout)
+	}
+
+	table, stderr, code := runVerb(t, srv.URL, "search", "risk factors", "--format", "table")
+	if code != 0 {
+		t.Fatalf("table exit %d, stderr:\n%s", code, stderr)
+	}
+	if !strings.Contains(table, testPermalink) || strings.Contains(table, "0000320193-25-000079") {
+		t.Errorf("table must show url and no id column:\n%s", table)
 	}
 }
 
