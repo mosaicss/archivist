@@ -27,7 +27,10 @@ passage's permalink `url`. Mosaic runs no model for the CLI.
 
    Each result is a passage record: `id` (the chunk id), `filing_id`,
    `company_name`, `symbol`, `formtype`, `datefiled`, `section_header`,
-   `chunk_index`, `snippet` (the full passage text) and `url`.
+   `chunk_index`, `snippet` (the full passage text) and `url`, the only link.
+   When held, `exchange_document_id` names the filing at its exchange or
+   regulator (`exchange_document_kind` is `sec_accession_number` or
+   `kap_disclosure_index`); it is an identifier to quote, not a link.
 
 3. **Read around a hit** when a snippet is not enough:
 
@@ -37,9 +40,10 @@ passage's permalink `url`. Mosaic runs no model for the CLI.
    archivist read section <filing_id> "Item 7. Management's Discussion" --format json
    ```
 
-4. **Answer with citations.** Cite the `url` of every passage you rely on. The
-   link opens that passage in Mosaic's filing viewer. When `url` is null, cite
-   the company, form, filing date and section instead.
+4. **Answer with citations.** Cite the `url` of every passage you rely on, and
+   no other link. It opens that passage in Mosaic's filing viewer. When `url`
+   is null, cite the company, form, filing date and section instead (and the
+   `exchange_document_id` when present).
 
 ## Search options
 

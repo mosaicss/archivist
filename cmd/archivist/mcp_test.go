@@ -391,7 +391,8 @@ func TestMCPServer_SearchRoundTrip(t *testing.T) {
 	body := `{"results":[{"id":"11111111-2222-4333-8444-555555555555","filing_id":"aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",` +
 		`"company_name":"Apple Inc.","symbol":"AAPL:US","exchange":"NGS","formtype":"10-K","formdescription":"Annual Report",` +
 		`"datefiled":"2025-11-01","section_header":"Risk Factors","chunk_index":4,"snippet":"Supply chain risk.",` +
-		`"url":"` + permalink + `","source_url":null}],"entity_resolution":null,"truncated":false,"next_cursor":null}`
+		`"url":"` + permalink + `","exchange_document_id":"0000320193-25-000079","exchange_document_kind":"sec_accession_number"}],` +
+		`"entity_resolution":null,"truncated":false,"next_cursor":null}`
 	var gotQuery string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/research/search" {
@@ -433,6 +434,10 @@ func TestMCPServer_SearchRoundTrip(t *testing.T) {
 	}
 	if !strings.Contains(toolText, permalink) {
 		t.Errorf("tool text lost the permalink:\n%s", toolText)
+	}
+	if !strings.Contains(toolText, `"exchange_document_id": "0000320193-25-000079"`) ||
+		strings.Contains(toolText, "source_url") {
+		t.Errorf("tool text must carry the id keys unchanged and no source_url:\n%s", toolText)
 	}
 }
 
