@@ -1,0 +1,10 @@
+[
+  {
+    "type": "tool-input-available",
+    "toolCallId": "fixture",
+    "toolName": "fixture",
+    "input": {
+      "retained": true
+    }
+  }
+]

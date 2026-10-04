@@ -1,0 +1,21 @@
+[
+  {
+    "kind": "event",
+    "schemaVersion": "mosaic-event/3",
+    "seq": 1,
+    "ts": 0,
+    "correlationId": "event-1",
+    "origin": "chat-api",
+    "type": "data-usage",
+    "payload": {
+      "type": "data-usage",
+      "data": {
+        "inputTokens": 1200,
+        "outputTokens": 300,
+        "model": "claude-opus-5-5[1m]",
+        "contextTokens": 10,
+        "contextWindow": 1048576
+      }
+    }
+  }
+]

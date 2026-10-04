@@ -1,0 +1,9 @@
+[
+  {
+    "type": "data-auth-prompt",
+    "data": {
+      "provider": "claude",
+      "message": "fixture"
+    }
+  }
+]

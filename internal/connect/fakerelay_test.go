@@ -47,6 +47,10 @@ type fakeRelay struct {
 	// failed to ingest would until the daemon reconnects.
 	unavailable map[string]bool
 	refused     map[string]string
+	// controls are the controls frames received (Story 78.32); oldRelay
+	// answers them INVALID_FRAME without closing, as a relay before 78.32.
+	controls []map[string]any
+	oldRelay bool
 }
 
 func newFakeRelay(t *testing.T) *fakeRelay {
@@ -127,6 +131,16 @@ func (r *fakeRelay) serve(w http.ResponseWriter, req *http.Request) {
 			r.mu.Lock()
 			r.caps = append(r.caps, caps.Agents)
 			r.mu.Unlock()
+		case "controls":
+			r.mu.Lock()
+			old := r.oldRelay
+			if !old {
+				r.controls = append(r.controls, x)
+			}
+			r.mu.Unlock()
+			if old {
+				_ = c.Write(ctx, websocket.MessageText, []byte(`{"kind":"error","code":"INVALID_FRAME"}`))
+			}
 		case "command_ack":
 			r.mu.Lock()
 			r.acks = append(r.acks, x)
@@ -320,6 +334,16 @@ func (r *fakeRelay) pingCount() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.pings
+}
+
+// lastControls returns the newest controls frame (nil before one).
+func (r *fakeRelay) lastControls() map[string]any {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.controls) == 0 {
+		return nil
+	}
+	return r.controls[len(r.controls)-1]
 }
 
 func (r *fakeRelay) capsCount() int {

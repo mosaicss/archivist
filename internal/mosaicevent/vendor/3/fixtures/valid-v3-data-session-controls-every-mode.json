@@ -1,0 +1,30 @@
+[
+  {
+    "type": "data-session-controls",
+    "data": {
+      "mode": "read_only",
+      "maxMode": "read_only"
+    }
+  },
+  {
+    "type": "data-session-controls",
+    "data": {
+      "mode": "ask",
+      "maxMode": "ask"
+    }
+  },
+  {
+    "type": "data-session-controls",
+    "data": {
+      "mode": "auto_edits",
+      "maxMode": "auto_edits"
+    }
+  },
+  {
+    "type": "data-session-controls",
+    "data": {
+      "mode": "full_auto",
+      "maxMode": "full_auto"
+    }
+  }
+]

@@ -1,0 +1,11 @@
+[
+  {
+    "type": "tool-input-error",
+    "toolCallId": "fixture",
+    "toolName": "fixture",
+    "input": {
+      "retained": true
+    },
+    "errorText": "fixture"
+  }
+]

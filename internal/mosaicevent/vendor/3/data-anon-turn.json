@@ -1,0 +1,21 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://mosaic-finance.com/schemas/mosaic-event/3/data-anon-turn.json",
+  "type": "object",
+  "properties": {
+    "conversationId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "turnsLeft": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    }
+  },
+  "required": [
+    "conversationId",
+    "turnsLeft"
+  ],
+  "additionalProperties": false
+}

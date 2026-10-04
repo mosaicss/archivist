@@ -1,0 +1,10 @@
+[
+  {
+    "type": "data-patch",
+    "data": {
+      "toolCallId": "fixture",
+      "path": "fixture",
+      "operation": "add"
+    }
+  }
+]

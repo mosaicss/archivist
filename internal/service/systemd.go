@@ -49,7 +49,7 @@ func (s *systemd) Install(ctx context.Context) (InstallReport, error) {
 		return rep, err
 	}
 	existed := fileExists(path)
-	if err := writeFileAtomic(path, []byte(RenderSystemdUnit(s.opts.Binary, s.opts.Env)), 0o644); err != nil {
+	if err := writeFileAtomic(path, []byte(RenderSystemdUnit(s.opts.Binary, s.opts.Args, s.opts.Env)), 0o644); err != nil {
 		return rep, err
 	}
 	fail := func(err error) (InstallReport, error) {
@@ -127,6 +127,7 @@ func (s *systemd) Status(ctx context.Context) (Status, error) {
 	if !st.Installed {
 		return st, nil
 	}
+	st.Args = installedArgs(st.Path)
 	r, err := s.systemctl(ctx, "is-active", "--quiet", UnitName)
 	if err != nil {
 		return st, err

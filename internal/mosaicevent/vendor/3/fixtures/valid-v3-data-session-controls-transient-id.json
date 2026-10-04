@@ -1,0 +1,11 @@
+[
+  {
+    "type": "data-session-controls",
+    "id": "controls",
+    "transient": true,
+    "data": {
+      "mode": "full_auto",
+      "maxMode": "full_auto"
+    }
+  }
+]

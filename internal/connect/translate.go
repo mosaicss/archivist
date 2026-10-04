@@ -30,6 +30,10 @@ type Translator struct {
 	blocks    map[int]*block
 	order     []int // block indexes in insertion order (JS Map order)
 	Skipped   int
+	// Context is the context use at the last result (Story 78.32); ctx
+	// tracks the turn's last main loop assistant message until then.
+	Context contextUsage
+	ctx     contextUsage
 }
 
 type block struct {
@@ -167,6 +171,9 @@ func (t *Translator) In(line []byte) []Chunk {
 			t.Skipped++
 		}
 	case "assistant":
+		if tokens, model, ok := claudeAssistantContext(f); ok {
+			t.ctx = contextUsage{Tokens: tokens, Model: model}
+		}
 		m, _ := f["message"].(map[string]any)
 		mid, _ := m["id"].(string)
 		// Snapshots repeat partial output. A snapshot without partials remains visible.
@@ -242,6 +249,11 @@ func (t *Translator) In(line []byte) []Chunk {
 			}
 		}
 		emit(Chunk{"type": "data-usage", "data": t.usage(f, line)})
+		// The session adds these to data-usage (mosaic-event/3); a turn with
+		// no main loop assistant message reports no context tokens.
+		t.Context = t.ctx
+		t.Context.Window, t.Context.Model = claudeContextWindow(f, t.ctx.Model)
+		t.ctx = contextUsage{}
 		isErr, hasErr := f["is_error"].(bool)
 		aborted := f["terminal_reason"] == "aborted_streaming"
 		if hasErr && isErr {

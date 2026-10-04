@@ -1,0 +1,28 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://mosaic-finance.com/schemas/mosaic-event/3/data-permission-scope.json",
+  "type": "object",
+  "properties": {
+    "approvalId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "scope": {
+      "enum": [
+        "allow_once",
+        "allow_always",
+        "reject_once",
+        "reject_always"
+      ]
+    },
+    "toolCallId": {
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "required": [
+    "approvalId",
+    "scope"
+  ],
+  "additionalProperties": false
+}

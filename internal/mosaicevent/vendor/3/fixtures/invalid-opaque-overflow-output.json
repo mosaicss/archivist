@@ -1,0 +1,11 @@
+[
+  {
+    "type": "tool-output-available",
+    "toolCallId": "opaque",
+    "output": {
+      "nested": [
+        1e400
+      ]
+    }
+  }
+]

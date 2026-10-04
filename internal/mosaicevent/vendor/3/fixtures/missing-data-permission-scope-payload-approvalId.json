@@ -1,0 +1,8 @@
+[
+  {
+    "type": "data-permission-scope",
+    "data": {
+      "scope": "allow_once"
+    }
+  }
+]

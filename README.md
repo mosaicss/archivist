@@ -229,7 +229,7 @@ It installs or updates archivist, then runs:
 ```sh
 archivist connect --pair ABCDE-FGHJK   # redeem the code for a new ak_ key, saved to ~/.archivist/credentials
 archivist connect --install            # run connect as a background user service
-archivist connect --status             # report the service and the saved key
+archivist connect --status             # report the service, its ceiling and the saved key
 ```
 
 `--pair` accepts the code in any case, with or without the hyphen or spaces,
@@ -266,9 +266,26 @@ yourself so the service runs the new binary (`archivist update` reminds you
 when a service is installed). `archivist connect --uninstall`
 stops and removes it and keeps the saved key.
 
+`archivist connect --install --max-permission <mode>` sets the service's
+permission ceiling (see Session controls below): the service then runs
+`archivist connect --service --max-permission <mode>`. Without the flag a
+first install runs the default ceiling (`auto_edits`) and writes no flag,
+and a reinstall keeps the ceiling the installed service already has, so the
+install script's reinstall on every update never changes it; give
+`--max-permission auto_edits` to return to the default. `--status` shows the
+installed ceiling. `--mode`, `--model` and `--effort` are refused with
+`--install` (they need `--session`). A service whose `--max-permission` the
+running binary does not know (after a downgrade, or a hand edit) logs the
+reason and stops cleanly instead of restarting every 10 seconds. An
+archivist older than the ceiling flag refuses it as an unknown flag and is
+restarted every 10 seconds until the service is installed again. After a
+downgrade, run `archivist connect --install` so the service definition is
+written by the binary it runs (a ceiling it does not know falls back to the
+default).
+
 `--status` exits 0 when the service is running (Linux: the unit is active;
 macOS: the job is loaded and the daemon in `service.pid` is alive) and a key
-is saved, else 1, and prints the last log line. A loaded launchd job whose
+is saved, else 1, and prints the ceiling and the last log line. A loaded launchd job whose
 daemon has stopped shows "loaded, not running"; a job loaded a moment ago gets
 about 5 seconds to write its pid first. `--pair`, `--install`,
 `--uninstall` and `--status` are used one at a time.
@@ -289,6 +306,7 @@ archivist connect --check   # what was detected; connects nothing
 archivist connect           # serve workspace sessions until Ctrl-C
 archivist connect --claude-model claude-sonnet-5 --claude-effort low
 archivist connect --codex-model gpt-6-luna --codex-effort low
+archivist connect --max-permission full_auto   # allow Full auto sessions here
 ```
 
 Requirements: an `ak_` API key (`archivist auth login`) on a Pro account, and
@@ -299,6 +317,83 @@ are refused. Newer versions are reported, not blocked; a harness that is not
 usable when `archivist connect` starts is reported as unavailable and its
 sessions are refused (restart after logging in).
 
+### Permission modes, model and effort
+
+Each session runs in one of four permission modes, chosen in the workspace
+when it starts and changeable while it runs. Low to high:
+
+| Mode | Label | What it means | Claude Code | Codex |
+|---|---|---|---|---|
+| `read_only` | Read only | Reads and research run; anything that would change something is denied without asking | `--permission-mode plan` | `never`, `read-only` sandbox |
+| `ask` | Ask every time | Every call that needs permission is a card | `--permission-mode default` | `untrusted`, `workspace-write` sandbox |
+| `auto_edits` | Auto edits | File edits run (Claude Code also runs simple file commands such as mkdir, mv, cp and rm inside the session folder); other commands ask | `--permission-mode acceptEdits` | `untrusted`, `workspace-write` sandbox; the daemon accepts file changes inside the session folder |
+| `full_auto` | Full auto | The harness runs without asking, but anything it still asks about (for example deleting a critical folder) is shown as a card | `--permission-mode bypassPermissions` | `never`, `danger-full-access` (no sandbox, network on) |
+
+The Mosaic search and read tools (`search`, `companies_search`,
+`companies_get`, `read_passage`, `read_section`, `toc`) never ask, in any
+mode and on both harnesses. `publish_artifact` follows the mode. The daemon
+enforces the mode itself on every approval request that reaches it,
+whatever the harness version does: Mosaic read tools are allowed, `read_only`
+denies everything else without a card, and every other mode shows a card,
+`full_auto` included (Claude Code keeps some prompts even in bypass
+permissions, such as removing a critical directory). In `auto_edits` the
+daemon accepts a Codex file change without a card only when it asks for no
+extra root and every path, resolved through symbolic links, is inside the
+session folder; Codex commands always ask. These rules come before answers
+remembered for the session ("allow for session" does not let a `read_only`
+session change anything). Every Claude Code launch also passes
+`--settings '{"useAutoModeDuringPlan":false}'`, so plan mode never lets the
+auto mode classifier approve shell commands.
+
+`--max-permission <mode>` is the ceiling on this machine: no session runs
+above it. The default is `auto_edits` (`full_auto` for `connect --session`,
+where the Mosaic cloud sandbox is the isolation). A session that asks for
+more starts at the ceiling, a change above it is refused, and the workspace
+can never raise it. A session started without a mode runs `ask` (`full_auto`
+with `--session`, or `--mode <mode>`), within the ceiling. Only a
+`full_auto` ceiling passes Claude Code `--allow-dangerously-skip-permissions`
+(needed to switch to bypass permissions later); Claude Code refuses bypass
+permissions as root outside a recognised sandbox, and the session then
+fails rather than running in a lower mode. `--dangerously-skip-permissions`,
+`--bare` and the `auto` and `dontAsk` modes are never used.
+
+A mode change applies to Claude Code once Claude confirms it
+(`set_permission_mode`; the daemon's own checks switch then too) and to Codex
+at the next turn (every `turn/start` carries the current policy and sandbox;
+the daemon's own checks switch at once). A Codex turn already running keeps the
+mode it started with until it ends: lowering a session from `full_auto` in
+the middle of a turn leaves that turn with full access until your next
+message. Stop the turn to apply a lower mode at once. Lowering a session to
+`read_only` denies its open approval cards; other changes leave open cards
+as they are.
+A paused session, or one whose Claude Code stopped before confirming, takes
+the new mode when it resumes. The mode,
+model and effort are kept with the session, so a resumed session keeps them,
+lowered to the current ceiling.
+
+After connecting, the daemon reports a `controls` frame next to its
+capabilities: the ceiling, the default mode, and the models and efforts a
+session may pick. For Claude Code these are the aliases `default`, `opus`,
+`sonnet`, `haiku` and `fable` (Haiku has no effort levels); `best`,
+`opusplan` and the `[1m]` variants are not offered (Opus 5.5 and Sonnet 5.x
+already have a 1M context window); for Codex, the models
+`codex app-server` lists (`model/list`, hidden ones left out), probed once at
+startup in a throwaway Codex home. A session's model and effort override
+`--claude-model`/`--claude-effort` or `--codex-model`/`--codex-effort`; a
+start naming a model or effort outside that list fails with a status naming
+it. An older relay refuses the `controls` frame; sessions then run with the
+machine flags and the default mode. The relay accepts a `controls` frame of
+at most 6144 bytes; a larger Codex list is cut from the end (its default
+model kept) and the log says how many models were left out. A typical
+report is about 2 KB.
+
+The session-bound mode takes the same choices as flags: `connect --session
+<uuid> --agent claude|codex --prompt-file <path> [--mode <mode>] [--model
+<id>] [--effort <id>]`. `--mode`, `--model` and `--effort` need `--session`;
+the model and effort are checked against the same list when the session
+starts, and one this machine does not offer refuses the start: connect
+exits 1 and the sandbox task fails.
+
 For each "My Claude Code" session the daemon:
 
 - runs `claude -p` in stream-json mode in a fresh temporary directory, with
@@ -308,20 +403,36 @@ For each "My Claude Code" session the daemon:
   naming an existing directory, so a login kept outside `~/.claude` is found)
   and without your user, project or local Claude settings;
 - refuses the session unless Claude reports a subscription login
-  (`apiKeySource: none`) and the default permission mode;
+  (`apiKeySource: none`) and the permission mode of the session's mode;
 - gives Claude the built-in tools Bash, Read, Edit, Write, Glob and Grep and
   the Mosaic search and read tools (`archivist mcp serve` in task mode, under
-  a 15 minute task token it rotates and revokes); every tool call that needs
-  permission becomes an approval card in the workspace (allow once, allow for
-  session, deny once, deny for session; no answer within 60 seconds denies).
+  a 15 minute task token it rotates and revokes); a tool call the session's
+  mode leaves to you becomes an approval card in the workspace (allow once,
+  allow for session, deny once, deny for session; no answer within 60
+  seconds denies).
   "Allow for session" and "deny for session" apply to every later call of that
   tool in the session, whatever its input, without another card; they live in
   the daemon's memory, so restarting `archivist connect` clears them;
 - streams the session as `mosaic-event/1` events, each validated before it is
-  sent. The one exception is the session-bound mode's sign-in prompt, a
-  `mosaic-event/2` `data-auth-prompt` that adds the Codex device code and the
-  sign-in expiry; the relay must accept `mosaic-event/2` before a release
-  that sends it.
+  sent, with three exceptions stamped per event type: the session-bound
+  mode's sign-in prompt, a `mosaic-event/2` `data-auth-prompt` that adds the
+  Codex device code and the sign-in expiry; and, as `mosaic-event/3`, a
+  `data-usage` that carries `contextTokens` (the context in use after the
+  turn's last model call) or `contextWindow` (the model's window), each only
+  when the harness reported it, never guessed (a usage report without them
+  stays `mosaic-event/1`), and `data-session-controls`
+  (`{mode, maxMode, model?, effort?}`: the session's mode, the ceiling, and
+  its model and effort when set; for Claude Code the session's choice or
+  else the machine flag, for Codex the model and effort its thread started
+  with, Codex's default model included), sent when the session starts running and after every
+  `set_mode` outcome while it runs, a refused one included (a change on a
+  paused or starting session is reported when it runs). The relay must
+  accept `mosaic-event/2` and `mosaic-event/3` before a release that sends
+  them: an older relay refuses those events, which would drop the session
+  controls and every usage report that carries context. Codex applies a
+  mode change at its next turn, so while a Codex turn is running the event
+  already reports the new mode and that turn keeps its old policy until it
+  ends.
 
 For each "My Codex" session the daemon:
 
@@ -336,19 +447,24 @@ For each "My Codex" session the daemon:
   loaded and never written; parent `OPENAI_*` and `CODEX_*` variables never
   pass;
 - fixes the rest with `-c` overrides: ChatGPT login only, the `openai`
-  provider, a `workspace-write` sandbox that can write only the session
+  provider, a `workspace-write` sandbox (`ask`, `auto_edits`; `read_only`
+  is `read-only`, and `full_auto` runs `danger-full-access`: no sandbox,
+  with network) that can write only the session
   directory (not `/tmp` or `$TMPDIR`, where other sessions' directories
   live; `TMPDIR` points at `<session dir>/.tmp`) with no network, a core
   shell environment for commands, web search off, history off,
   no project root markers, and the archivist MCP server (task mode tools,
-  task token as above). The approval policy (`untrusted`, reviewed by you)
-  and model are set per thread; `--codex-model` defaults to Codex's default
-  model and `--codex-effort` to Codex's default effort;
+  task token as above; Mosaic read tools are approved without asking). The
+  approval policy and sandbox (from the session's mode, reviewed by you)
+  and model are set per thread and on every turn; `--codex-model` defaults
+  to Codex's default model and `--codex-effort` to Codex's default effort;
 - refuses the session (error plus a failed status, Codex stopped, nothing
   else sent) unless Codex reports the session home, a ChatGPT account, the
-  `openai` provider, the untrusted approval policy reviewed by the user, the
-  workspace-write sandbox without network, extra roots, `/tmp` or `$TMPDIR`
-  (TMPDIR points inside the session directory), no instruction files, and the archivist MCP server ready with no other MCP server. A later
+  `openai` provider, the approval policy and sandbox of the session's mode
+  reviewed by the user (for `workspace-write`: without network, extra roots,
+  `/tmp` or `$TMPDIR`, TMPDIR pointing inside the session directory; for
+  `read-only`: without network), no instruction files, and the archivist MCP
+  server ready with no other MCP server. A later
   switch away from the ChatGPT login ends the session the same way;
 - turns command, file change and archivist tool approvals into workspace
   cards. Your answer maps one to one onto Codex's choices: allow once is
@@ -370,9 +486,11 @@ For each "My Codex" session the daemon:
 
 Both harnesses also get `publish_artifact`, which publishes one file from the
 session directory to the workspace, where it opens beside the conversation.
-It is never pre-allowed: each call asks for approval through the card
-(Claude's permission prompt, Codex's `approval_mode = "prompt"` for that
-tool) unless you chose "allow for session" for it. It refuses, and
+It is never pre-allowed: in `ask` and `auto_edits` each call asks for
+approval through the card (Claude's permission prompt, Codex's
+`approval_mode = "prompt"` for that tool) unless you chose "allow for
+session" for it; `read_only` denies it, and in `full_auto` the harness
+approves it itself (a card if it still asks). It refuses, and
 uploads nothing, for a path outside the session directory or containing
 `..`, any symbolic link, a file that is not regular, empty or over 10 MiB, and
 anything but `.pdf`, `.txt`, `.md`, `.csv` and `.json` whose content matches
@@ -390,7 +508,8 @@ The session home is kept while the session can resume and removed when the
 session stops, fails or is found inactive at the next start.
 
 The relay sends only data (session ids, prompts, approval decisions,
-interrupt and stop). Binaries, arguments and flags are fixed on your machine.
+interrupt and stop, and the mode, model and effort ids, each checked against
+the closed set or this machine's own list). Binaries, arguments and flags are fixed on your machine.
 Session ids and working directories are kept in `~/.archivist/connect/`
 (0700); after a restart, the next message resumes the same Claude session.
 Each running session's task token and MCP config sit in
@@ -398,13 +517,18 @@ Each running session's task token and MCP config sit in
 removed when the session stops or the daemon exits, and the token is revoked
 then. Ctrl-C stops every Claude Code and Codex process and revokes its tokens.
 
+`ARCHIVIST_CONNECT_DEBUG=1` adds debug lines to the log (the harness
+reported context use and window after each turn, as also sent on
+`data-usage`).
+
 `ARCHIVIST_RELAY_URL` overrides the relay address (default
 `wss://relay.mosaic-finance.com`). macOS and Linux only for now.
 
 Exit codes: 0 stopped by Ctrl-C (or `--check` found a usable Claude Code or
 Codex); 1 refused or stopped (feature not enabled, another `archivist connect`
-took over, Claude Code too old), service not running, or service setup
-failed; 2 bad flag or relay URL; 3 no usable harness (Claude Code not found,
+took over, Claude Code too old, or a session-bound start refused, for
+example a model or effort this machine does not offer), service not
+running, or service setup failed; 2 bad flag or relay URL; 3 no usable harness (Claude Code not found,
 or neither Claude Code nor an installed Codex is usable); 4 credential or
 Claude login problem, or an invalid or expired pairing code; 5 server or
 network error while pairing; 7 pairing rate limited. When Codex is not

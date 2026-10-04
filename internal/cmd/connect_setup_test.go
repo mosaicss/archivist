@@ -80,6 +80,18 @@ func TestConnectSetupFlagsAreExclusive(t *testing.T) {
 		{"connect", "--install", "--codex-effort", "high"},
 		{"connect", "stray"},
 		{"connect", "--check", "stray"},
+		// Story 78.32: --max-permission only with --install or --service, a
+		// valid mode with --install (--service logs a bad one and exits 0);
+		// --mode, --model and --effort never with a setup flag.
+		{"connect", "--status", "--max-permission", "ask"},
+		{"connect", "--uninstall", "--max-permission", "ask"},
+		{"connect", "--pair", "ABCDE-FGHJK", "--max-permission", "ask"},
+		{"connect", "--install", "--max-permission", "root"},
+		{"connect", "--install", "--mode", "ask"},
+		{"connect", "--install", "--model", "opus"},
+		{"connect", "--install", "--effort", "high"},
+		{"connect", "--status", "--mode", "ask"},
+		{"connect", "--service", "--mode", "read_only"},
 	} {
 		if out, code := runRoot(t, args...); code != ExitUsageError {
 			t.Errorf("%v: exit %d\n%s", args, code, out)
@@ -426,5 +438,166 @@ func TestConnectServiceUnsupportedMessage(t *testing.T) {
 	out, code := runRoot(t, "connect", "--install")
 	if code != ExitGenericError || !strings.Contains(out, "Background connect is not available on Windows yet") {
 		t.Fatalf("exit %d\n%s", code, out)
+	}
+}
+
+// --install --max-permission writes the ceiling into the service definition
+// (connect --service --max-permission <mode>) and --status reports it; an
+// install without it writes no flag and runs the default ceiling (Story
+// 78.32). Linux systemd here; the launchd render is covered in
+// internal/service.
+func TestConnectInstallMaxPermissionLinux(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("systemd flow")
+	}
+	home := sandbox(t)
+	saveKey(t, home, pairedKey)
+	stubRunner(t, func(string) service.Result { return service.Result{} })
+	unitPath := filepath.Join(home, ".config", "systemd", "user", service.UnitName)
+
+	out, code := runRoot(t, "connect", "--install", "--max-permission", "full_auto")
+	if code != 0 || !strings.Contains(out, "Permission ceiling: full_auto (Full auto).") {
+		t.Fatalf("install: exit %d\n%s", code, out)
+	}
+	unit, err := os.ReadFile(unitPath)
+	if err != nil || !strings.Contains(string(unit), " connect --service --max-permission full_auto\n") {
+		t.Fatalf("unit (%v):\n%s", err, unit)
+	}
+	out, code = runRoot(t, "connect", "--status")
+	if code != 0 || !strings.Contains(out, "Ceiling:  full_auto (Full auto)\n") {
+		t.Fatalf("status: exit %d\n%s", code, out)
+	}
+
+	// A reinstall without the flag (the install script on every update)
+	// keeps the installed ceiling.
+	out, code = runRoot(t, "connect", "--install")
+	if code != 0 || !strings.Contains(out, "Permission ceiling: full_auto (Full auto), kept from the installed service") {
+		t.Fatalf("reinstall: exit %d\n%s", code, out)
+	}
+	if unit, _ = os.ReadFile(unitPath); !strings.Contains(string(unit), " connect --service --max-permission full_auto\n") {
+		t.Fatalf("unit:\n%s", unit)
+	}
+	// Removed, then installed without the flag: the default, no flag written.
+	if _, code = runRoot(t, "connect", "--uninstall"); code != 0 {
+		t.Fatal("uninstall")
+	}
+	out, code = runRoot(t, "connect", "--install")
+	if code != 0 || !strings.Contains(out, "Permission ceiling: auto_edits (Auto edits), the default") {
+		t.Fatalf("fresh install: exit %d\n%s", code, out)
+	}
+	unit, _ = os.ReadFile(unitPath)
+	if !strings.Contains(string(unit), " connect --service\n") || strings.Contains(string(unit), "max-permission") {
+		t.Fatalf("unit:\n%s", unit)
+	}
+	out, _ = runRoot(t, "connect", "--status")
+	if !strings.Contains(out, "Ceiling:  auto_edits (Auto edits)\n") {
+		t.Fatalf("status:\n%s", out)
+	}
+
+	// The equals form in a definition is reported and kept on reinstall.
+	if err := os.WriteFile(unitPath, []byte(strings.Replace(string(unit), "connect --service", "connect --service --max-permission=read_only", 1)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, _ = runRoot(t, "connect", "--status"); !strings.Contains(out, "Ceiling:  read_only (Read only)\n") {
+		t.Fatalf("status equals form:\n%s", out)
+	}
+	out, code = runRoot(t, "connect", "--install")
+	if code != 0 || !strings.Contains(out, "Permission ceiling: read_only (Read only), kept from the installed service") {
+		t.Fatalf("reinstall equals form: exit %d\n%s", code, out)
+	}
+	if unit, _ = os.ReadFile(unitPath); !strings.Contains(string(unit), " connect --service --max-permission read_only\n") {
+		t.Fatalf("unit:\n%s", unit)
+	}
+
+	// A hand edited definition with an unknown mode is reported, not trusted.
+	if err := os.WriteFile(unitPath, []byte(strings.Replace(string(unit), "connect --service", "connect --service --max-permission root", 1)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, _ = runRoot(t, "connect", "--status"); !strings.Contains(out, "Ceiling:  unreadable") {
+		t.Fatalf("status:\n%s", out)
+	}
+}
+
+// --service accepts --max-permission (what the installed service runs).
+func TestConnectServiceAcceptsMaxPermission(t *testing.T) {
+	if !connect.Supported() {
+		t.Skip("daemon unsupported")
+	}
+	home := sandbox(t)
+	out, code := runRoot(t, "connect", "--service", "--max-permission", "read_only")
+	if code != 0 || out != "" {
+		t.Fatalf("exit %d, terminal output %q", code, out)
+	}
+	b, _ := os.ReadFile(service.LogPath(home))
+	if !strings.Contains(string(b), "permission ceiling read_only\n") || !strings.Contains(string(b), "service stopped (exit 4)") {
+		t.Fatalf("log:\n%s", b)
+	}
+	// Without the flag the service logs the default ceiling.
+	if _, code := runRoot(t, "connect", "--service"); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	if b, _ = os.ReadFile(service.LogPath(home)); !strings.Contains(string(b), "permission ceiling auto_edits\n") {
+		t.Fatalf("log:\n%s", b)
+	}
+}
+
+// An installed service whose --max-permission this version does not know
+// (a downgrade, or a hand edit) logs why and exits 0: systemd
+// Restart=on-failure and launchd KeepAlive SuccessfulExit false then leave it
+// stopped instead of restarting it every 10 s. Nothing else runs.
+func TestConnectServiceBadMaxPermissionStopsCleanly(t *testing.T) {
+	if !connect.Supported() {
+		t.Skip("daemon unsupported")
+	}
+	home := sandbox(t)
+	for _, args := range [][]string{
+		{"connect", "--service", "--max-permission", "root"},
+		{"connect", "--service", "--max-permission=yolo"},
+	} {
+		_ = os.Remove(service.LogPath(home))
+		out, code := runRoot(t, args...)
+		if code != 0 || out != "" {
+			t.Fatalf("%v: exit %d, terminal output %q", args, code, out)
+		}
+		b, _ := os.ReadFile(service.LogPath(home))
+		log := string(b)
+		for _, want := range []string{"service start v0.2.26", "is not a mode; use one of", "run 'archivist connect --install'", "service stopped (exit 2)"} {
+			if !strings.Contains(log, want) {
+				t.Errorf("%v: log lacks %q:\n%s", args, want, log)
+			}
+		}
+		// Refused before the ceiling, the credential check and the PID file.
+		for _, never := range []string{"permission ceiling", "needs an ak_ API key"} {
+			if strings.Contains(log, never) {
+				t.Errorf("%v: log has %q:\n%s", args, never, log)
+			}
+		}
+		if _, err := os.Stat(service.PIDPath(home)); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("%v: PID file written: %v", args, err)
+		}
+	}
+	// The plain daemon still refuses a bad ceiling with exit 2.
+	if out, code := runRoot(t, "connect", "--max-permission", "root"); code != ExitUsageError || !strings.Contains(out, "is not a mode") {
+		t.Fatalf("plain daemon: exit %d\n%s", code, out)
+	}
+}
+
+func TestInstalledCeiling(t *testing.T) {
+	for _, c := range []struct {
+		args      []string
+		want      connect.Mode
+		found, ok bool
+	}{
+		{nil, connect.DefaultMaxMode, false, true},
+		{[]string{"--max-permission", "ask"}, connect.ModeAsk, true, true},
+		{[]string{"--max-permission=full_auto"}, connect.ModeFullAuto, true, true},
+		{[]string{"--max-permission", "root"}, "", true, false},
+		{[]string{"--max-permission=root"}, "", true, false},
+		{[]string{"--max-permission"}, connect.DefaultMaxMode, false, true},
+	} {
+		got, found, ok := installedCeiling(c.args)
+		if found != c.found || ok != c.ok || (ok && got != c.want) {
+			t.Errorf("%q: %s %v %v, want %s %v %v", c.args, got, found, ok, c.want, c.found, c.ok)
+		}
 	}
 }

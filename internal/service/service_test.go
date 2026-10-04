@@ -83,7 +83,7 @@ func TestCaptureEnv(t *testing.T) {
 }
 
 func TestRenderSystemdUnit(t *testing.T) {
-	unit := RenderSystemdUnit("/home/a b/bin/archivist%$", []EnvVar{
+	unit := RenderSystemdUnit("/home/a b/bin/archivist%$", nil, []EnvVar{
 		{"PATH", "/usr/bin:/bin"}, {"LANG", `we"ird\50%`}, {"HOME", "/home/$USER"},
 	})
 	for _, line := range []string{
@@ -104,7 +104,7 @@ func TestRenderSystemdUnit(t *testing.T) {
 }
 
 func TestRenderLaunchdPlist(t *testing.T) {
-	p := RenderLaunchdPlist("/Users/a&b/bin/archivist", "/Users/a&b", "/Users/a&b/.archivist/connect/connect.log",
+	p := RenderLaunchdPlist("/Users/a&b/bin/archivist", "/Users/a&b", "/Users/a&b/.archivist/connect/connect.log", nil,
 		[]EnvVar{{"PATH", "/usr/bin:/opt/<x>"}})
 	for _, s := range []string{
 		"<string>" + Label + "</string>",
@@ -447,4 +447,73 @@ func indexOf(calls []string, prefix string) int {
 		}
 	}
 	return -1
+}
+
+// Story 78.32: the install's daemon flags (--max-permission <mode>) follow
+// `connect --service` in both service definitions, and ServiceArgs reads
+// them back, quoting included.
+func TestRenderServiceArgsRoundTrip(t *testing.T) {
+	args := []string{"--max-permission", "full_auto"}
+	unit := RenderSystemdUnit("/home/a b/bin/archivist%$", args, nil)
+	if !strings.Contains(unit, `ExecStart="/home/a b/bin/archivist%%$$" connect --service --max-permission full_auto`+"\n") {
+		t.Fatalf("unit:\n%s", unit)
+	}
+	plist := RenderLaunchdPlist("/Users/a&b/bin/archivist", "/Users/a&b", "/Users/a&b/l.log", args, nil)
+	if !strings.Contains(plist, "<string>--service</string>\n\t\t<string>--max-permission</string>\n\t\t<string>full_auto</string>\n\t</array>") {
+		t.Fatalf("plist:\n%s", plist)
+	}
+	for _, c := range [][]string{nil, args, {`we"ird 50%$\x`, "<&>", "plain"}} {
+		for name, content := range map[string]string{
+			"systemd": RenderSystemdUnit("/home/a b/bin/archivist%$", c, []EnvVar{{"HOME", "/h"}}),
+			"launchd": RenderLaunchdPlist("/Users/a&b/bin/archivist", "/Users/a&b", "/l", c, []EnvVar{{"HOME", "/h"}}),
+		} {
+			if got := ServiceArgs(content); strings.Join(got, "|") != strings.Join(c, "|") || len(got) != len(c) {
+				t.Errorf("%s %q: read back %q", name, c, got)
+			}
+		}
+	}
+	for _, content := range []string{"", "ExecStart=/bin/true\n", "ExecStart=/x other --service --max-permission ask\n", "<plist><dict></dict></plist>"} {
+		if got := ServiceArgs(content); got != nil {
+			t.Errorf("%q: %q", content, got)
+		}
+	}
+}
+
+// The installed flags are written and Status reports them (systemd and
+// launchd).
+func TestInstallWritesArgsAndStatusReadsThem(t *testing.T) {
+	f := &fakeRunner{answers: map[string][]Result{"launchctl print": {{ExitCode: 113}}}}
+	for _, m := range []Manager{
+		func() Manager {
+			o := testOpts(t, f)
+			o.Args = []string{"--max-permission", "read_only"}
+			return newSystemd(o)
+		}(),
+		func() Manager {
+			o := testOpts(t, f)
+			o.Args = []string{"--max-permission", "read_only"}
+			return newLaunchd(o)
+		}(),
+	} {
+		if _, err := m.Install(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		b, err := os.ReadFile(m.Path())
+		if err != nil || !strings.Contains(string(b), "read_only") {
+			t.Fatalf("%s: %v\n%s", m.Name(), err, b)
+		}
+		st, err := m.Status(context.Background())
+		if err != nil || strings.Join(st.Args, " ") != "--max-permission read_only" {
+			t.Fatalf("%s: status args %q, %v", m.Name(), st.Args, err)
+		}
+	}
+	// Without flags the definition is unchanged and Status reports none.
+	o := testOpts(t, f)
+	m := newSystemd(o)
+	if _, err := m.Install(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := m.Status(context.Background()); st.Args != nil {
+		t.Fatalf("args %q", st.Args)
+	}
 }

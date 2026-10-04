@@ -1,0 +1,13 @@
+[
+  {
+    "type": "tool-output-available",
+    "toolCallId": "opaque",
+    "output": {
+      "nested": [
+        1e+300,
+        -0.125,
+        null
+      ]
+    }
+  }
+]

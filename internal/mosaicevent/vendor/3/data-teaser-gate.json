@@ -1,0 +1,28 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://mosaic-finance.com/schemas/mosaic-event/3/data-teaser-gate.json",
+  "type": "object",
+  "properties": {
+    "conversationId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "remainingChars": {
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "conversationId",
+    "remainingChars"
+  ],
+  "additionalProperties": false
+}

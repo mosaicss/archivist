@@ -81,6 +81,11 @@ type session struct {
 	early []string
 	// authFailed marks a failed sign-in or subscription proof (sandbox exit).
 	authFailed bool
+	// modeReqs are Claude set_permission_mode requests awaiting their
+	// control_response, by request id (Story 78.32).
+	modeReqs map[string]Mode
+	modeSeq  int
+	modeLast Mode // the newest requested mode
 
 	interruptSeq   int
 	interruptTimer *time.Timer
@@ -116,7 +121,7 @@ func newSession(d *Daemon, rec *SessionRecord) *session {
 	log := d.log.With("session " + rec.SessionID[:8])
 	s := &session{d: d, id: rec.SessionID, rec: rec, log: log,
 		cmds: make(chan sessionCmd, 64), pending: map[string]*pendingApproval{},
-		remember: map[string]bool{}, linkErr: make(chan error, 1), done: make(chan struct{}),
+		remember: map[string]bool{}, modeReqs: map[string]Mode{}, linkErr: make(chan error, 1), done: make(chan struct{}),
 		art: newArtifactTracker(d.chatAPIURL), parkReq: make(chan chan bool), lastActive: time.Now()}
 	s.outbox = NewOutbox(d.parser, log)
 	s.tr = NewTranslator()
@@ -354,7 +359,7 @@ func (s *session) spawn(ctx context.Context, resumeID string) (err error) {
 	if err != nil {
 		return err
 	}
-	cfg := s.d.claude
+	cfg := s.claudeLaunchConfig()
 	st, err := ClaudeAuthStatus(ctx, s.d.runner, env, s.rec.Cwd, cfg.Bin)
 	if err != nil {
 		return &proofError{"claude auth status failed: " + err.Error()}
@@ -594,6 +599,7 @@ func (s *session) stopProcess(kill bool) {
 	s.turnActive, s.running = false, false
 	s.held = nil
 	s.pending = map[string]*pendingApproval{}
+	s.commitPendingMode() // acked set_mode never answered: the next spawn applies it
 	s.queue = nil
 	s.stopInterruptTimer()
 	if s.cx != nil {
@@ -683,7 +689,7 @@ func (s *session) handleLine(line []byte) {
 	}
 	switch {
 	case f.Type == "system" && f.Subtype == "init":
-		if problem := initProblem(f); problem != "" {
+		if problem := initProblem(f, s.claudeExpectedModes()); problem != "" {
 			s.failProof("Claude Code did not start on the subscription login: " + problem)
 			return
 		}
@@ -697,15 +703,20 @@ func (s *session) handleLine(line []byte) {
 		}
 		if !s.running {
 			s.running = true
-			s.log.Printf("init ok: claude %s, model %s, apiKeySource none, permissionMode default, tools %v, mcp %s, plugins %s",
-				f.Version, f.Model, f.Tools, string(f.MCPServers), string(f.Plugins))
+			s.log.Printf("init ok: claude %s, model %s, apiKeySource none, permissionMode %s, tools %v, mcp %s, plugins %s",
+				f.Version, f.Model, f.PermissionMode, f.Tools, string(f.MCPServers), string(f.Plugins))
 			s.emitStatus("running", "")
+			s.emitControls()
 			s.emit(s.held...)
 			s.held = nil
 		}
 		return
 	case f.Type == "control_request":
 		if s.handleControlRequest(f, line) {
+			return
+		}
+	case f.Type == "control_response":
+		if s.claudeModeResponse(line) {
 			return
 		}
 	case f.Type == "result":
@@ -718,8 +729,15 @@ func (s *session) handleLine(line []byte) {
 		// Nothing reaches the relay before the init proof passes.
 		return
 	}
-	s.emit(s.art.observe(s.tr.In(line))...)
+	chunks := s.tr.In(line)
 	if f.Type == "result" {
+		for i, c := range chunks {
+			chunks[i] = withContext(c, s.tr.Context) // mosaic-event/3 context fields
+		}
+	}
+	s.emit(s.art.observe(chunks)...)
+	if f.Type == "result" {
+		s.log.Debugf("%s", s.tr.Context)
 		s.turnActive = false
 		aborted := f.TerminalReason == "aborted_streaming"
 		if s.interruptTimer != nil {
@@ -762,6 +780,9 @@ func (s *session) handleControlRequest(f claudeFrame, line []byte) bool {
 		_ = s.proc.WriteJSON(denyFrame(f.RequestID, "Denied: the session is not verified."))
 		return true
 	}
+	if s.claudeBackstop(f.RequestID, req) {
+		return true // decided by the permission mode (Story 78.32): no card
+	}
 	if allow, ok := s.remember[req.ToolName]; ok {
 		// Remembered for this session: answer locally, no relay round trip.
 		if allow {
@@ -788,6 +809,8 @@ func (s *session) handle(ctx context.Context, c sessionCmd) bool {
 		s.userMessage(ctx, in.Text)
 	case "interrupt":
 		s.interrupt()
+	case "set_mode":
+		s.setMode(in.Mode)
 	case "stop_session":
 		s.stop(true)
 		return true

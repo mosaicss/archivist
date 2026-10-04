@@ -14,6 +14,9 @@
 //	recall           reply with the stored codeword
 //	cmd <command>    ask a command approval; acceptForSession is cached
 //	file <name>      ask a file change approval; accept writes the file
+//	filegrant <name> the same, asking for an extra root (grantRoot)
+//	overlap          start a publish_artifact call, then a search call, then
+//	                 ask the publish approval (overlapping MCP calls)
 //	mcp              call the archivist MCP search tool (MCP approval when configured)
 //	publish <path>   call publish_artifact; an MCP approval when its
 //	                 approval mode (per tool, else the server default) is
@@ -46,7 +49,11 @@
 // process stays alive, ignoring stdin EOF, until SIGTERM or SIGINT, 60 s
 // cap).
 // Replies to requests the fake no longer waits for are recorded in
-// late-replies.jsonl.
+// late-replies.jsonl. thread/start and thread/resume answer the sandbox
+// they were asked for (read-only, workspace-write, danger-full-access) and
+// every turn/start's params are appended to turn-start.jsonl (Story
+// 78.32). The fake asks approvals whatever the approval policy, so tests
+// see the daemon's own backstop.
 // account/login/start (chatgptDeviceCode only) records login-start.json and
 // account/login/cancel records login-cancel.json; config.json "login"
 // chooses the outcome (success, failure, hang).
@@ -89,6 +96,9 @@ type config struct {
 	LateExtraMCP       bool     `json:"lateExtraMCP"`
 	CloseBeforeMCP     bool     `json:"closeBeforeMCP"`
 	ResumeError        string   `json:"resumeError"`
+	// ThreadModel is the model thread/start and thread/resume report
+	// (default: the requested one), as when Codex substitutes a model.
+	ThreadModel string `json:"threadModel"`
 	// Login is the device code sign-in outcome (Story 78.22): "success"
 	// (default: auth.json written, then account/login/completed success),
 	// "failure" (completed with an error) or "hang" (never completes).
@@ -382,9 +392,20 @@ func (s *server) handle(id json.RawMessage, method string, params json.RawMessag
 		}
 		reply(id, map[string]any{"account": acct, "requiresOpenaiAuth": true})
 	case "model/list":
+		efforts := func(list ...string) []any {
+			out := []any{}
+			for _, e := range list {
+				out = append(out, map[string]any{"reasoningEffort": e, "description": e + " effort"})
+			}
+			return out
+		}
 		reply(id, map[string]any{"data": []any{
-			map[string]any{"id": "fake-other", "model": "fake-other", "isDefault": false},
-			map[string]any{"id": "fake-default", "model": "fake-default", "isDefault": true},
+			map[string]any{"id": "fake-other", "model": "fake-other", "displayName": "Fake Other", "isDefault": false,
+				"hidden": false, "defaultReasoningEffort": "medium", "supportedReasoningEfforts": efforts("low", "medium")},
+			map[string]any{"id": "fake-default", "model": "fake-default", "displayName": "Fake Default", "isDefault": true,
+				"hidden": false, "defaultReasoningEffort": "low", "supportedReasoningEfforts": efforts("low", "medium", "high", "xhigh")},
+			map[string]any{"id": "fake-hidden", "model": "fake-hidden", "displayName": "Fake Hidden", "isDefault": false,
+				"hidden": true, "defaultReasoningEffort": "low", "supportedReasoningEfforts": efforts("low")},
 		}, "nextCursor": nil})
 	case "thread/start", "thread/resume":
 		_ = os.MkdirAll(base, 0o700)
@@ -414,15 +435,29 @@ func (s *server) handle(id json.RawMessage, method string, params json.RawMessag
 			sources = []string{}
 		}
 		model, _ := p["model"].(string)
+		if cfg.ThreadModel != "" {
+			model = cfg.ThreadModel
+		}
+		sandbox := map[string]any{"type": "workspaceWrite", "writableRoots": roots, "networkAccess": false,
+			"excludeTmpdirEnvVar": s.overrides["sandbox_workspace_write.exclude_tmpdir_env_var"] == "true",
+			"excludeSlashTmp":     s.overrides["sandbox_workspace_write.exclude_slash_tmp"] == "true"}
+		switch p["sandbox"] {
+		case "read-only":
+			sandbox = map[string]any{"type": "readOnly", "networkAccess": false}
+		case "danger-full-access":
+			sandbox = map[string]any{"type": "dangerFullAccess"}
+		}
 		reply(id, map[string]any{"thread": map[string]any{"id": tid, "cwd": s.cwd}, "model": model,
 			"modelProvider": cfg.ModelProvider, "cwd": s.cwd, "instructionSources": sources,
 			"approvalPolicy": p["approvalPolicy"], "approvalsReviewer": p["approvalsReviewer"],
-			"sandbox": map[string]any{"type": "workspaceWrite", "writableRoots": roots, "networkAccess": false,
-				"excludeTmpdirEnvVar": s.overrides["sandbox_workspace_write.exclude_tmpdir_env_var"] == "true",
-				"excludeSlashTmp":     s.overrides["sandbox_workspace_write.exclude_slash_tmp"] == "true"},
-			"reasoningEffort": nil})
+			"sandbox": sandbox, "reasoningEffort": nil})
 		s.startMCP()
 	case "turn/start":
+		_ = os.MkdirAll(base, 0o700)
+		if fh, err := os.OpenFile(filepath.Join(base, "turn-start.jsonl"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600); err == nil {
+			_, _ = fh.Write(append(append([]byte(nil), params...), '\n'))
+			_ = fh.Close()
+		}
 		input, _ := p["input"].([]any)
 		text := ""
 		if len(input) > 0 {
@@ -564,8 +599,9 @@ func (t *turnCtx) say(text string) {
 func (t *turnCtx) usage() {
 	t.tokens += 10
 	notify("thread/tokenUsage/updated", t.with("tokenUsage", map[string]any{
-		"total": map[string]any{"totalTokens": t.tokens + 5, "inputTokens": t.tokens, "cachedInputTokens": 0, "outputTokens": 5, "reasoningOutputTokens": 0},
-		"last":  map[string]any{"totalTokens": 15, "inputTokens": 10, "cachedInputTokens": 0, "outputTokens": 5, "reasoningOutputTokens": 0}}))
+		"total":              map[string]any{"totalTokens": t.tokens + 5, "inputTokens": t.tokens, "cachedInputTokens": 0, "outputTokens": 5, "reasoningOutputTokens": 0},
+		"last":               map[string]any{"totalTokens": 15, "inputTokens": 10, "cachedInputTokens": 0, "outputTokens": 5, "reasoningOutputTokens": 0},
+		"modelContextWindow": 272000}))
 }
 
 func (t *turnCtx) complete(status string) {
@@ -626,7 +662,26 @@ func (s *server) turn(turn, text string, stop <-chan struct{}) {
 			return
 		}
 	case "file":
-		t.fileChange(arg)
+		t.fileChange(arg, nil)
+	case "filegrant":
+		t.fileChange(arg, "/")
+	case "overlap":
+		t.itemN++
+		pub := map[string]any{"type": "mcpToolCall", "id": fmt.Sprintf("mcp-%s-%d", turn[:8], t.itemN), "server": "archivist",
+			"tool": "publish_artifact", "status": "inProgress", "arguments": map[string]any{"path": "x.md"}, "result": nil, "error": nil}
+		t.itemN++
+		srch := map[string]any{"type": "mcpToolCall", "id": fmt.Sprintf("mcp-%s-%d", turn[:8], t.itemN), "server": "archivist",
+			"tool": "search", "status": "inProgress", "arguments": map[string]any{"query": "q"}, "result": nil, "error": nil}
+		t.item("item/started", pub)
+		t.item("item/started", srch)
+		r := s.ask("mcpServer/elicitation/request", t.with("serverName", "archivist", "mode", "form", "message", "Allow publish?",
+			"requestedSchema", map[string]any{"type": "object", "properties": map[string]any{}},
+			"_meta", map[string]any{"codex_approval_kind": "mcp_tool_call", "tool_name": "publish_artifact"}))
+		for _, it := range []map[string]any{srch, pub} {
+			it["status"] = "failed"
+			t.item("item/completed", it)
+		}
+		t.say("overlap: " + decisionOf(r))
 	case "mcp":
 		t.mcpCall()
 	case "publish":
@@ -771,7 +826,7 @@ func (t *turnCtx) command(command string, background bool) string {
 	return ""
 }
 
-func (t *turnCtx) fileChange(name string) {
+func (t *turnCtx) fileChange(name string, grantRoot any) {
 	t.itemN++
 	id := fmt.Sprintf("patch-%s-%d", t.turn[:8], t.itemN)
 	path := filepath.Join(t.s.cwd, name)
@@ -779,7 +834,7 @@ func (t *turnCtx) fileChange(name string) {
 	item := map[string]any{"type": "fileChange", "id": id, "changes": changes, "status": "inProgress"}
 	t.item("item/started", item)
 	decision := decisionOf(t.s.ask("item/fileChange/requestApproval", t.with("itemId", id, "startedAtMs", time.Now().UnixMilli(),
-		"reason", "create "+name)))
+		"reason", "create "+name, "grantRoot", grantRoot)))
 	if decision == "accept" || decision == "acceptForSession" {
 		_ = os.WriteFile(path, []byte("hello\n"), 0o600)
 		item["status"] = "completed"
@@ -857,6 +912,7 @@ func (t *turnCtx) publish(path string) {
 			"message", "Allow archivist publish_artifact?", "requestedSchema", map[string]any{"type": "object", "properties": map[string]any{}},
 			"_meta", map[string]any{"codex_approval_kind": "mcp_tool_call", "persist": []any{"session", "always"},
 				"tool_name": "publish_artifact", "tool_params": args}))
+		_ = os.WriteFile(filepath.Join(base, "elicitation-reply.json"), r, 0o600)
 		if decisionOf(r) != "accept" {
 			item["status"] = "failed"
 			item["error"] = map[string]any{"message": "user rejected MCP tool call"}

@@ -75,6 +75,65 @@ func (m setupMode) validate(stderr io.Writer, args []string, check, session, har
 	return nil
 }
 
+// validateControls checks the Story 78.32 flags against the setup mode:
+// --max-permission only with --install (written into the service) or
+// --service (what the service runs), and a valid mode with --install;
+// --mode, --model and --effort never with a setup flag (they need --session,
+// which no setup flag takes). The plain daemon and --session check them in
+// permissionFlags; --service checks the mode in runServiceMode, which logs
+// a bad one and exits 0 (an exit 2 would restart every 10 s forever).
+func (m setupMode) validateControls(stderr io.Writer, maxPermission string, flags sessionControlFlags) error {
+	if m.count() == 0 {
+		return nil
+	}
+	usage := func(format string, args ...any) error {
+		_, _ = fmt.Fprintf(stderr, "Error: "+format+"\n", args...)
+		return &ExitError{Code: ExitUsageError}
+	}
+	for _, f := range []struct{ name, value string }{{"--mode", flags.mode}, {"--model", flags.model}, {"--effort", flags.effort}} {
+		if f.value != "" {
+			return usage("%s needs --session (workspace sessions choose it in the workspace)", f.name)
+		}
+	}
+	if maxPermission == "" {
+		return nil
+	}
+	if !m.install && !m.service {
+		return usage("--max-permission applies only when connect runs or with --install")
+	}
+	if _, ok := connect.ParseMode(maxPermission); !ok && m.install {
+		return usage("--max-permission %q is not a mode; use one of %s", maxPermission, connect.ModeHelp())
+	}
+	return nil
+}
+
+// serviceArgs are the daemon flags an install writes into the service
+// definition after `connect --service` (Story 78.32: the ceiling, when
+// chosen; without it the service runs the default ceiling).
+func serviceArgs(maxPermission string) []string {
+	if maxPermission == "" {
+		return nil
+	}
+	return []string{"--max-permission", maxPermission}
+}
+
+// installedCeiling is the ceiling an installed service runs, from its
+// definition's --max-permission (the default when absent), whether the flag
+// was found (either form) and whether the value read is a known mode.
+func installedCeiling(args []string) (mode connect.Mode, found, ok bool) {
+	for i, a := range args {
+		if a == "--max-permission" && i+1 < len(args) {
+			mode, ok = connect.ParseMode(args[i+1])
+			return mode, true, ok
+		}
+		if v, cut := strings.CutPrefix(a, "--max-permission="); cut {
+			mode, ok = connect.ParseMode(v)
+			return mode, true, ok
+		}
+	}
+	return connect.DefaultMaxMode, false, true
+}
+
 // runPair redeems a pairing code and saves the new key.
 func runPair(cmd *cobra.Command, version, raw string) error {
 	stderr := cmd.ErrOrStderr()
@@ -126,7 +185,7 @@ func runPair(cmd *cobra.Command, version, raw string) error {
 
 // newServiceManager builds this platform's manager, or prints why there is
 // none (exit 1).
-func newServiceManager(cmd *cobra.Command) (service.Manager, string, error) {
+func newServiceManager(cmd *cobra.Command, args []string) (service.Manager, string, error) {
 	stderr := cmd.ErrOrStderr()
 	if runtime.GOOS == "windows" {
 		_, _ = fmt.Fprintln(stderr, "archivist connect: Background connect is not available on Windows yet. Your key is saved; run archivist connect on a macOS or Linux machine.")
@@ -137,7 +196,7 @@ func newServiceManager(cmd *cobra.Command) (service.Manager, string, error) {
 		_, _ = fmt.Fprintf(stderr, "archivist connect: %v\n", err)
 		return nil, "", &ExitError{Code: ExitGenericError}
 	}
-	opts := service.Options{Home: home, Run: serviceRunner, UID: os.Getuid(), Env: service.CaptureEnv(os.Environ())}
+	opts := service.Options{Home: home, Run: serviceRunner, UID: os.Getuid(), Env: service.CaptureEnv(os.Environ()), Args: args}
 	if u, err := user.Current(); err == nil {
 		opts.User = u.Username
 	}
@@ -184,8 +243,12 @@ func stableBinary() (string, error) {
 	return resolved, nil
 }
 
-// runServiceInstall installs and starts the background service.
-func runServiceInstall(cmd *cobra.Command) error {
+// runServiceInstall installs and starts the background service, running
+// `connect --service` with --max-permission when one was given. Without
+// the flag, an installed service's own --max-permission is kept, so an
+// update (the install script reinstalls on every update) never changes the
+// ceiling; --max-permission auto_edits returns to the default.
+func runServiceInstall(cmd *cobra.Command, maxPermission string) error {
 	stderr, stdout := cmd.ErrOrStderr(), cmd.OutOrStdout()
 	if !connect.Supported() {
 		_, _ = fmt.Fprintln(stderr, "archivist connect: Background connect is not available on Windows yet.")
@@ -197,7 +260,20 @@ func runServiceInstall(cmd *cobra.Command) error {
 		_, _ = fmt.Fprintln(stderr, "archivist connect --install needs a saved ak_ key. Run 'archivist connect --pair CODE' with a code from Mosaic (or 'archivist auth login --token ak_...') first.")
 		return &ExitError{Code: ExitAuthError}
 	}
-	m, home, err := newServiceManager(cmd)
+	kept := false
+	if maxPermission == "" {
+		cur, _, err := newServiceManager(cmd, nil)
+		if err != nil {
+			return err
+		}
+		if b, err := os.ReadFile(cur.Path()); err == nil {
+			// Only a flag in the definition counts; none means the default.
+			if c, found, ok := installedCeiling(service.ServiceArgs(string(b))); found && ok {
+				maxPermission, kept = string(c), true
+			}
+		}
+	}
+	m, home, err := newServiceManager(cmd, serviceArgs(maxPermission))
 	if err != nil {
 		return err
 	}
@@ -219,6 +295,15 @@ func runServiceInstall(cmd *cobra.Command) error {
 	default:
 		_, _ = fmt.Fprintf(stdout, "It runs now and starts again at your next login. Starting at boot needs lingering, which could not be enabled: %s\n", rep.Linger)
 	}
+	ceiling, _, _ := installedCeiling(serviceArgs(maxPermission))
+	switch {
+	case kept:
+		_, _ = fmt.Fprintf(stdout, "Permission ceiling: %s (%s), kept from the installed service; change it with 'archivist connect --install --max-permission <mode>'.\n", ceiling, ceiling.Label())
+	case maxPermission == "":
+		_, _ = fmt.Fprintf(stdout, "Permission ceiling: %s (%s), the default; choose another with 'archivist connect --install --max-permission <mode>'.\n", ceiling, ceiling.Label())
+	default:
+		_, _ = fmt.Fprintf(stdout, "Permission ceiling: %s (%s).\n", ceiling, ceiling.Label())
+	}
 	_, _ = fmt.Fprintf(stdout, "Log: %s\nCheck it with 'archivist connect --status'; remove it with 'archivist connect --uninstall'.\n", service.LogPath(home))
 	if os.Getenv("ARCHIVIST_TOKEN") != "" {
 		_, _ = fmt.Fprintln(stderr, "Note: the service uses the saved key, not ARCHIVIST_TOKEN.")
@@ -228,7 +313,7 @@ func runServiceInstall(cmd *cobra.Command) error {
 
 // runServiceUninstall stops and removes the background service.
 func runServiceUninstall(cmd *cobra.Command) error {
-	m, _, err := newServiceManager(cmd)
+	m, _, err := newServiceManager(cmd, nil)
 	if err != nil {
 		return err
 	}
@@ -252,7 +337,7 @@ func runServiceUninstall(cmd *cobra.Command) error {
 // service runs (systemd: is-active; launchd: loaded and its daemon alive)
 // and a saved ak_ key exists, else 1.
 func runServiceStatus(cmd *cobra.Command) error {
-	m, home, err := newServiceManager(cmd)
+	m, home, err := newServiceManager(cmd, nil)
 	if err != nil {
 		return err
 	}
@@ -271,6 +356,13 @@ func runServiceStatus(cmd *cobra.Command) error {
 		state = "installed, not running (run 'archivist connect --install' to start it again)"
 	}
 	_, _ = fmt.Fprintf(out, "Service:  %s (%s: %s)\n", state, m.Name(), m.Path())
+	if st.Installed {
+		if ceiling, _, ok := installedCeiling(st.Args); ok {
+			_, _ = fmt.Fprintf(out, "Ceiling:  %s (%s)\n", ceiling, ceiling.Label())
+		} else {
+			_, _ = fmt.Fprintln(out, "Ceiling:  unreadable (run 'archivist connect --install --max-permission <mode>' again)")
+		}
+	}
 	token, terr := auth.SavedToken()
 	keyOK := terr == nil && strings.HasPrefix(token, "ak_")
 	if keyOK {
@@ -294,11 +386,12 @@ func runServiceStatus(cmd *cobra.Command) error {
 // launchctl setenv injects them). It writes ~/.archivist/connect/service.pid
 // while it runs, so --status can tell a loaded launchd job from a live
 // daemon. A terminal outcome (stopped, superseded, credential or login
-// problem, feature off, no usable harness, bad configuration) exits 0 so the
-// manager leaves it stopped until 'archivist connect --install', the next
-// login (macOS, Linux without lingering) or the next boot; an unexpected
-// failure exits non-zero and the manager restarts it after 10 s.
-func runServiceMode(cmd *cobra.Command, version string, f connectFlags) error {
+// problem, feature off, no usable harness, bad configuration, including a
+// --max-permission this version does not know, as after a downgrade) exits
+// 0 so the manager leaves it stopped until 'archivist connect --install', the
+// next login (macOS, Linux without lingering) or the next boot; an
+// unexpected failure exits non-zero and the manager restarts it after 10 s.
+func runServiceMode(cmd *cobra.Command, version string, f connectFlags, maxPermission string) error {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "archivist connect: %v\n", err)
@@ -314,6 +407,14 @@ func runServiceMode(cmd *cobra.Command, version string, f connectFlags) error {
 	cmd.SetErr(logf)
 	log := connect.NewLogger(logf)
 	log.Printf("service start %s (pid %d, %s)", version, os.Getpid(), time.Now().UTC().Format(time.RFC3339))
+	var refusal strings.Builder
+	maxMode, err := permissionFlags(&refusal, maxPermission, sessionControlFlags{}, nil)
+	if err != nil {
+		log.Printf("%s; run 'archivist connect --install' (add --max-permission <mode> to choose one) to rewrite the service", strings.TrimSpace(refusal.String()))
+		return serviceExit(log, err)
+	}
+	f.maxMode = maxMode
+	log.Printf("permission ceiling %s", f.maxMode)
 	savedKeyOnly(cmd)
 	removePID, err := service.WritePID(home, os.Getpid())
 	if err != nil {

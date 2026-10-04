@@ -56,6 +56,10 @@ type Options struct {
 	Binary string
 	// Env is written into the service definition (see CaptureEnv).
 	Env []EnvVar
+	// Args follow `connect --service` in the service definition: the
+	// daemon flags chosen at install, such as --max-permission <mode>
+	// (Story 78.32).
+	Args []string
 	// Run runs manager commands (ExecRunner when nil).
 	Run Runner
 	// UID is the user id (launchd gui/<uid> domain).
@@ -119,6 +123,19 @@ type Status struct {
 	// Running is systemd's is-active (Linux), or on macOS the job loaded
 	// and the daemon whose pid is in service.pid alive.
 	Running bool
+	// Args are the arguments after `connect --service` in the installed
+	// unit or plist (Story 78.32: --max-permission <mode>), read from the
+	// file; nil when it has none.
+	Args []string
+}
+
+// installedArgs reads the service arguments from an installed unit or plist.
+func installedArgs(path string) []string {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	return ServiceArgs(string(b))
 }
 
 // InstallReport says what Install did.

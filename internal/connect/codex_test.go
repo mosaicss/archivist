@@ -89,7 +89,32 @@ type codexRunRecord struct {
 	PID       int      `json:"pid"`
 }
 
+// codexRuns lists the fake Codex runs, without the model list probes
+// (Story 78.32; codexProbeRuns lists those).
 func codexRuns(t *testing.T, home string) []codexRunRecord {
+	t.Helper()
+	var out []codexRunRecord
+	for _, r := range allCodexRuns(t, home) {
+		if !strings.HasPrefix(filepath.Base(r.CodexHome), "codex-probe-") {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// codexProbeRuns lists the model list probe runs.
+func codexProbeRuns(t *testing.T, home string) []codexRunRecord {
+	t.Helper()
+	var out []codexRunRecord
+	for _, r := range allCodexRuns(t, home) {
+		if strings.HasPrefix(filepath.Base(r.CodexHome), "codex-probe-") {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+func allCodexRuns(t *testing.T, home string) []codexRunRecord {
 	t.Helper()
 	entries, _ := os.ReadDir(filepath.Join(home, ".fakecodex", "runs"))
 	var out []codexRunRecord
@@ -209,25 +234,26 @@ func TestCodexArgsAreFixed(t *testing.T) {
 		set[k] = v
 	}
 	want := map[string]string{
-		"forced_login_method":                               `"chatgpt"`,
-		"cli_auth_credentials_store":                        `"file"`,
-		"model_provider":                                    `"openai"`,
-		"features.apps":                                     "false",
-		"features.plugins":                                  "false",
-		"features.hooks":                                    "false",
-		"features.memories":                                 "false",
-		"notify":                                            "[]",
-		"web_search":                                        `"disabled"`,
-		"history.persistence":                               `"none"`,
-		"shell_environment_policy.inherit":                  `"core"`,
-		"shell_environment_policy.include_only":             `["PATH","HOME","USER","LOGNAME","SHELL","LANG","LC_*","TERM","TMPDIR","TZ","NODE_EXTRA_CA_CERTS","SSL_CERT_FILE","SSL_CERT_DIR","CURL_CA_BUNDLE","GIT_SSL_CAINFO","REQUESTS_CA_BUNDLE"]`,
-		"sandbox_workspace_write.writable_roots":            "[]",
-		"sandbox_workspace_write.network_access":            "false",
-		"project_root_markers":                              "[]",
-		"mcp_servers.archivist.command":                     `"/opt/archivist"`,
-		"mcp_servers.archivist.args":                        `["mcp","serve","--token-file","/state/run/x/task-token"]`,
-		"mcp_servers.archivist.enabled_tools":               `["companies_search","publish_artifact","read_passage","read_section","search","toc"]`,
-		"mcp_servers.archivist.default_tools_approval_mode": `"auto"`,
+		"forced_login_method":                    `"chatgpt"`,
+		"cli_auth_credentials_store":             `"file"`,
+		"model_provider":                         `"openai"`,
+		"features.apps":                          "false",
+		"features.plugins":                       "false",
+		"features.hooks":                         "false",
+		"features.memories":                      "false",
+		"notify":                                 "[]",
+		"web_search":                             `"disabled"`,
+		"history.persistence":                    `"none"`,
+		"shell_environment_policy.inherit":       `"core"`,
+		"shell_environment_policy.include_only":  `["PATH","HOME","USER","LOGNAME","SHELL","LANG","LC_*","TERM","TMPDIR","TZ","NODE_EXTRA_CA_CERTS","SSL_CERT_FILE","SSL_CERT_DIR","CURL_CA_BUNDLE","GIT_SSL_CAINFO","REQUESTS_CA_BUNDLE"]`,
+		"sandbox_workspace_write.writable_roots": "[]",
+		"sandbox_workspace_write.network_access": "false",
+		"project_root_markers":                   "[]",
+		"mcp_servers.archivist.command":          `"/opt/archivist"`,
+		"mcp_servers.archivist.args":             `["mcp","serve","--token-file","/state/run/x/task-token"]`,
+		"mcp_servers.archivist.enabled_tools":    `["companies_search","publish_artifact","read_passage","read_section","search","toc"]`,
+		// Story 78.32: Mosaic read tools never ask; publish_artifact prompts.
+		"mcp_servers.archivist.default_tools_approval_mode": `"approve"`,
 		// Story 78.18: publish_artifact is never auto-approved.
 		"mcp_servers.archivist.tools.publish_artifact.approval_mode": `"prompt"`,
 	}
@@ -342,9 +368,24 @@ func TestCodexSessionLifecycle(t *testing.T) {
 		t.Fatalf("statuses %v", st)
 	}
 	types := slices.Compact(h.payloadTypes(sid))
-	want := []string{"data-session-status", "start", "text-start", "text-delta", "text-end", "data-usage", "finish"}
+	want := []string{"data-session-status", "data-session-controls", "start", "text-start", "text-delta", "text-end", "data-usage", "finish"}
 	if strings.Join(types, " ") != strings.Join(want, " ") {
 		t.Fatalf("events %v", types)
+	}
+	// mosaic-event/3 (Story 78.32): the session's controls when it runs (no
+	// model chosen: model/list's default the handshake resolved, and the
+	// machine effort) and the harness reported context use.
+	ctl := h.relay.eventsOf(sid, "data-session-controls")
+	if len(ctl) != 1 || ctl[0]["schemaVersion"] != "mosaic-event/3" ||
+		fmt.Sprint(ctl[0]["payload"].(map[string]any)["data"]) != "map[effort:low maxMode:auto_edits mode:ask model:fake-default]" {
+		t.Fatalf("session controls %v", ctl)
+	}
+	usage := h.relay.eventsOf(sid, "data-usage")
+	if len(usage) != 1 || usage[0]["schemaVersion"] != "mosaic-event/3" {
+		t.Fatalf("usage %v", usage)
+	}
+	if d := usage[0]["payload"].(map[string]any)["data"].(map[string]any); d["contextTokens"] != float64(15) || d["contextWindow"] != float64(272000) {
+		t.Fatalf("usage context %v", d)
 	}
 	if !strings.Contains(h.relay.text(sid), "hello codex") {
 		t.Fatalf("text %q", h.relay.text(sid))
@@ -422,7 +463,7 @@ func TestCodexSessionLifecycle(t *testing.T) {
 	// Two usage reports in one turn: only the last reaches the relay.
 	h.message(sid, "usage")
 	h.waitFinishes(sid, 3)
-	usage := h.relay.eventsOf(sid, "data-usage")
+	usage = h.relay.eventsOf(sid, "data-usage")
 	if len(usage) != 3 {
 		t.Fatalf("usage events %d, want one per turn", len(usage))
 	}
@@ -564,21 +605,29 @@ func TestCodexFileChangeApproval(t *testing.T) {
 }
 
 func TestCodexMCPApprovalAndOtherServerRequests(t *testing.T) {
+	// mcpApproval: the fake asks even for search. Real Codex never asks
+	// for a read tool (approve mode), so an elicitation is never treated as
+	// one (Story 78.32): a card in ask mode.
 	h := newCodexHarness(t, map[string]any{"mcpApproval": true})
 	h.start()
 	sid := h.startCodexSession("mcp")
-	req := h.approve(sid, 1, "allow", "user", "allow_once")
+	h.approve(sid, 1, "allow", "user", "allow_once")
 	h.waitFinishes(sid, 1)
-	if !strings.HasPrefix(req["toolCallId"].(string), "mcp-") || !strings.Contains(req["approvalId"].(string), ":approval:") {
-		t.Fatalf("mcp approval %v", req)
-	}
 	if !strings.Contains(h.relay.text(sid), "tools: ") {
 		t.Fatalf("text %q", h.relay.text(sid))
 	}
-	h.message(sid, "mcp")
-	h.approve(sid, 2, "deny", "user", "reject_once")
+	// publish_artifact asks in ask mode: card, then allow / deny.
+	h.writeCwd(sid, "a.md", []byte("# a\n"))
+	h.message(sid, "publish a.md")
+	req := h.approve(sid, 2, "allow", "user", "allow_once")
 	h.waitFinishes(sid, 2)
-	if !strings.Contains(h.relay.text(sid), "mcp declined") {
+	if !strings.HasPrefix(req["toolCallId"].(string), "mcp-") || !strings.Contains(req["approvalId"].(string), ":approval:") {
+		t.Fatalf("mcp approval %v", req)
+	}
+	h.message(sid, "publish a.md")
+	h.approve(sid, 3, "deny", "user", "reject_once")
+	h.waitFinishes(sid, 3)
+	if !strings.Contains(h.relay.text(sid), "publish declined") {
 		t.Fatalf("text %q", h.relay.text(sid))
 	}
 	for i, row := range []struct{ text, want string }{
@@ -588,25 +637,25 @@ func TestCodexMCPApprovalAndOtherServerRequests(t *testing.T) {
 		{"unknown", `"code":-32601`},
 	} {
 		h.message(sid, row.text)
-		h.waitFinishes(sid, 3+i)
+		h.waitFinishes(sid, 4+i)
 		if !strings.Contains(h.relay.text(sid), row.want) {
 			t.Fatalf("%s: text %q", row.text, h.relay.text(sid))
 		}
 	}
-	if n := len(h.relay.eventsOf(sid, "tool-approval-request")); n != 2 {
+	if n := len(h.relay.eventsOf(sid, "tool-approval-request")); n != 3 {
 		t.Fatalf("only MCP tool approvals become cards, got %d", n)
 	}
 	// A non-JSON stdout line is skipped, not fatal.
 	h.message(sid, "garbage")
-	h.waitFinishes(sid, 7)
+	h.waitFinishes(sid, 8)
 	if !strings.Contains(h.relay.text(sid), "after garbage") || !strings.Contains(h.log.String(), "not a JSON-RPC message") {
 		t.Fatalf("garbage row: %q", h.relay.text(sid))
 	}
 	// Plan and reasoning map onto existing schemas.
 	h.message(sid, "plan")
-	h.waitFinishes(sid, 8)
-	h.message(sid, "reason")
 	h.waitFinishes(sid, 9)
+	h.message(sid, "reason")
+	h.waitFinishes(sid, 10)
 	if len(h.relay.eventsOf(sid, "data-plan")) != 1 || len(h.relay.eventsOf(sid, "reasoning-end")) != 1 {
 		t.Fatalf("plan/reasoning events %v", h.payloadTypes(sid))
 	}
@@ -918,27 +967,30 @@ func TestCodexMoreServerRequestRows(t *testing.T) {
 	if req["approvalDescriptor"].(map[string]any)["kind"] != "writeStdin" || !strings.Contains(h.relay.text(sid), "stdin: accept") {
 		t.Fatalf("writeStdin row: %v %q", req, h.relay.text(sid))
 	}
-	// MCP allow for session: accept with a session-only persist, never "always".
-	h.message(sid, "mcp")
-	h.approve(sid, 2, "allow", "user", "allow_always")
+	// MCP deny for session: cancel (publish_artifact: Mosaic read tools
+	// never reach a card).
+	h.writeCwd(sid, "a.md", []byte("# a\n"))
+	h.message(sid, "publish a.md")
+	h.approve(sid, 2, "deny", "user", "reject_always")
 	h.waitFinishes(sid, 2)
 	b, _ := os.ReadFile(filepath.Join(h.home, ".fakecodex", "elicitation-reply.json"))
-	if !strings.Contains(string(b), `"action":"accept"`) || !strings.Contains(string(b), `"persist":"session"`) || strings.Contains(string(b), "always") {
-		t.Fatalf("mcp allow for session reply %s", b)
-	}
-	// MCP deny for session: cancel.
-	h.message(sid, "mcp")
-	h.approve(sid, 3, "deny", "user", "reject_always")
-	h.waitFinishes(sid, 3)
-	b, _ = os.ReadFile(filepath.Join(h.home, ".fakecodex", "elicitation-reply.json"))
 	if !strings.Contains(string(b), `"action":"cancel"`) {
 		t.Fatalf("mcp deny for session reply %s", b)
+	}
+	// MCP allow for session: accept once, never Codex persistence (Story
+	// 78.32: the daemon keeps it, so a later read_only still declines).
+	h.message(sid, "publish a.md")
+	h.approve(sid, 3, "allow", "user", "allow_always")
+	h.waitFinishes(sid, 3)
+	b, _ = os.ReadFile(filepath.Join(h.home, ".fakecodex", "elicitation-reply.json"))
+	if !strings.Contains(string(b), `"action":"accept"`) || strings.Contains(string(b), "persist") || strings.Contains(string(b), "always") {
+		t.Fatalf("mcp allow for session reply %s", b)
 	}
 	reasons := []string{}
 	for _, r := range h.relay.eventsOf(sid, "tool-approval-response") {
 		reasons = append(reasons, r["payload"].(map[string]any)["reason"].(string))
 	}
-	if strings.Join(reasons, ",") != "accept,acceptForSession,cancel" {
+	if strings.Join(reasons, ",") != "accept,cancel,acceptForSession" {
 		t.Fatalf("decisions %v", reasons)
 	}
 }
@@ -1087,10 +1139,10 @@ func TestThreadProblemFailsClosed(t *testing.T) {
 		th.Sandbox.NetworkAccess, th.Sandbox.ExcludeSlashTmp, th.Sandbox.ExcludeTmpdirEnvVar = &no, &yes, &yes
 		return th
 	}
-	if p := threadProblem(good(), "/w/session", ""); p != "" {
+	if p := threadProblem(good(), "/w/session", "", ModeAsk); p != "" {
 		t.Fatalf("compliant thread failed: %s", p)
 	}
-	if p := threadProblem(good(), "/w/session", "th-1"); p != "" {
+	if p := threadProblem(good(), "/w/session", "th-1", ModeAsk); p != "" {
 		t.Fatalf("compliant resume failed: %s", p)
 	}
 	for name, c := range map[string]struct {
@@ -1119,14 +1171,14 @@ func TestThreadProblemFailsClosed(t *testing.T) {
 	} {
 		th := good()
 		c.mutate(&th)
-		if p := threadProblem(th, "/w/session", c.resumed); !strings.Contains(p, c.want) {
+		if p := threadProblem(th, "/w/session", c.resumed, ModeAsk); !strings.Contains(p, c.want) {
 			t.Errorf("%s: problem %q, want %q", name, p, c.want)
 		}
 	}
 	// The cwd itself as a writable root is fine.
 	th := good()
 	th.Sandbox.WritableRoots = []string{"/w/session"}
-	if p := threadProblem(th, "/w/session", ""); p != "" {
+	if p := threadProblem(th, "/w/session", "", ModeAsk); p != "" {
 		t.Errorf("cwd root: %s", p)
 	}
 }

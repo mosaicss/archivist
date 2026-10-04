@@ -1,0 +1,9 @@
+[
+  {
+    "type": "tool-output-available",
+    "toolCallId": "fixture",
+    "output": {
+      "retained": true
+    }
+  }
+]

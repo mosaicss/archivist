@@ -47,6 +47,11 @@ type Inbound struct {
 	Seq             int64
 	Duplicate       bool
 	Online          bool
+	// Mode, Model and Effort are a start's optional session controls (Story
+	// 78.32); Mode is also set_mode's mode. "" when absent.
+	Mode   string
+	Model  string
+	Effort string
 }
 
 // DecodeError is a frame outside the closed set. CorrelationID/SessionID are
@@ -77,7 +82,7 @@ var commonFields = []string{"kind", "correlationId", "sessionId"}
 
 var userShapes = map[string]shape{
 	"presence":          {required: []string{"kind", "online", "agents"}},
-	"start_session":     {required: append(append([]string{}, commonFields...), "agent", "prompt")},
+	"start_session":     {required: append(append([]string{}, commonFields...), "agent", "prompt"), optional: []string{"mode", "model", "effort"}},
 	"approval_response": {required: append(append([]string{}, commonFields...), "approvalId", "decision", "reason", "terminalReceipt"), optional: []string{"scope"}},
 	"error":             {required: []string{"kind", "code"}},
 }
@@ -86,6 +91,7 @@ var sessionShapes = map[string]shape{
 	"user_message":      {required: append(append([]string{}, commonFields...), "text")},
 	"interrupt":         {required: commonFields},
 	"stop_session":      {required: commonFields},
+	"set_mode":          {required: append(append([]string{}, commonFields...), "mode")},
 	"approval_response": {required: append(append([]string{}, commonFields...), "approvalId", "decision", "reason"), optional: []string{"scope"}},
 	"ack":               {required: []string{"kind", "correlationId", "seq", "duplicate"}},
 	"error":             {required: []string{"kind", "code"}},
@@ -140,6 +146,7 @@ func Decode(socket Socket, raw []byte) (*Inbound, error) {
 		{"correlationId", &in.CorrelationID}, {"sessionId", &in.SessionID}, {"agent", &in.Agent},
 		{"prompt", &in.Prompt}, {"text", &in.Text}, {"approvalId", &in.ApprovalID},
 		{"decision", &in.Decision}, {"reason", &in.Reason}, {"scope", &in.Scope}, {"code", &in.Code},
+		{"mode", &in.Mode}, {"model", &in.Model}, {"effort", &in.Effort},
 	} {
 		if !str(f.name, f.dst) {
 			return fail(f.name + " must be a string")
@@ -216,6 +223,22 @@ func Decode(socket Socket, raw []byte) (*Inbound, error) {
 		if !textOK(in.Prompt) {
 			return fail("prompt must be 1..32000 characters")
 		}
+		// Session controls (Story 78.32): present means valid, never empty.
+		if _, ok := fields["mode"]; ok {
+			if _, valid := ParseMode(in.Mode); !valid {
+				return fail("mode must be one of " + modeIDs())
+			}
+		}
+		if _, ok := fields["model"]; ok && !modelIDRe.MatchString(in.Model) {
+			return fail("model is not a model id")
+		}
+		if _, ok := fields["effort"]; ok && !effortRe.MatchString(in.Effort) {
+			return fail("effort is not an effort id")
+		}
+	case "set_mode":
+		if _, valid := ParseMode(in.Mode); !valid {
+			return fail("mode must be one of " + modeIDs())
+		}
 	case "user_message":
 		if !textOK(in.Text) {
 			return fail("text must be 1..32000 characters")
@@ -277,6 +300,32 @@ func capabilitiesFrame(caps []Capability) []byte {
 		Kind   string       `json:"kind"`
 		Agents []Capability `json:"agents"`
 	}{"capabilities", caps})
+	return b
+}
+
+// modeIDs lists the mode ids for refusal reasons.
+func modeIDs() string {
+	ids := make([]string, len(Modes))
+	for i, m := range Modes {
+		ids[i] = string(m)
+	}
+	return strings.Join(ids, ", ")
+}
+
+// controlsFrame is the session controls report (Story 78.32), sent after
+// capabilities as its own kind so an older relay refuses only this frame
+// (INVALID_FRAME) and keeps the plain capabilities.
+func controlsFrame(maxMode, defaultMode Mode, agents []agentControls) []byte {
+	if agents == nil {
+		agents = []agentControls{}
+	}
+	b, _ := json.Marshal(struct {
+		Kind        string          `json:"kind"`
+		MaxMode     Mode            `json:"maxMode"`
+		DefaultMode Mode            `json:"defaultMode"`
+		Modes       []Mode          `json:"modes"`
+		Agents      []agentControls `json:"agents"`
+	}{"controls", maxMode, defaultMode, ModesUpTo(maxMode), agents})
 	return b
 }
 

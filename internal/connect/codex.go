@@ -18,8 +18,9 @@ import (
 // Codex adapter (Story 78.17): one `codex app-server --stdio` per session,
 // spoken to over JSON-RPC (sourcegraph/jsonrpc2). The binary comes from
 // local detection, the argv and every -c override from this file, the model
-// and effort from local flags; the relay supplies only prompts and
-// decisions.
+// and effort from local flags or the session's checked choice; the relay
+// supplies only prompts, decisions and session control ids (Story 78.32:
+// approval policy and sandbox are mapped from the session's mode).
 
 // CodexConfig is the local, non-relay configuration of the Codex adapter.
 type CodexConfig struct {
@@ -66,7 +67,10 @@ func tomlValue(v any) string {
 // codexArgs builds the fixed argv for one session's app-server. Each key
 // was checked on codex-cli 0.160.0 with --strict-config (an unknown key is
 // a startup error). approval_policy never appears here: it travels in
-// thread/start, the only place "untrusted" is accepted.
+// thread/start and turn/start, the only places "untrusted" is accepted.
+// Archivist MCP tools are approved without asking (Mosaic read tools in
+// every mode), except the approval-required ones (publish_artifact), which
+// prompt and so follow the session's mode.
 func codexArgs(cfg CodexConfig, tokenFile string, publish []string) []string {
 	set := [][2]string{
 		// Login: the ChatGPT subscription from the linked auth.json only.
@@ -109,7 +113,7 @@ func codexArgs(cfg CodexConfig, tokenFile string, publish []string) []string {
 		{"mcp_servers.archivist.command", tomlValue(cfg.Executable)},
 		{"mcp_servers.archivist.args", tomlValue(mcpServeArgs(tokenFile, publish))},
 		{"mcp_servers.archivist.enabled_tools", tomlValue(taskscope.Tools())},
-		{"mcp_servers.archivist.default_tools_approval_mode", `"auto"`},
+		{"mcp_servers.archivist.default_tools_approval_mode", `"approve"`},
 		{"mcp_servers.archivist.startup_timeout_sec", "20"},
 		{"mcp_servers.archivist.tool_timeout_sec", "120"},
 	}
@@ -197,6 +201,13 @@ type codexRun struct {
 	interruptWanted bool
 	// mcpItem is the latest in-progress mcpToolCall item (approval cards).
 	mcpItem string
+	// mcpSession is an MCP "allow for session": later MCP approvals are
+	// accepted without a card, after the mode's backstop (Story 78.32).
+	mcpSession bool
+	// model and effort are sent with every turn/start: the session's, the
+	// model replaced by the one thread/start or thread/resume reported.
+	model  string
+	effort string
 	// turnSeq numbers turn/start calls; a late reply of an older call is
 	// ignored (call results are queued apart from notifications).
 	turnSeq int
@@ -258,6 +269,7 @@ func (s *session) spawnCodex(ctx context.Context, threadID, instructions string)
 	}
 	s.running = true
 	s.emitStatus("running", "")
+	s.emitControls()
 	s.snapTimer = time.NewTimer(codexSnapshotEvery)
 	return nil
 }
@@ -296,18 +308,20 @@ func (s *session) codexHandshake(ctx context.Context, home, threadID, instructio
 		}
 		return &proofError{fmt.Sprintf("Codex reports %s, not a ChatGPT login", kind)}
 	}
-	model := s.d.codex.Model
+	model, effort := s.codexModelEffort(hctx)
 	if model == "" {
 		var err error
 		if model, err = s.codexDefaultModel(hctx); err != nil {
 			return err
 		}
 	}
-	params := codexThreadParams{ThreadID: threadID, Model: model, Cwd: s.rec.Cwd, ApprovalPolicy: "untrusted",
-		ApprovalsReviewer: "user", Sandbox: "workspace-write", DeveloperInstructions: instructions}
-	if s.d.codex.Effort != "" {
-		params.Config = map[string]any{"model_reasoning_effort": s.d.codex.Effort}
+	mode := s.mode()
+	params := codexThreadParams{ThreadID: threadID, Model: model, Cwd: s.rec.Cwd, ApprovalPolicy: codexApprovalPolicy(mode),
+		ApprovalsReviewer: "user", Sandbox: codexSandboxMode(mode), DeveloperInstructions: instructions}
+	if effort != "" {
+		params.Config = map[string]any{"model_reasoning_effort": effort}
 	}
+	c.model, c.effort = model, effort
 	var th codexThreadResult
 	if threadID != "" {
 		params.ExcludeTurns = true // no history in the reply (a long thread could exceed a line)
@@ -326,12 +340,14 @@ func (s *session) codexHandshake(ctx context.Context, home, threadID, instructio
 		// Anything else may pass: the session stays resumable.
 		return fmt.Errorf("thread/resume: %w", err)
 	}
-	if problem := threadProblem(th, s.rec.Cwd, threadID); problem != "" {
+	if problem := threadProblem(th, s.rec.Cwd, threadID, mode); problem != "" {
 		return &proofError{problem}
 	}
 	c.threadID = th.Thread.ID
 	if th.Model != "" {
-		s.ctr.Model = th.Model
+		// Codex's answer is authoritative (a resumed thread or a substitute
+		// model): later turns and data-session-controls carry it.
+		s.ctr.Model, c.model = th.Model, th.Model
 	}
 	if s.rec.CodexThreadID != c.threadID {
 		s.rec.CodexThreadID = c.threadID
@@ -340,8 +356,12 @@ func (s *session) codexHandshake(ctx context.Context, home, threadID, instructio
 	if err := s.codexAwaitMCP(hctx); err != nil {
 		return err
 	}
-	s.log.Printf("codex proof ok: home %s, chatgpt account, model %s, provider %s, approvals untrusted/user, sandbox workspaceWrite (network off, roots %v), no instruction sources, archivist MCP ready",
-		home, th.Model, th.ModelProvider, th.Sandbox.WritableRoots)
+	network := "network off"
+	if codexSandboxType(mode) == "dangerFullAccess" {
+		network = "full access, network on"
+	}
+	s.log.Printf("codex proof ok: home %s, chatgpt account, model %s, provider %s, mode %s (approvals %s/user, sandbox %s, %s, roots %v), no instruction sources, archivist MCP ready",
+		home, th.Model, th.ModelProvider, mode, codexApprovalPolicy(mode), codexSandboxType(mode), network, th.Sandbox.WritableRoots)
 	return nil
 }
 
@@ -356,8 +376,10 @@ func threadGone(msg string) bool {
 }
 
 // threadProblem checks the thread/start (or resume) response against the
-// isolation the session requires. Missing fields fail.
-func threadProblem(th codexThreadResult, cwd, resumed string) string {
+// isolation the session requires: the approval policy and sandbox mapped
+// from its mode (Story 78.32), and for workspaceWrite and readOnly the
+// isolation fields. Missing fields fail.
+func threadProblem(th codexThreadResult, cwd, resumed string, mode Mode) string {
 	var problems []string
 	if th.Thread.ID == "" {
 		problems = append(problems, "no thread id")
@@ -368,9 +390,10 @@ func threadProblem(th codexThreadResult, cwd, resumed string) string {
 	if th.ModelProvider != "openai" {
 		problems = append(problems, fmt.Sprintf("model provider %q, not \"openai\"", th.ModelProvider))
 	}
+	wantPolicy, wantSandbox := codexApprovalPolicy(mode), codexSandboxType(mode)
 	var policy string
-	if json.Unmarshal(th.ApprovalPolicy, &policy) != nil || policy != "untrusted" {
-		problems = append(problems, fmt.Sprintf("approval policy %s, not \"untrusted\"", string(th.ApprovalPolicy)))
+	if json.Unmarshal(th.ApprovalPolicy, &policy) != nil || policy != wantPolicy {
+		problems = append(problems, fmt.Sprintf("approval policy %s, not %q", string(th.ApprovalPolicy), wantPolicy))
 	}
 	if th.ApprovalsReviewer != "user" {
 		problems = append(problems, fmt.Sprintf("approvals reviewer %q, not \"user\"", th.ApprovalsReviewer))
@@ -378,8 +401,8 @@ func threadProblem(th codexThreadResult, cwd, resumed string) string {
 	if !samePath(th.Cwd, cwd) {
 		problems = append(problems, fmt.Sprintf("thread cwd %q, not the session directory", th.Cwd))
 	}
-	if th.Sandbox.Type != "workspaceWrite" {
-		problems = append(problems, fmt.Sprintf("sandbox %q, not \"workspaceWrite\"", th.Sandbox.Type))
+	if th.Sandbox.Type != wantSandbox {
+		problems = append(problems, fmt.Sprintf("sandbox %q, not %q", th.Sandbox.Type, wantSandbox))
 	}
 	flag := func(v *bool, want bool, what string) {
 		switch {
@@ -389,9 +412,14 @@ func threadProblem(th codexThreadResult, cwd, resumed string) string {
 			problems = append(problems, fmt.Sprintf("sandbox %s is %v", what, *v))
 		}
 	}
-	flag(th.Sandbox.NetworkAccess, false, "networkAccess")
-	flag(th.Sandbox.ExcludeSlashTmp, true, "excludeSlashTmp")
-	flag(th.Sandbox.ExcludeTmpdirEnvVar, true, "excludeTmpdirEnvVar")
+	switch wantSandbox {
+	case "workspaceWrite":
+		flag(th.Sandbox.NetworkAccess, false, "networkAccess")
+		flag(th.Sandbox.ExcludeSlashTmp, true, "excludeSlashTmp")
+		flag(th.Sandbox.ExcludeTmpdirEnvVar, true, "excludeTmpdirEnvVar")
+	case "readOnly":
+		flag(th.Sandbox.NetworkAccess, false, "networkAccess")
+	}
 	for _, root := range th.Sandbox.WritableRoots {
 		if !samePath(root, cwd) {
 			problems = append(problems, fmt.Sprintf("extra writable root %q", root))
@@ -515,8 +543,13 @@ func (s *session) codexSendUser(text string) {
 		return
 	}
 	c.turnSeq++
+	// Every turn carries the session's current mode (Story 78.32): Codex
+	// applies it to this turn and the ones after.
+	mode := s.mode()
 	c.rpc.dispatch("turn/start", codexTurnStartParams{ThreadID: c.threadID,
-		Input: []codexTextInput{{Type: "text", Text: text, TextElements: []any{}}}}, "turn/start:"+strconv.Itoa(c.turnSeq))
+		Input:          []codexTextInput{{Type: "text", Text: text, TextElements: []any{}}},
+		ApprovalPolicy: codexApprovalPolicy(mode), SandboxPolicy: codexSandboxPolicy(mode),
+		Model: c.model, Effort: c.effort}, "turn/start:"+strconv.Itoa(c.turnSeq))
 	c.turnID = ""
 	c.interruptWanted = false
 	s.turnActive = true
@@ -675,6 +708,7 @@ func (s *session) codexNotification(ev codexEvent) {
 		c.interruptWanted = false
 		c.mcpItem = ""
 		s.stopInterruptTimer()
+		s.log.Debugf("%s", s.ctr.Context)
 		if r.Turn.Status == "interrupted" {
 			s.emitStatus("interrupted", "")
 			c.rpc.dispatch("thread/backgroundTerminals/clean", codexThreadRef{ThreadID: c.threadID}, "clean-after-interrupt")
@@ -706,6 +740,11 @@ func (s *session) codexServerRequest(ev codexEvent) {
 			reply(map[string]any{"decision": "decline"})
 			return
 		}
+		inCwd := ev.Method == "item/fileChange/requestApproval" && s.mode() == ModeAutoEdits &&
+			codexFileInCwd(ev.Params, s.ctr.files, s.rec.Cwd)
+		if s.codexBackstop(reply, false, inCwd) {
+			return // decided by the permission mode (Story 78.32): no card
+		}
 		kind := "command"
 		if ev.Method == "item/fileChange/requestApproval" {
 			kind = "file"
@@ -731,6 +770,16 @@ func (s *session) codexServerRequest(ev codexEvent) {
 		if !s.running || e.Meta == nil || e.Meta.ApprovalKind != "mcp_tool_call" {
 			s.log.Printf("codex elicitation from %q (mode %q) declined: only MCP tool approvals are forwarded", e.ServerName, e.Mode)
 			reply(map[string]any{"action": "decline", "content": nil, "_meta": nil})
+			return
+		}
+		// Never a read tool: Codex approves those itself (approve mode), and
+		// with overlapping calls the latest item need not be this call.
+		if s.codexBackstop(reply, true, false) {
+			return // decided by the permission mode (Story 78.32): no card
+		}
+		if c.mcpSession {
+			s.log.Printf("codex MCP approval accepted: allowed for this session")
+			reply(map[string]any{"action": "accept", "content": map[string]any{}, "_meta": nil})
 			return
 		}
 		turnID := c.turnID
@@ -795,13 +844,17 @@ func (s *session) codexAnswerApproval(in *Inbound) {
 	var result any = map[string]any{"decision": decision}
 	if p.kind == "mcp" {
 		// Elicitation actions: accept, decline, cancel. "Allow for session"
-		// persists for this session only; never persist "always" (it writes
-		// the owner's config).
+		// is kept here (mcpSession), never as Codex persistence: Codex checks
+		// a remembered approval before its approval policy, so a later
+		// read_only could not decline it (codex-rs rust-v0.160.0
+		// core/src/mcp_tool_call.rs mcp_tool_approval_is_remembered). Never
+		// persist "always" either (it writes the owner's config).
 		switch decision {
 		case "accept":
 			result = map[string]any{"action": "accept", "content": map[string]any{}, "_meta": nil}
 		case "acceptForSession":
-			result = map[string]any{"action": "accept", "content": map[string]any{}, "_meta": map[string]any{"persist": "session"}}
+			c.mcpSession = true
+			result = map[string]any{"action": "accept", "content": map[string]any{}, "_meta": nil}
 		default:
 			result = map[string]any{"action": decision, "content": nil, "_meta": nil}
 		}
@@ -838,7 +891,7 @@ func (s *session) emitCodex(chunks ...Chunk) {
 	for _, c := range s.art.observe(chunks) {
 		switch c["type"] {
 		case "data-usage":
-			s.lastUsage = c
+			s.lastUsage = withContext(c, s.ctr.Context) // mosaic-event/3 context fields
 			continue
 		case "finish", "abort":
 			if s.lastUsage != nil {

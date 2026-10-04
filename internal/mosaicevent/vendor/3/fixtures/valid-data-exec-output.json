@@ -1,0 +1,10 @@
+[
+  {
+    "type": "data-exec-output",
+    "data": {
+      "toolCallId": "fixture",
+      "stream": "stdout",
+      "text": "fixture"
+    }
+  }
+]

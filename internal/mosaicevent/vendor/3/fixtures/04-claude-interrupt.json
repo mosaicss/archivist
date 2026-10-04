@@ -1,0 +1,123 @@
+[
+  {
+    "type": "start",
+    "messageId": "claude-turn-1",
+    "messageMetadata": {
+      "schemaVersion": "mosaic-event/3"
+    }
+  },
+  {
+    "type": "reasoning-start",
+    "id": "msg_011Cfb17sGNDMPrHwzU11VkL:0"
+  },
+  {
+    "type": "reasoning-delta",
+    "id": "msg_011Cfb17sGNDMPrHwzU11VkL:0",
+    "delta": ""
+  },
+  {
+    "type": "reasoning-end",
+    "id": "msg_011Cfb17sGNDMPrHwzU11VkL:0"
+  },
+  {
+    "type": "text-start",
+    "id": "msg_011Cfb17sGNDMPrHwzU11VkL:1"
+  },
+  {
+    "type": "text-delta",
+    "id": "msg_011Cfb17sGNDMPrHwzU11VkL:1",
+    "delta": "1"
+  },
+  {
+    "type": "text-delta",
+    "id": "msg_011Cfb17sGNDMPrHwzU11VkL:1",
+    "delta": "\n2\n3\n4\n5"
+  },
+  {
+    "type": "text-delta",
+    "id": "msg_011Cfb17sGNDMPrHwzU11VkL:1",
+    "delta": "\n6\n7\n8\n9"
+  },
+  {
+    "type": "text-delta",
+    "id": "msg_011Cfb17sGNDMPrHwzU11VkL:1",
+    "delta": "\n10\n11\n12\n13"
+  },
+  {
+    "type": "text-delta",
+    "id": "msg_011Cfb17sGNDMPrHwzU11VkL:1",
+    "delta": "\n14\n15\n16\n17"
+  },
+  {
+    "type": "text-delta",
+    "id": "msg_011Cfb17sGNDMPrHwzU11VkL:1",
+    "delta": "\n18\n19\n20\n21"
+  },
+  {
+    "type": "text-delta",
+    "id": "msg_011Cfb17sGNDMPrHwzU11VkL:1",
+    "delta": "\n22\n23\n24\n25"
+  },
+  {
+    "type": "text-delta",
+    "id": "msg_011Cfb17sGNDMPrHwzU11VkL:1",
+    "delta": "\n26\n27\n28\n29"
+  },
+  {
+    "type": "text-end",
+    "id": "msg_011Cfb17sGNDMPrHwzU11VkL:1"
+  },
+  {
+    "type": "data-usage",
+    "data": {
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "cachedInputTokens": 0,
+      "reasoningTokens": 0,
+      "model": "claude-captured"
+    }
+  },
+  {
+    "type": "abort",
+    "reason": "aborted_streaming"
+  },
+  {
+    "type": "start",
+    "messageId": "claude-turn-2",
+    "messageMetadata": {
+      "schemaVersion": "mosaic-event/3"
+    }
+  },
+  {
+    "type": "text-start",
+    "id": "msg_011Cfb184F9uq84RLeo9QVzS:0"
+  },
+  {
+    "type": "text-delta",
+    "id": "msg_011Cfb184F9uq84RLeo9QVzS:0",
+    "delta": "al"
+  },
+  {
+    "type": "text-delta",
+    "id": "msg_011Cfb184F9uq84RLeo9QVzS:0",
+    "delta": "ive"
+  },
+  {
+    "type": "text-end",
+    "id": "msg_011Cfb184F9uq84RLeo9QVzS:0"
+  },
+  {
+    "type": "data-usage",
+    "data": {
+      "inputTokens": 15246,
+      "outputTokens": 4,
+      "cachedInputTokens": 15097,
+      "reasoningTokens": 0,
+      "model": "claude-sonnet-5"
+    }
+  },
+  {
+    "type": "finish",
+    "finishReason": "stop"
+  }
+]

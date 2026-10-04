@@ -30,6 +30,12 @@ type SessionRecord struct {
 	Status             string   `json:"status"` // active | ended | failed
 	CreatedAt          int64    `json:"createdAt"`
 	Handled            []string `json:"handled"`
+	// Session controls (Story 78.32): the permission mode (re-clamped to
+	// the ceiling on resume), and the model and effort over the machine
+	// flags ("" = the flags).
+	Mode   string `json:"mode,omitempty"`
+	Model  string `json:"model,omitempty"`
+	Effort string `json:"effort,omitempty"`
 }
 
 // HasHandled reports whether a command id was already processed.

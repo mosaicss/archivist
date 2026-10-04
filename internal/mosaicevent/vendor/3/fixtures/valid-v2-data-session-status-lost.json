@@ -1,0 +1,10 @@
+[
+  {
+    "type": "data-session-status",
+    "data": {
+      "sessionId": "7c1b6a0e-3f52-4c1d-9a8e-2b4f6d8e0a11",
+      "status": "lost",
+      "message": "The sandbox was lost."
+    }
+  }
+]

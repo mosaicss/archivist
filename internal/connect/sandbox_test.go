@@ -53,6 +53,7 @@ func (h *harness) runSession(sid, agent, signIn, prompt string, extraEnv ...stri
 		Environ: func() []string { return env },
 		TempDir: h.tmp,
 		SignIn:  signIn,
+		MaxMode: h.maxMode,
 	}
 	if agent == "claude" {
 		cfg.Claude = ClaudeConfig{Bin: claudeBin, SettingSources: DefaultSettingSources, Executable: archivistBin,
@@ -68,7 +69,10 @@ func (h *harness) runSession(sid, agent, signIn, prompt string, extraEnv ...stri
 	ctx, cancel := context.WithCancel(context.Background())
 	r := &sandboxRun{h: h, sid: sid, done: make(chan error, 1), cancel: cancel, detects: detects}
 	h.d = d
-	go func() { r.done <- d.RunSession(ctx, SessionStart{SessionID: sid, Agent: agent, Prompt: prompt}) }()
+	go func() {
+		r.done <- d.RunSession(ctx, SessionStart{SessionID: sid, Agent: agent, Prompt: prompt, Mode: h.sessionMode,
+			Model: h.sessionModel, Effort: h.sessionEffort})
+	}()
 	h.t.Cleanup(func() {
 		cancel()
 		select {
@@ -150,8 +154,18 @@ func (h *harness) checkPromptContract(sid string, data map[string]any, code stri
 	}
 	for _, e := range h.relay.eventsOf(sid, "") {
 		want := "mosaic-event/1"
-		if e["type"] == "data-auth-prompt" {
+		switch e["type"] {
+		case "data-auth-prompt":
 			want = "mosaic-event/2"
+		case "data-session-controls":
+			want = "mosaic-event/3"
+		case "data-usage":
+			d, _ := e["payload"].(map[string]any)["data"].(map[string]any)
+			_, tokens := d["contextTokens"]
+			_, window := d["contextWindow"]
+			if tokens || window {
+				want = "mosaic-event/3"
+			}
 		}
 		if e["schemaVersion"] != want {
 			h.t.Errorf("%v event stamped %v, want %s", e["type"], e["schemaVersion"], want)

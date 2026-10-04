@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -44,6 +45,21 @@ Codex sessions run with a private Codex home per session that only links
 your ChatGPT login (auth.json); your Codex config, AGENTS.md, rules, hooks,
 plugins and MCP servers are not loaded and never written.
 
+Permission modes (per session, chosen in the workspace, low to high):
+read_only (Read only: reads and research run, anything that would change
+something is denied without asking), ask (Ask every time), auto_edits (Auto
+edits: file edits run, Claude Code also runs simple file commands such as
+mkdir, mv, cp and rm inside the session folder, other commands ask) and
+full_auto (Full auto: the harness runs without asking, but anything it
+still asks about, for example deleting a critical folder, is shown as a
+card). Mosaic search and read tools never ask in any mode, and Read only
+denies even a tool allowed for the session. --max-permission sets the
+highest mode a session on this machine may run (default auto_edits;
+full_auto with --session); a session asking for more runs at the ceiling,
+and the workspace can never raise it. A session started without a mode runs
+ask (full_auto with --session), within the ceiling.
+ARCHIVIST_CONNECT_DEBUG=1 adds debug lines (context use per turn).
+
 Requires an ak_ API key (archivist auth login) on a Pro account, and Claude
 Code logged in with a claude.ai subscription or Codex logged in with
 ChatGPT. API key logins are refused.
@@ -52,21 +68,26 @@ ChatGPT. API key logins are refused.
   archivist connect             connect and serve sessions until Ctrl-C
 
 Session-bound mode (a Mosaic cloud sandbox): --session <uuid> --agent
-claude|codex --prompt-file <path>, all three together. It serves only that
-session, on its session socket: no user socket and no capability report. A
-harness that is installed but logged out signs in first: the sign-in link
-(and, for Codex, the device code) appears in the session, and for Claude
-Code the next message is the code to paste. It exits 0 after stop_session
-or the session's end, and non-zero when the sign-in or the subscription
-proof fails.
+claude|codex --prompt-file <path>, all three together; --mode, --model and
+--effort optionally choose the session's permission mode, model and effort
+(a model or effort this machine does not offer refuses the start: connect
+exits 1 and the sandbox task fails). It
+serves only that session, on its session socket: no user socket and no
+capability report. A harness that is installed but logged out signs in
+first: the sign-in link (and, for Codex, the device code) appears in the
+session, and for Claude Code the next message is the code to paste. It
+exits 0 after stop_session or the session's end, and non-zero when the
+start is refused or the sign-in or the subscription proof fails.
 
 One-step setup (macOS and Linux): the workspace shows a pairing code.
 
   archivist connect --pair CODE   redeem a pairing code for a new key and save it
   archivist connect --install     run connect as a background user service
                                   (launchd agent or systemd user unit) that
-                                  starts at login and restarts after a crash
-  archivist connect --status      report the service and the saved key
+                                  starts at login and restarts after a crash;
+                                  add --max-permission <mode> to set the
+                                  service's ceiling (default auto_edits)
+  archivist connect --status      report the service, its ceiling and the saved key
   archivist connect --uninstall   stop and remove the background service
 
 The service uses the saved key (~/.archivist/credentials), never
@@ -74,8 +95,9 @@ ARCHIVIST_TOKEN, and logs to ~/.archivist/connect/connect.log. These four
 flags are used one at a time. Windows: --pair works; background connect is
 not available on Windows yet.
 
-Exit codes: 0 ok; 1 refused or stopped (feature off, superseded, too old),
-service not running, or service setup failed; 2 bad flag or relay URL; 3 no
+Exit codes: 0 ok; 1 refused or stopped (feature off, superseded, too old,
+or a session-bound start refused, for example a model or effort this
+machine does not offer), service not running, or service setup failed; 2 bad flag or relay URL; 3 no
 usable harness (Claude Code not found, or no usable Claude Code or Codex);
 4 credential or Claude login problem, or an invalid or expired pairing
 code; 5 server or network error while pairing; 7 pairing rate limited.`
@@ -91,6 +113,9 @@ func newConnectCmd(version string) *cobra.Command {
 	var sessionID, agent, promptFile string
 	var pair string
 	var install, uninstall, status, serviceMode bool
+	var maxPermission string
+	// mode holds --mode, --model and --effort (session-bound mode only).
+	var mode sessionControlFlags
 	c := &cobra.Command{
 		Use:   "connect",
 		Short: "Drive your own Claude Code or Codex from the Mosaic workspace (preview)",
@@ -110,11 +135,14 @@ func newConnectCmd(version string) *cobra.Command {
 				model != "" || effort != "" || codexModel != "" || codexEffort != ""); err != nil {
 				return err
 			}
+			if err := m.validateControls(cmd.ErrOrStderr(), maxPermission, mode); err != nil {
+				return err
+			}
 			switch {
 			case m.pair:
 				return runPair(cmd, version, strings.Join(append([]string{pair}, args...), " "))
 			case m.install:
-				return runServiceInstall(cmd)
+				return runServiceInstall(cmd, maxPermission)
 			case m.uninstall:
 				return runServiceUninstall(cmd)
 			case m.status:
@@ -142,7 +170,11 @@ func newConnectCmd(version string) *cobra.Command {
 			}
 			f := connectFlags{model: model, effort: effort, codexModel: codexModel, codexEffort: codexEffort, session: st}
 			if m.service {
-				return runServiceMode(cmd, version, f)
+				// The ceiling is checked there: a bad one is logged, exit 0.
+				return runServiceMode(cmd, version, f, maxPermission)
+			}
+			if f.maxMode, err = permissionFlags(cmd.ErrOrStderr(), maxPermission, mode, st); err != nil {
+				return err
 			}
 			return runConnect(cmd, version, check, f)
 		},
@@ -161,7 +193,18 @@ func newConnectCmd(version string) *cobra.Command {
 	c.Flags().BoolVar(&status, "status", false, "Report the background service and the saved key")
 	c.Flags().BoolVar(&serviceMode, "service", false, "Run as the background service (used by the service definition)")
 	_ = c.Flags().MarkHidden("service")
+	c.Flags().StringVar(&maxPermission, "max-permission", "", "Highest permission mode a session on this machine may run: "+
+		connect.ModeHelp()+" (default auto_edits; full_auto with --session)")
+	c.Flags().StringVar(&mode.mode, "mode", "", "With --session: the session's permission mode (default full_auto), within --max-permission")
+	c.Flags().StringVar(&mode.model, "model", "", "With --session: the session's model (default: --claude-model or --codex-model), from this machine's model list")
+	c.Flags().StringVar(&mode.effort, "effort", "", "With --session: the session's effort (default: --claude-effort or --codex-effort), one the model offers")
 	return c
+}
+
+// sessionControlFlags are the session-bound mode's --mode, --model and
+// --effort (Story 78.32), as a cloud sandbox launcher passes them.
+type sessionControlFlags struct {
+	mode, model, effort string
 }
 
 // connectFlags are the local harness settings (never from the relay).
@@ -170,6 +213,54 @@ type connectFlags struct {
 	codexModel, codexEffort string
 	// session is the session-bound mode's start (nil: the normal daemon).
 	session *connect.SessionStart
+	// maxMode is the permission ceiling (Story 78.32).
+	maxMode connect.Mode
+}
+
+// permissionFlags validates --max-permission and the session-bound mode's
+// --mode, --model and --effort, and returns the ceiling: the flag, else
+// auto_edits, or full_auto in the session-bound mode. A --mode above the
+// ceiling runs at the ceiling; --model and --effort are only charset checked
+// here (the daemon checks them against its catalogue at the start).
+func permissionFlags(stderr io.Writer, maxPermission string, flags sessionControlFlags, st *connect.SessionStart) (connect.Mode, error) {
+	usage := func(format string, args ...any) (connect.Mode, error) {
+		_, _ = fmt.Fprintf(stderr, "Error: "+format+"\n", args...)
+		return "", &ExitError{Code: ExitUsageError}
+	}
+	ceiling := connect.DefaultMaxMode
+	if st != nil {
+		ceiling = connect.SandboxMaxMode
+	}
+	if maxPermission != "" {
+		m, ok := connect.ParseMode(maxPermission)
+		if !ok {
+			return usage("--max-permission %q is not a mode; use one of %s", maxPermission, connect.ModeHelp())
+		}
+		ceiling = m
+	}
+	if st == nil {
+		for _, f := range []struct{ name, value string }{{"--mode", flags.mode}, {"--model", flags.model}, {"--effort", flags.effort}} {
+			if f.value != "" {
+				return usage("%s needs --session (workspace sessions choose it in the workspace)", f.name)
+			}
+		}
+		return ceiling, nil
+	}
+	if flags.mode != "" {
+		m, ok := connect.ParseMode(flags.mode)
+		if !ok {
+			return usage("--mode %q is not a mode; use one of %s", flags.mode, connect.ModeHelp())
+		}
+		st.Mode = m
+	}
+	if flags.model != "" && !connect.ValidModelID(flags.model) {
+		return usage("--model %q is not a model name", flags.model)
+	}
+	if flags.effort != "" && !connect.ValidEffortID(flags.effort) {
+		return usage("--effort %q is not an effort name", flags.effort)
+	}
+	st.Model, st.Effort = flags.model, flags.effort
+	return ceiling, nil
 }
 
 // maxPromptFile bounds the prompt file read (the relay limit is 32000
@@ -290,6 +381,8 @@ func runConnect(cmd *cobra.Command, version string, check bool, f connectFlags) 
 	api := client.New(token, version)
 	api.SetStderr(io.Discard)
 	log := connect.NewLogger(stderr)
+	debug, _ := strconv.ParseBool(os.Getenv("ARCHIVIST_CONNECT_DEBUG")) // unset or invalid: off
+	log.SetDebug(debug)
 	baseURL := os.Getenv("ARCHIVIST_BASE_URL")
 	cfg := connect.Config{
 		API:        api,
@@ -299,6 +392,7 @@ func runConnect(cmd *cobra.Command, version string, check bool, f connectFlags) 
 		Detect:     detect,
 		AppVersion: version,
 		ChatAPIURL: api.BaseURL,
+		MaxMode:    f.maxMode,
 	}
 	if f.session != nil {
 		cfg.Claude, cfg.Codex = sessionConfigs(det, f, exe, baseURL)
@@ -326,8 +420,8 @@ func runConnect(cmd *cobra.Command, version string, check bool, f connectFlags) 
 		if signIn != "" {
 			state = "logged out: signing in first"
 		}
-		log.Printf("archivist connect %s: session-bound mode, session %s, agent %s (%s); key fp:%s; relay %s.",
-			version, f.session.SessionID, f.session.Agent, state, auth.Fingerprint(token), relayURL)
+		log.Printf("archivist connect %s: session-bound mode, session %s, agent %s (%s); permission ceiling %s; key fp:%s; relay %s.",
+			version, f.session.SessionID, f.session.Agent, state, d.MaxMode(), auth.Fingerprint(token), relayURL)
 		return connectResult(stderr, log, d, d.RunSession(ctx, *f.session))
 	}
 	var harnesses []string
@@ -338,8 +432,8 @@ func runConnect(cmd *cobra.Command, version string, check bool, f connectFlags) 
 	if det.Codex.Usable() {
 		harnesses = append(harnesses, fmt.Sprintf("Codex %s at %s (login linked from %s)", det.Codex.Version, det.Codex.Path, det.Codex.Home))
 	}
-	log.Printf("archivist connect %s: %s; key fp:%s; relay %s. Ctrl-C stops.",
-		version, strings.Join(harnesses, "; "), auth.Fingerprint(token), relayURL)
+	log.Printf("archivist connect %s: %s; permission ceiling %s; key fp:%s; relay %s. Ctrl-C stops.",
+		version, strings.Join(harnesses, "; "), d.MaxMode(), auth.Fingerprint(token), relayURL)
 	return connectResult(stderr, log, d, d.Run(ctx))
 }
 
