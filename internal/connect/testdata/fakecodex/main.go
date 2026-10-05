@@ -39,6 +39,11 @@
 //	exit             start streaming, then exit 3 mid-turn
 //	stdin            ask a kind:"writeStdin" command approval
 //	mcplate          complete an mcpToolCall, then ask an MCP tool approval
+//	websearch <q>    a webSearch item (Story 78.33, as probed on 0.160.0):
+//	                 started with an empty query, completed with the query,
+//	                 a search action and results; no approval request. With
+//	                 -c web_search="disabled" it answers without searching
+//	websearchnostart a webSearch item/completed with no item/started
 //
 // config.json also sets mcpFail (archivist reports failed),
 // handshakeAccount (an account/updated before MCP ready) and
@@ -54,6 +59,11 @@
 // every turn/start's params are appended to turn-start.jsonl (Story
 // 78.32). The fake asks approvals whatever the approval policy, so tests
 // see the daemon's own backstop.
+// config/read (Story 78.33) reports web_search from the -c override with
+// origin sessionFlags (no override: "cached", the default, with no
+// origin); config.json configReadWebSearch, configReadOrigin and
+// configReadError override the answer, and configReadMissing leaves
+// web_search out.
 // account/login/start (chatgptDeviceCode only) records login-start.json and
 // account/login/cancel records login-cancel.json; config.json "login"
 // chooses the outcome (success, failure, hang).
@@ -106,6 +116,11 @@ type config struct {
 	// VerificationURL overrides the device code link (default
 	// https://auth.openai.com/codex/device).
 	VerificationURL string `json:"verificationUrl"`
+	// config/read overrides (Story 78.33).
+	ConfigReadWebSearch string `json:"configReadWebSearch"`
+	ConfigReadOrigin    string `json:"configReadOrigin"`
+	ConfigReadError     string `json:"configReadError"`
+	ConfigReadMissing   bool   `json:"configReadMissing"`
 }
 
 var (
@@ -381,6 +396,33 @@ func (s *server) handle(id json.RawMessage, method string, params json.RawMessag
 		_ = os.WriteFile(filepath.Join(base, "login-cancel.json"), params, 0o600)
 		reply(id, map[string]any{"status": "canceled"})
 		notify("account/login/completed", map[string]any{"loginId": p["loginId"], "success": false, "error": "cancelled"})
+	case "config/read":
+		_ = os.MkdirAll(base, 0o700)
+		_ = os.WriteFile(filepath.Join(base, "config-read.json"), params, 0o600)
+		if cfg.ConfigReadError != "" {
+			replyErr(id, -32603, cfg.ConfigReadError)
+			return
+		}
+		conf := map[string]any{"model": nil, "analytics": map[string]any{"enabled": false}}
+		origins := map[string]any{}
+		mode, origin := "cached", ""
+		if v, ok := s.overrides["web_search"]; ok {
+			_ = json.Unmarshal([]byte(v), &mode)
+			origin = "sessionFlags"
+		}
+		if cfg.ConfigReadWebSearch != "" {
+			mode = cfg.ConfigReadWebSearch
+		}
+		if cfg.ConfigReadOrigin != "" {
+			origin = cfg.ConfigReadOrigin
+		}
+		if !cfg.ConfigReadMissing {
+			conf["web_search"] = mode
+		}
+		if origin != "" {
+			origins["web_search"] = map[string]any{"name": map[string]any{"type": origin}, "version": "sha256:fake"}
+		}
+		reply(id, map[string]any{"config": conf, "origins": origins, "layers": nil})
 	case "account/read":
 		if _, err := os.Stat(filepath.Join(os.Getenv("CODEX_HOME"), "auth.json")); err != nil {
 			reply(id, map[string]any{"account": nil, "requiresOpenaiAuth": true})
@@ -626,6 +668,31 @@ func decisionOf(r json.RawMessage) string {
 	return d.Action
 }
 
+// webSearch emits a webSearch item as Codex 0.160.0 does (probed live,
+// Story 78.33), when -c web_search is not "disabled".
+func (t *turnCtx) webSearch(query string, started bool) {
+	var mode string
+	_ = json.Unmarshal([]byte(t.s.overrides["web_search"]), &mode)
+	if mode == "disabled" {
+		t.say("no web search")
+		return
+	}
+	t.itemN++
+	id := fmt.Sprintf("ws-%s-%d", t.turn[:8], t.itemN)
+	if started {
+		t.item("item/started", map[string]any{"type": "webSearch", "id": id, "query": "", "action": nil, "results": nil})
+	}
+	t.item("item/completed", map[string]any{"type": "webSearch", "id": id, "query": query,
+		"action": map[string]any{"type": "search", "query": query, "queries": nil},
+		"results": []any{
+			map[string]any{"type": "text_result", "domain": "www.reuters.com", "ref_id": "turn0search0", "snippet": "Oil rose.",
+				"title": "Reuters", "url": "https://www.reuters.com/markets/x"},
+			map[string]any{"type": "text_result", "domain": "www.sec.gov", "ref_id": "turn0search1", "snippet": "Annual report.",
+				"title": "10-K", "url": "https://www.sec.gov/Archives/x.htm"},
+		}})
+	t.say("searched: [Reuters](https://www.reuters.com/markets/x)")
+}
+
 func (s *server) turn(turn, text string, stop <-chan struct{}) {
 	t := &turnCtx{s: s, turn: turn, stop: stop}
 	notify("turn/started", map[string]any{"threadId": s.threadID, "turn": map[string]any{"id": turn, "items": []any{}, "status": "inProgress"}})
@@ -684,6 +751,8 @@ func (s *server) turn(turn, text string, stop <-chan struct{}) {
 		t.say("overlap: " + decisionOf(r))
 	case "mcp":
 		t.mcpCall()
+	case "websearch", "websearchnostart":
+		t.webSearch(arg, cmd == "websearch")
 	case "publish":
 		t.publish(arg)
 	case "mcplate":

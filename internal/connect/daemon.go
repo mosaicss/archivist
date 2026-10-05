@@ -50,8 +50,9 @@ type Config struct {
 	// Dial overrides the websocket dialer (tests).
 	Dial func(ctx context.Context, u string, opts *websocket.DialOptions) (*websocket.Conn, *http.Response, error)
 	// Guidance fetches Mosaic's research guidance once per spawn (Story
-	// 78.31); nil = guidance.Fetch against ChatAPIURL (tests inject one).
-	Guidance func(ctx context.Context, surface, form string) guidance.Text
+	// 78.31; web asks for the web variant, Story 78.33); nil =
+	// guidance.Fetch or guidance.FetchWeb against ChatAPIURL.
+	Guidance func(ctx context.Context, surface, form string, web bool) guidance.Text
 	// SignIn names the harness ("claude" or "codex") that is installed but
 	// logged out (session-bound sandbox mode, RunSession): the session signs
 	// it in (posture 1) before its first turn. Its Bin stays configured.
@@ -59,6 +60,12 @@ type Config struct {
 	// MaxMode is this machine's permission ceiling (Story 78.32, "" =
 	// DefaultMaxMode): no session runs above it, whatever the relay sends.
 	MaxMode Mode
+	// WebSearch turns on each harness's own provider side web search
+	// (Story 78.33): Claude Code's WebSearch tool, Codex web_search "live".
+	// A machine setting (archivist connect --web-search; on by default with
+	// --session), never chosen by the relay. Web search is a read: it never
+	// asks in any mode. Claude's WebFetch stays off either way.
+	WebSearch bool
 }
 
 // Daemon is a running `archivist connect`.
@@ -79,13 +86,15 @@ type Daemon struct {
 	tempDir     string
 	chatAPIURL  string
 	// fetchGuidance returns the research guidance for a spawn (Story 78.31).
-	fetchGuidance func(ctx context.Context, surface, form string) guidance.Text
+	fetchGuidance func(ctx context.Context, surface, form string, web bool) guidance.Text
 	dial          func(ctx context.Context, u string, opts *websocket.DialOptions) (*websocket.Conn, *http.Response, error)
 	// sandbox is the session-bound mode (RunSession, Story 78.22): no user
 	// socket, and a failed session ends the daemon.
 	sandbox bool
 	// maxMode is the permission ceiling (Story 78.32).
 	maxMode Mode
+	// webSearch is Config.WebSearch (Story 78.33).
+	webSearch bool
 	// Codex model list probe (Story 78.32): codexProbed closes when it ends;
 	// codexCat (guarded by mu) is empty after a failure.
 	probeOnce       sync.Once
@@ -123,7 +132,7 @@ func New(cfg Config) (*Daemon, error) {
 		log:         cfg.Log, parser: parser, store: store, detect: cfg.Detect, runner: cfg.Runner,
 		environ: cfg.Environ, tempDir: cfg.TempDir, dial: cfg.Dial, signIn: cfg.SignIn, chatAPIURL: cfg.ChatAPIURL,
 		sessions: map[string]*session{}, starting: map[string]bool{}, tokens: map[string]bool{},
-		maxMode: cfg.MaxMode, codexProbed: make(chan struct{})}
+		maxMode: cfg.MaxMode, webSearch: cfg.WebSearch, codexProbed: make(chan struct{})}
 	if d.maxMode == "" {
 		d.maxMode = DefaultMaxMode
 	}
@@ -144,7 +153,10 @@ func New(cfg Config) (*Daemon, error) {
 	}
 	d.fetchGuidance = cfg.Guidance
 	if d.fetchGuidance == nil {
-		d.fetchGuidance = func(ctx context.Context, surface, form string) guidance.Text {
+		d.fetchGuidance = func(ctx context.Context, surface, form string, web bool) guidance.Text {
+			if web {
+				return guidance.FetchWeb(ctx, d.chatAPIURL, surface, form)
+			}
 			return guidance.Fetch(ctx, d.chatAPIURL, surface, form)
 		}
 	}
@@ -168,6 +180,10 @@ func New(cfg Config) (*Daemon, error) {
 
 // MaxMode is the daemon's effective permission ceiling (Story 78.32).
 func (d *Daemon) MaxMode() Mode { return d.maxMode }
+
+// WebSearch reports whether this daemon's sessions have provider side web
+// search (Story 78.33).
+func (d *Daemon) WebSearch() bool { return d.webSearch }
 
 // Run serves until ctx ends (nil), another daemon supersedes this one
 // (ErrSuperseded) or a fatal condition (*FatalError). Every child process is

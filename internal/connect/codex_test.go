@@ -278,6 +278,31 @@ func TestCodexArgsAreFixed(t *testing.T) {
 		`mcp_servers.archivist.args=["mcp","serve","--token-file","/t","--publish-session","s1","--publish-dir","/cwd"]`) {
 		t.Error("publish flags not passed to the MCP server")
 	}
+	// Story 78.33: web search on is web_search "live" and nothing else changes; no page
+	// fetch feature and no web search feature flags are ever set.
+	off := codexArgs(cfg, "/t", nil)
+	cfg.WebSearch = true
+	on := codexArgs(cfg, "/t", nil)
+	if len(on) != len(off) {
+		t.Fatalf("web search changes the argv length: %d vs %d", len(on), len(off))
+	}
+	for i := range on {
+		if on[i] == off[i] {
+			continue
+		}
+		if off[i] != `web_search="disabled"` || on[i] != `web_search="live"` {
+			t.Errorf("argument %d: %q with web search, %q without", i, on[i], off[i])
+		}
+	}
+	if !slices.Contains(on, `web_search="live"`) {
+		t.Error("web search on did not pass web_search=\"live\"")
+	}
+	for _, a := range append(on, off...) {
+		if strings.HasPrefix(a, "features.web_search") || strings.HasPrefix(a, "features.standalone_web_search") ||
+			strings.HasPrefix(a, "tools.web_search") {
+			t.Errorf("-c %s must never be set", a)
+		}
+	}
 }
 
 func TestCodexDecisionMapping(t *testing.T) {
@@ -778,6 +803,11 @@ func TestCodexProofFailuresFailClosed(t *testing.T) {
 		"instruction sources": {"instructionSources": []string{"/home/owner/.codex/AGENTS.md"}},
 		"other provider":      {"modelProvider": "custom"},
 		"other mcp server":    {"extraMCP": true},
+		// Story 78.33: config/read must report the launch's web_search from the -c flags.
+		"web_search cached":       {"configReadWebSearch": "cached"},
+		"web_search from a layer": {"configReadOrigin": "user"},
+		"web_search not reported": {"configReadMissing": true},
+		"config/read refused":     {"configReadError": "config/read failed"},
 	}
 	for name, cfg := range cases {
 		t.Run(name, func(t *testing.T) {

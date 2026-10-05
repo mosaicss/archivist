@@ -50,10 +50,11 @@ func (h *harness) runSession(sid, agent, signIn, prompt string, extraEnv ...stri
 			detects.Add(1)
 			return Detection{}
 		},
-		Environ: func() []string { return env },
-		TempDir: h.tmp,
-		SignIn:  signIn,
-		MaxMode: h.maxMode,
+		Environ:   func() []string { return env },
+		TempDir:   h.tmp,
+		SignIn:    signIn,
+		MaxMode:   h.maxMode,
+		WebSearch: h.webSearch,
 	}
 	if agent == "claude" {
 		cfg.Claude = ClaudeConfig{Bin: claudeBin, SettingSources: DefaultSettingSources, Executable: archivistBin,

@@ -37,6 +37,21 @@ type CodexConfig struct {
 	Executable string
 	// BaseURL is passed to `mcp serve` only when ARCHIVIST_BASE_URL is set.
 	BaseURL string
+	// WebSearch is web_search "live" instead of "disabled" (Story 78.33; set
+	// per session by spawnCodex from the daemon's Config.WebSearch).
+	WebSearch bool
+}
+
+// codexWebSearchMode is the web_search value of a launch (Story 78.33):
+// "live", Codex's own search in the OpenAI Responses backend with live
+// access (news and prices need it; "cached" is an index without it), or
+// "disabled". Codex never asks an approval for a search. Its standalone
+// page fetch feature stays off (never set).
+func codexWebSearchMode(cfg CodexConfig) string {
+	if cfg.WebSearch {
+		return "live"
+	}
+	return "disabled"
 }
 
 // CodexEfforts are the reasoning effort values of the pinned protocol
@@ -94,7 +109,7 @@ func codexArgs(cfg CodexConfig, tokenFile string, publish []string) []string {
 		{"skills.include_instructions", "false"},
 		{"skills.bundled.enabled", "false"},
 		{"notify", "[]"},
-		{"web_search", `"disabled"`},
+		{"web_search", tomlValue(codexWebSearchMode(cfg))},
 		{"history.persistence", `"none"`},
 		{"check_for_update_on_startup", "false"},
 		{"analytics.enabled", "false"},
@@ -238,6 +253,7 @@ type codexPending struct {
 // subscription proof; nothing reaches the relay before it passes.
 func (s *session) spawnCodex(ctx context.Context, threadID, instructions string) error {
 	cfg := s.d.codex
+	cfg.WebSearch = s.d.webSearch
 	home, err := s.codexHome(threadID != "")
 	if err != nil {
 		return err
@@ -263,7 +279,7 @@ func (s *session) spawnCodex(ctx context.Context, threadID, instructions string)
 	s.running, s.turnActive = false, false
 	s.ctr.reset()
 	s.art.reset()
-	if err := s.codexHandshake(ctx, home, threadID, instructions); err != nil {
+	if err := s.codexHandshake(ctx, home, threadID, instructions, codexWebSearchMode(cfg)); err != nil {
 		s.stopProcess(true)
 		return err
 	}
@@ -279,8 +295,9 @@ func (s *session) spawnCodex(ctx context.Context, threadID, instructions string)
 // ready. Notifications and requests that arrive meanwhile stay queued, in
 // order, for the session loop.
 // instructions (Mosaic's research guidance) travel as developerInstructions on
-// both thread/start and thread/resume.
-func (s *session) codexHandshake(ctx context.Context, home, threadID, instructions string) error {
+// both thread/start and thread/resume. webSearch is the web_search value the
+// launch passed, which config/read must report (Story 78.33).
+func (s *session) codexHandshake(ctx context.Context, home, threadID, instructions, webSearch string) error {
 	c := s.cx
 	hctx, cancel := context.WithTimeout(ctx, codexHandshakeTimeout)
 	defer cancel()
@@ -296,6 +313,21 @@ func (s *session) codexHandshake(ctx context.Context, home, threadID, instructio
 	}
 	if err := c.rpc.conn.Notify(hctx, "initialized", nil); err != nil {
 		return fmt.Errorf("initialized: %w", err)
+	}
+	// Story 78.33: the effective web_search must be the launch's, set by its
+	// -c flag (origin sessionFlags), so neither a config layer nor a default
+	// turns search on or off behind the session's back.
+	var conf codexConfigRead
+	if err := c.rpc.conn.Call(hctx, "config/read", codexConfigReadParams{}, &conf); err != nil {
+		var rpcErr *jsonrpc2.Error
+		if errors.As(err, &rpcErr) {
+			// Codex answered and refused: the setting cannot be proven.
+			return &proofError{"config/read: " + rpcErr.Message}
+		}
+		return fmt.Errorf("config/read: %w", err)
+	}
+	if problem := configProblem(conf, webSearch); problem != "" {
+		return &proofError{problem}
 	}
 	var acct codexAccountRead
 	if err := c.rpc.conn.Call(hctx, "account/read", map[string]any{"refreshToken": false}, &acct); err != nil {
@@ -360,9 +392,30 @@ func (s *session) codexHandshake(ctx context.Context, home, threadID, instructio
 	if codexSandboxType(mode) == "dangerFullAccess" {
 		network = "full access, network on"
 	}
-	s.log.Printf("codex proof ok: home %s, chatgpt account, model %s, provider %s, mode %s (approvals %s/user, sandbox %s, %s, roots %v), no instruction sources, archivist MCP ready",
-		home, th.Model, th.ModelProvider, mode, codexApprovalPolicy(mode), codexSandboxType(mode), network, th.Sandbox.WritableRoots)
+	s.log.Printf("codex proof ok: home %s, chatgpt account, model %s, provider %s, mode %s (approvals %s/user, sandbox %s, %s, roots %v), web_search %s, no instruction sources, archivist MCP ready",
+		home, th.Model, th.ModelProvider, mode, codexApprovalPolicy(mode), codexSandboxType(mode), network, th.Sandbox.WritableRoots, webSearch)
 	return nil
+}
+
+// configProblem checks the config/read response (Story 78.33): web_search
+// must equal want, and its origin must be the session flags (-c). A missing
+// field fails.
+func configProblem(conf codexConfigRead, want string) string {
+	var problems []string
+	switch {
+	case conf.Config.WebSearch == nil:
+		problems = append(problems, "web_search not reported")
+	case *conf.Config.WebSearch != want:
+		problems = append(problems, fmt.Sprintf("web_search is %q, not %q", *conf.Config.WebSearch, want))
+	}
+	origin, ok := conf.Origins["web_search"]
+	if !ok || origin.Name.Type != "sessionFlags" {
+		problems = append(problems, fmt.Sprintf("web_search origin %q, not \"sessionFlags\"", origin.Name.Type))
+	}
+	if len(problems) == 0 {
+		return ""
+	}
+	return "Codex web search setting: " + strings.Join(problems, "; ")
 }
 
 // threadGone reports a thread/resume error that means the thread cannot
