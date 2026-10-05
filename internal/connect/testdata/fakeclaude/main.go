@@ -15,8 +15,10 @@
 //	                is in --allowedTools (as Claude Code does)
 //	slow            stream numbers until interrupted (60 s cap)
 //	stuck           stream numbers and ignore interrupts (60 s cap)
-//	remember <w>    store a codeword for this Claude session
-//	recall          reply with the stored codeword
+//	remember <w>    store a codeword in this Claude session's transcript
+//	                ($HOME/.claude/projects/<cwd slug>/<session>.jsonl)
+//	recall          reply with the stored codeword (the transcript is found
+//	                in any project folder, as --resume finds it)
 //	spawn           start a detached `sleep 300` in its own process group
 //	orphanexit      start a detached `sleep 0.3` whose parent exits at once
 //	exit            start streaming, then exit 3 mid-turn
@@ -33,6 +35,9 @@
 //	                harness that prompts anyway) and report the decision
 //
 // config.json "exitBeforeInit": true exits 3 on the first turn before init.
+// "resumeNotFound": true makes every --resume run report "No conversation
+// found with session ID: <id>" and exit 1 before init, as Claude Code does
+// when no stored transcript matches the id (Story 78.37).
 //
 // The init frame's tools are the --tools list plus the archivist MCP tools
 // (Story 78.33); config.json "extraInitTools" adds names and
@@ -85,6 +90,7 @@ type config struct {
 	APIKeySource    string `json:"apiKeySource"`
 	PermissionMode  string `json:"permissionMode"`
 	ExitBeforeInit  bool   `json:"exitBeforeInit"`
+	ResumeNotFound  bool   `json:"resumeNotFound"`
 	LoginCode       string `json:"loginCode"`
 	LoginAuthMethod string `json:"loginAuthMethod"`
 	LoginNoURL      bool   `json:"loginNoURL"`
@@ -240,6 +246,10 @@ func main() {
 	allowBypass = allowBypass || mode == "bypassPermissions"
 	session = uuid()
 	if id := flags["--resume"]; id != "" {
+		if cfg.ResumeNotFound {
+			fmt.Fprintln(os.Stderr, "No conversation found with session ID: "+id)
+			os.Exit(1)
+		}
 		session = id
 	}
 	fmt.Fprintln(os.Stderr, "fakeclaude: stderr line with a secret Bearer abc.def and sk-ant-api03-SECRET")
@@ -272,6 +282,65 @@ func main() {
 			return
 		}
 	}
+}
+
+// The per session conversation lives where Claude Code keeps it:
+// $HOME/.claude/projects/<cwd slug>/<session>.jsonl, the slug being the
+// working directory with every character that is not a letter or a digit
+// replaced by '-' (Story 78.37: the sandbox resume archive carries
+// .claude/projects, so a resume test proves exactly that set).
+func projectsDir() string { return filepath.Join(home, ".claude", "projects") }
+
+func cwdSlug() string {
+	cwd, _ := os.Getwd()
+	return strings.Map(func(r rune) rune {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			return r
+		}
+		return '-'
+	}, cwd)
+}
+
+// rememberTranscript appends the codeword to this session's transcript.
+func rememberTranscript(word string) string {
+	dir := filepath.Join(projectsDir(), cwdSlug())
+	line, _ := json.Marshal(map[string]any{"type": "remember", "sessionId": session, "text": word})
+	if os.MkdirAll(dir, 0o700) != nil {
+		return "transcript not written"
+	}
+	f, err := os.OpenFile(filepath.Join(dir, session+".jsonl"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return "transcript not written"
+	}
+	defer f.Close()
+	_, _ = f.Write(append(line, '\n'))
+	return "ok, remembered"
+}
+
+// recallTranscript finds this session's transcript in any project folder
+// (as --resume does since Claude Code 2.1.223) and returns the last codeword.
+func recallTranscript() string {
+	matches, _ := filepath.Glob(filepath.Join(projectsDir(), "*", session+".jsonl"))
+	if len(matches) != 1 {
+		return "nothing remembered"
+	}
+	b, err := os.ReadFile(matches[0])
+	if err != nil {
+		return "nothing remembered"
+	}
+	word := ""
+	for _, l := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+		var e struct {
+			Type, Text string
+		}
+		if json.Unmarshal([]byte(l), &e) == nil && e.Type == "remember" {
+			word = e.Text
+		}
+	}
+	if word == "" {
+		return "nothing remembered"
+	}
+	return word
 }
 
 func parseFlags(args []string) map[string]string {
@@ -388,16 +457,9 @@ func (r *runner) turn(text string) bool {
 	case "echo":
 		r.say(0, arg)
 	case "remember":
-		_ = os.MkdirAll(filepath.Join(base, "sessions"), 0o700)
-		_ = os.WriteFile(filepath.Join(base, "sessions", session), []byte(arg), 0o600)
-		r.say(0, "ok, remembered")
+		r.say(0, rememberTranscript(arg))
 	case "recall":
-		b, err := os.ReadFile(filepath.Join(base, "sessions", session))
-		if err != nil {
-			r.say(0, "nothing remembered")
-		} else {
-			r.say(0, string(b))
-		}
+		r.say(0, recallTranscript())
 	case "bash":
 		return r.ask("Bash", map[string]any{"command": arg})
 	case "askmcp":

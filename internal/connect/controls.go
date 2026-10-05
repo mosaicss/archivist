@@ -929,14 +929,15 @@ func (s *session) commitMode(m Mode) {
 	s.save()
 	s.log.Printf("permission mode %s -> %s", prev, m)
 	if m == ModeReadOnly {
-		s.denyPending()
+		s.denyPending(readOnlyDenied)
 	}
 }
 
-// denyPending answers every open approval card deny (Claude) or decline
-// (Codex; MCP elicitations decline) through the relay answer path, so each
-// card is reported resolved.
-func (s *session) denyPending() {
+// denyPending answers every open approval card deny (Claude, with msg) or
+// decline (Codex; MCP elicitations decline) through the relay answer path,
+// so each card is reported resolved. Lowering to read_only and stopping the
+// daemon (Story 78.37) use it.
+func (s *session) denyPending(msg string) {
 	if s.isCodex() {
 		if s.cx == nil {
 			return
@@ -948,7 +949,7 @@ func (s *session) denyPending() {
 	}
 	for id := range s.pending {
 		delete(s.pending, id)
-		s.write(denyFrame(id, readOnlyDenied))
+		s.write(denyFrame(id, msg))
 	}
 }
 

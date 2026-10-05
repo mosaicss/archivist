@@ -68,9 +68,12 @@ type harness struct {
 	claudeEffort string
 	// webSearch is Config.WebSearch (Story 78.33).
 	webSearch bool
-	d         *Daemon
-	cancel    context.CancelFunc
-	done      chan error
+	// activityFile and resumeFrom are the session-bound run's
+	// Config.ActivityFile and SessionStart.ResumeFrom (Story 78.37).
+	activityFile, resumeFrom string
+	d                        *Daemon
+	cancel                   context.CancelFunc
+	done                     chan error
 }
 
 func newHarness(t *testing.T, fakeCfg map[string]any) *harness {
@@ -396,15 +399,13 @@ func TestDaemonSessionLifecycle(t *testing.T) {
 	if processAlive(pid) {
 		t.Error("claude still running after stop")
 	}
-	if rec := h.record(sid); rec.Status != "ended" {
-		t.Errorf("record status %s", rec.Status)
-	}
-	if _, err := os.Stat(rec.Cwd); !os.IsNotExist(err) {
-		t.Error("cwd not removed")
-	}
-	if _, err := os.Stat(runDir); !os.IsNotExist(err) {
-		t.Error("run dir not removed")
-	}
+	// The stop saves the record and removes the cwd and run dir just after
+	// the completed status.
+	waitFor(t, 10*time.Second, "record ended, cwd and run dir removed", func() bool {
+		_, errCwd := os.Stat(rec.Cwd)
+		_, errRun := os.Stat(runDir)
+		return h.record(sid).Status == "ended" && os.IsNotExist(errCwd) && os.IsNotExist(errRun)
+	})
 	if len(h.relay.invalid) != 0 {
 		t.Errorf("relay saw invalid events: %v", h.relay.invalid)
 	}
@@ -665,4 +666,30 @@ func TestDaemonSessionEndedRemotely(t *testing.T) {
 	})
 	waitFor(t, 10*time.Second, "claude stopped", func() bool { return !processAlive(pid) })
 	waitFor(t, 10*time.Second, "token revoked", func() bool { return len(h.api.liveTokens()) == 0 })
+}
+
+// Story 78.37: stopping the local daemon (Ctrl-C) with an approval card open
+// answers it deny, once, with connectStopDeny, and keeps the session
+// resumable.
+func TestDaemonStopDeniesOpenApproval(t *testing.T) {
+	h := newHarness(t, nil)
+	h.start()
+	sid := h.startSession("echo hello")
+	waitFor(t, 30*time.Second, "first answer", func() bool { return strings.Contains(h.relay.text(sid), "hello") })
+	h.message(sid, "bash rm -rf build")
+	req := h.waitCard(sid, 1)
+	if err := h.stop(); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+	resp := approvalResponses(h, sid)
+	if len(resp) != 1 || resp[0]["approvalId"] != req["approvalId"] || resp[0]["approved"] != false ||
+		resp[0]["reason"] != connectStopDeny {
+		t.Fatalf("approval responses %v, want one deny with %q", resp, connectStopDeny)
+	}
+	if h.toolOutput(sid, "ran: rm -rf build") {
+		t.Fatal("the command ran after the stop")
+	}
+	if rec := h.record(sid); rec.Status != "active" {
+		t.Fatalf("record status %q after the stop, want active", rec.Status)
+	}
 }
