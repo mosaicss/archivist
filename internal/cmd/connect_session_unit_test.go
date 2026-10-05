@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"io"
+	"strings"
 	"testing"
 
 	"github.com/mosaicss/archivist/internal/connect"
@@ -51,5 +52,24 @@ func TestSessionHarnessAndConfigs(t *testing.T) {
 	cl, cx = sessionConfigs(det, connectFlags{session: start}, "/bin/archivist", "")
 	if cl.Bin != "/opt/claude" || cx.Bin != "" {
 		t.Fatalf("claude session configs %+v %+v", cl, cx)
+	}
+}
+
+// ARCHIVIST_ACTIVITY_FILE (Story 78.37): an absolute path is used (cleaned);
+// a relative one is ignored with a warning, never failing the task.
+func TestActivityFileEnv(t *testing.T) {
+	var buf strings.Builder
+	log := connect.NewLogger(&buf)
+	if got := activityFile(log, ""); got != "" {
+		t.Fatalf("empty: %q", got)
+	}
+	if got := activityFile(log, "/run/archivist/../archivist/activity.json"); got != "/run/archivist/activity.json" {
+		t.Fatalf("absolute: %q", got)
+	}
+	if buf.Len() != 0 {
+		t.Fatalf("warning for a usable value: %s", buf.String())
+	}
+	if got := activityFile(log, "run/activity.json"); got != "" || !strings.Contains(buf.String(), "not an absolute path") {
+		t.Fatalf("relative: %q, log %q", got, buf.String())
 	}
 }

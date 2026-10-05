@@ -206,10 +206,10 @@ func (s *Store) RemoveCodexHome(id string) {
 // cwdPrefix is the makeCwd temp directory prefix.
 const cwdPrefix = "archivist-connect-"
 
-// removeSessionCwd deletes a session working directory read from a record,
-// but only one makeCwd could have created: base name with cwdPrefix, never
-// the home directory or a filesystem root.
-func removeSessionCwd(dir string) bool {
+// sessionCwdOK reports a working directory path read from a record that
+// makeCwd could have created: absolute, base name with cwdPrefix, never the
+// home directory or a filesystem root.
+func sessionCwdOK(dir string) bool {
 	if dir == "" || !filepath.IsAbs(dir) {
 		return false
 	}
@@ -220,7 +220,16 @@ func removeSessionCwd(dir string) bool {
 	if home, err := os.UserHomeDir(); err == nil && filepath.Clean(home) == clean {
 		return false
 	}
-	return os.RemoveAll(clean) == nil
+	return true
+}
+
+// removeSessionCwd deletes a session working directory read from a record,
+// but only one makeCwd could have created (sessionCwdOK).
+func removeSessionCwd(dir string) bool {
+	if !sessionCwdOK(dir) {
+		return false
+	}
+	return os.RemoveAll(filepath.Clean(dir)) == nil
 }
 
 // writeFileAtomic writes data to path through a 0600 temp file and rename,

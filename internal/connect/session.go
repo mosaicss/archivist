@@ -113,6 +113,22 @@ type session struct {
 	idle       bool
 	lastActive time.Time
 
+	// Sandbox activity file (Story 78.37, activity.go): the current quiet
+	// and approval periods (unix ms, 0 = none) and the values last written.
+	idleSince, approvalSince int64
+	actIdle, actApproval     int64
+	actWritten, actFailed    bool
+
+	// Resume of an earlier sandbox session (Story 78.37, resume.go):
+	// resuming arms the fresh start fallback until the first spawn's
+	// harness proves the resume (Codex: the handshake, Claude: the init
+	// frame); resumeTexts are the user texts sent to a resumed Claude before
+	// its init, resent after a fallback; note is a text emitted after the
+	// next turn's start chunk.
+	resuming    bool
+	resumeTexts []string
+	note        string
+
 	linkErr chan error
 	done    chan struct{}
 }
@@ -162,7 +178,7 @@ func (s *session) run(ctx context.Context, prompt string) {
 		case signInStopped:
 			return
 		case signedIn:
-			if err := s.spawn(ctx, ""); err != nil {
+			if err := s.firstSpawn(ctx); err != nil {
 				s.failStart(err)
 			} else {
 				s.sendUser(prompt)
@@ -212,7 +228,7 @@ func (s *session) run(ctx context.Context, prompt string) {
 			}
 			s.handleLine(line)
 		case <-s.procDone:
-			s.processExited()
+			s.processExited(ctx)
 		case <-flush.C:
 			armed = false
 			s.flushCoalesced()
@@ -226,7 +242,7 @@ func (s *session) run(ctx context.Context, prompt string) {
 			// The JSON-RPC connection closed (protocol error or EOF) while
 			// the process may still run: treat it as the process ending.
 			s.log.Printf("codex connection closed")
-			s.processExited()
+			s.processExited(ctx)
 		case <-timerC(s.snapTimer):
 			s.snapshot()
 		case reply := <-s.parkReq:
@@ -288,6 +304,9 @@ func (s *session) emit(chunks ...Chunk) {
 	for _, c := range chunks {
 		for _, out := range s.co.Add(c) {
 			s.outbox.Emit(out)
+		}
+		if c["type"] == "start" && s.note != "" {
+			s.emitNote()
 		}
 	}
 }
@@ -450,12 +469,14 @@ func (s *session) idleNow() bool {
 // session counts as active now.
 func (s *session) publishActivity() {
 	idle := s.idleNow()
+	now := time.Now()
 	s.d.mu.Lock()
 	s.idle = idle
 	if !idle {
-		s.lastActive = time.Now()
+		s.lastActive = now
 	}
 	s.d.mu.Unlock()
+	s.writeActivity(now) // the sandbox's activity file (Story 78.37)
 }
 
 // park stops an idle session's harness to free its live-process slot. The
@@ -556,6 +577,9 @@ func (s *session) sendUser(text string) {
 	if s.proc == nil {
 		return
 	}
+	if s.resuming && !s.running {
+		s.resumeTexts = append(s.resumeTexts, text) // resent if the resume falls back
+	}
 	if s.turnActive {
 		s.queue = append(s.queue, text)
 		return
@@ -628,7 +652,7 @@ func (s *session) nextQueued() {
 	}
 }
 
-func (s *session) processExited() {
+func (s *session) processExited(ctx context.Context) {
 	// The reader closes Lines before Done: finish the buffered frames (the
 	// final result may be among them) before treating the exit.
 	if lines := s.procLines; lines != nil {
@@ -655,10 +679,13 @@ func (s *session) processExited() {
 		return
 	}
 	err := s.proc.ExitErr()
-	wasTurn := s.turnActive
+	wasTurn, wasRunning := s.turnActive, s.running
 	s.stopProcess(true)
 	if s.stopping {
 		return
+	}
+	if s.resumeExited(ctx, err, wasRunning) {
+		return // a resumed Claude that could not load the conversation: started fresh
 	}
 	if s.isCodex() {
 		s.log.Printf("codex exited unexpectedly: %v", err)
@@ -718,6 +745,7 @@ func (s *session) handleLine(line []byte) {
 		}
 		if !s.running {
 			s.running = true
+			s.resumeProved()
 			s.log.Printf("init ok: claude %s, model %s, apiKeySource none, permissionMode %s, tools %v, mcp %s, plugins %s",
 				f.Version, f.Model, f.PermissionMode, f.Tools, string(f.MCPServers), string(f.Plugins))
 			s.emitStatus("running", "")
@@ -1008,6 +1036,13 @@ func (s *session) stop(emitCompleted bool) {
 // revoke the token, keep the record and working directory.
 func (s *session) shutdown() {
 	s.stopping = true
+	s.flushCoalesced()
+	// Story 78.37: no harness is left waiting on an approval that cannot come.
+	if s.d.sandbox {
+		s.denyPending(sandboxStopDeny)
+	} else {
+		s.denyPending(connectStopDeny)
+	}
 	s.flushCoalesced()
 	s.stopProcess(false)
 	s.revokeToken()

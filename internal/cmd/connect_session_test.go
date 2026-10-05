@@ -12,7 +12,10 @@ import (
 	"github.com/mosaicss/archivist/internal/cmd"
 )
 
-const testSessionID = "0f8fad5b-d9cb-469f-a165-70867728950e"
+const (
+	testSessionID      = "0f8fad5b-d9cb-469f-a165-70867728950e"
+	testOtherSessionID = "7c9e6679-7425-40de-944b-e07fc1f90ae7"
+)
 
 func writePrompt(t *testing.T, body string) string {
 	t.Helper()
@@ -37,6 +40,14 @@ func TestConnectValidatesSessionFlags(t *testing.T) {
 		"empty prompt":      {"connect", "--session", testSessionID, "--agent", "codex", "--prompt-file", writePrompt(t, " \n\t")},
 		"prompt too long":   {"connect", "--session", testSessionID, "--agent", "codex", "--prompt-file", writePrompt(t, strings.Repeat("a", 32001))},
 		"check and session": {"connect", "--check", "--session", testSessionID, "--agent", "codex", "--prompt-file", ok},
+		// Story 78.37: --resume-from is another session's UUID, session-bound only.
+		"resume only":           {"connect", "--resume-from", testOtherSessionID},
+		"resume and check":      {"connect", "--check", "--resume-from", testOtherSessionID},
+		"resume and install":    {"connect", "--install", "--resume-from", testOtherSessionID},
+		"resume bad uuid":       {"connect", "--session", testSessionID, "--agent", "codex", "--prompt-file", ok, "--resume-from", "nope"},
+		"resume self":           {"connect", "--session", testSessionID, "--agent", "codex", "--prompt-file", ok, "--resume-from", testSessionID},
+		"resume self upper":     {"connect", "--session", testSessionID, "--agent", "codex", "--prompt-file", ok, "--resume-from", strings.ToUpper(testSessionID)},
+		"resume no prompt file": {"connect", "--session", testSessionID, "--agent", "codex", "--resume-from", testOtherSessionID},
 	}
 	for name, args := range cases {
 		out, err := runAuthCmd(t, args...)
@@ -200,5 +211,34 @@ func TestConnectWebSearchReachesTheDaemon(t *testing.T) {
 		if !strings.Contains(out, tc.want) {
 			t.Fatalf("%v: output lacks %q:\n%s", tc.flags, tc.want, out)
 		}
+	}
+}
+
+// --resume-from and ARCHIVIST_ACTIVITY_FILE reach the session-bound daemon
+// (Story 78.37): a valid resume source passes flag validation and both are
+// logged before the session check.
+func TestConnectResumeAndActivityReachTheDaemon(t *testing.T) {
+	dir := t.TempDir()
+	script := "#!/bin/sh\ncase \"$1\" in\n--version) echo 'codex-cli 0.160.0';;\n" +
+		"login) echo 'Not logged in' >&2; exit 1;;\n*) exit 2;;\nesac\n"
+	if err := os.WriteFile(filepath.Join(dir, "codex"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	t.Setenv("CODEX_HOME", filepath.Join(t.TempDir(), "codex-home"))
+	srv, _ := fakeSessionAPI(t, 404, `{"error":"Session not found.","code":"SESSION_NOT_FOUND"}`)
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("ARCHIVIST_TOKEN", "ak_00000000000000000000")
+	t.Setenv("ARCHIVIST_BASE_URL", srv.URL)
+	t.Setenv("ARCHIVIST_RELAY_URL", "ws://127.0.0.1:1")
+	activity := filepath.Join(t.TempDir(), "activity.json")
+	t.Setenv("ARCHIVIST_ACTIVITY_FILE", activity)
+	out, err := runAuthCmd(t, "connect", "--session", testSessionID, "--agent", "codex", "--prompt-file", writePrompt(t, "hi"),
+		"--resume-from", testOtherSessionID)
+	if code := exitCodeFrom(err); code != cmd.ExitGenericError {
+		t.Fatalf("exit %d, want 1 (unknown session)\n%s", code, out)
+	}
+	if want := "resume from " + testOtherSessionID + "; activity file " + activity + "."; !strings.Contains(out, want) {
+		t.Fatalf("output lacks %q:\n%s", want, out)
 	}
 }

@@ -84,8 +84,17 @@ serves only that session, on its session socket: no user socket and no
 capability report. A harness that is installed but logged out signs in
 first: the sign-in link (and, for Codex, the device code) appears in the
 session, and for Claude Code the next message is the code to paste. It
-exits 0 after stop_session or the session's end, and non-zero when the
-start is refused or the sign-in or the subscription proof fails.
+exits 0 after stop_session or the session's end (and after SIGTERM, once
+every pending approval is answered deny and the harness has stopped), and
+non-zero when the start is refused or the sign-in or the subscription proof
+fails. --resume-from <uuid> continues an earlier session's harness
+conversation (its records in HOME): the new session reuses the earlier
+working directory path and Claude Code session or Codex thread; when that
+cannot be restored it starts fresh and the first answer says so.
+ARCHIVIST_ACTIVITY_FILE=<absolute path> (session-bound mode only) makes
+connect write {"v":1,"idleSince":ms|null,"approvalSince":ms|null} there
+whenever either changes: since when nothing has been in flight, and since
+when an approval has waited (unix milliseconds).
 
 One-step setup (macOS and Linux): the workspace shows a pairing code.
 
@@ -118,7 +127,7 @@ var (
 func newConnectCmd(version string) *cobra.Command {
 	var check bool
 	var model, effort, codexModel, codexEffort string
-	var sessionID, agent, promptFile string
+	var sessionID, agent, promptFile, resumeFrom string
 	var pair string
 	var install, uninstall, status, serviceMode bool
 	var maxPermission string
@@ -140,7 +149,7 @@ func newConnectCmd(version string) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			m := setupMode{pair: cmd.Flags().Changed("pair"), install: install, uninstall: uninstall,
 				status: status, service: serviceMode}
-			if err := m.validate(cmd.ErrOrStderr(), args, check, sessionID != "" || agent != "" || promptFile != "",
+			if err := m.validate(cmd.ErrOrStderr(), args, check, sessionID != "" || agent != "" || promptFile != "" || resumeFrom != "",
 				model != "" || effort != "" || codexModel != "" || codexEffort != ""); err != nil {
 				return err
 			}
@@ -176,7 +185,7 @@ func newConnectCmd(version string) *cobra.Command {
 				_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Error: --codex-effort must be one of %s\n", strings.Join(connect.CodexEfforts, ", "))
 				return &ExitError{Code: ExitUsageError}
 			}
-			st, err := sessionStart(cmd.ErrOrStderr(), check, sessionID, agent, promptFile)
+			st, err := sessionStart(cmd.ErrOrStderr(), check, sessionID, agent, promptFile, resumeFrom)
 			if err != nil {
 				return err
 			}
@@ -200,6 +209,7 @@ func newConnectCmd(version string) *cobra.Command {
 	c.Flags().StringVar(&sessionID, "session", "", "Session-bound mode: serve only this session (UUID); needs --agent and --prompt-file")
 	c.Flags().StringVar(&agent, "agent", "", "Session-bound mode: the session's agent, claude or codex")
 	c.Flags().StringVar(&promptFile, "prompt-file", "", "Session-bound mode: file holding the session's first prompt")
+	c.Flags().StringVar(&resumeFrom, "resume-from", "", "Session-bound mode: an earlier session (UUID) whose harness conversation this session continues")
 	c.Flags().StringVar(&pair, "pair", "", "Redeem a pairing code from the Mosaic workspace for a new key and save it")
 	c.Flags().BoolVar(&install, "install", false, "Install and start connect as a background user service (macOS, Linux)")
 	c.Flags().BoolVar(&uninstall, "uninstall", false, "Stop and remove the background service")
@@ -309,24 +319,32 @@ func permissionFlags(stderr io.Writer, maxPermission string, flags sessionContro
 // UTF-16 units; this only stops a runaway read).
 const maxPromptFile = 1 << 20
 
-// sessionStart validates the session-bound mode flags: none, or all three.
-func sessionStart(stderr io.Writer, check bool, sessionID, agent, promptFile string) (*connect.SessionStart, error) {
-	if sessionID == "" && agent == "" && promptFile == "" {
-		return nil, nil
-	}
+// sessionStart validates the session-bound mode flags: none, or all three
+// (and optionally --resume-from, Story 78.37: another session's UUID).
+func sessionStart(stderr io.Writer, check bool, sessionID, agent, promptFile, resumeFrom string) (*connect.SessionStart, error) {
 	usage := func(format string, args ...any) (*connect.SessionStart, error) {
 		_, _ = fmt.Fprintf(stderr, "Error: "+format+"\n", args...)
 		return nil, &ExitError{Code: ExitUsageError}
 	}
+	if sessionID == "" && agent == "" && promptFile == "" {
+		if resumeFrom != "" {
+			return usage("--resume-from needs --session, --agent and --prompt-file")
+		}
+		return nil, nil
+	}
 	switch {
 	case check:
-		return usage("--check cannot be combined with --session, --agent or --prompt-file")
+		return usage("--check cannot be combined with --session, --agent, --prompt-file or --resume-from")
 	case sessionID == "" || agent == "" || promptFile == "":
 		return usage("--session, --agent and --prompt-file are required together")
 	case !connect.ValidSessionID(sessionID):
 		return usage("--session %q is not a session UUID", sessionID)
 	case agent != "claude" && agent != "codex":
 		return usage("--agent must be claude or codex")
+	case resumeFrom != "" && !connect.ValidSessionID(resumeFrom):
+		return usage("--resume-from %q is not a session UUID", resumeFrom)
+	case resumeFrom != "" && strings.EqualFold(resumeFrom, sessionID):
+		return usage("--resume-from must name an earlier session, not --session itself")
 	}
 	f, err := os.Open(promptFile)
 	if err != nil {
@@ -344,7 +362,7 @@ func sessionStart(stderr io.Writer, check bool, sessionID, agent, promptFile str
 	if len(b) > maxPromptFile || !connect.ValidPrompt(prompt) {
 		return usage("--prompt-file %s is longer than 32000 characters", promptFile)
 	}
-	return &connect.SessionStart{SessionID: sessionID, Agent: agent, Prompt: prompt}, nil
+	return &connect.SessionStart{SessionID: sessionID, Agent: agent, Prompt: prompt, ResumeFrom: resumeFrom}, nil
 }
 
 func runConnect(cmd *cobra.Command, version string, check bool, f connectFlags) error {
@@ -440,6 +458,7 @@ func runConnect(cmd *cobra.Command, version string, check bool, f connectFlags) 
 	if f.session != nil {
 		cfg.Claude, cfg.Codex = sessionConfigs(det, f, exe, baseURL)
 		cfg.SignIn = signIn
+		cfg.ActivityFile = activityFile(log, os.Getenv(activityFileEnv))
 	} else {
 		cfg.Claude, cfg.Codex = harnessConfigs(det, f, exe, baseURL)
 		// Say why an installed harness is not offered.
@@ -465,6 +484,9 @@ func runConnect(cmd *cobra.Command, version string, check bool, f connectFlags) 
 		}
 		log.Printf("archivist connect %s: session-bound mode, session %s, agent %s (%s); permission ceiling %s; web search %s; key fp:%s; relay %s.",
 			version, f.session.SessionID, f.session.Agent, state, d.MaxMode(), onOff(d.WebSearch()), auth.Fingerprint(token), relayURL)
+		if f.session.ResumeFrom != "" || cfg.ActivityFile != "" {
+			log.Printf("resume from %s; activity file %s.", orNone(f.session.ResumeFrom), orNone(cfg.ActivityFile))
+		}
 		return connectResult(stderr, log, d, d.RunSession(ctx, *f.session))
 	}
 	var harnesses []string
@@ -478,6 +500,32 @@ func runConnect(cmd *cobra.Command, version string, check bool, f connectFlags) 
 	log.Printf("archivist connect %s: %s; permission ceiling %s; web search %s; key fp:%s; relay %s. Ctrl-C stops.",
 		version, strings.Join(harnesses, "; "), d.MaxMode(), onOff(d.WebSearch()), auth.Fingerprint(token), relayURL)
 	return connectResult(stderr, log, d, d.Run(ctx))
+}
+
+// activityFileEnv names the session-bound mode's activity file (Story
+// 78.37): the sandbox Worker reads it to pause an idle sandbox.
+const activityFileEnv = "ARCHIVIST_ACTIVITY_FILE"
+
+// activityFile is the ARCHIVIST_ACTIVITY_FILE value the daemon writes: an
+// absolute path, else none (a warning; the sandbox then never pauses idle,
+// which never fails a task).
+func activityFile(log *connect.Logger, v string) string {
+	if v == "" {
+		return ""
+	}
+	if !filepath.IsAbs(v) {
+		log.Printf("warning: %s %q is not an absolute path; no activity file is written", activityFileEnv, v)
+		return ""
+	}
+	return filepath.Clean(v)
+}
+
+// orNone names an empty setting in log lines.
+func orNone(v string) string {
+	if v == "" {
+		return "none"
+	}
+	return v
 }
 
 // onOff names a boolean setting in log lines.

@@ -66,6 +66,11 @@ type Config struct {
 	// --session), never chosen by the relay. Web search is a read: it never
 	// asks in any mode. Claude's WebFetch stays off either way.
 	WebSearch bool
+	// ActivityFile is the session-bound mode's activity file (Story 78.37,
+	// ARCHIVIST_ACTIVITY_FILE; "" = none): since when the session has been
+	// quiet and since when an approval has waited, for the sandbox Worker's
+	// idle pause. Ignored outside RunSession.
+	ActivityFile string
 }
 
 // Daemon is a running `archivist connect`.
@@ -95,6 +100,8 @@ type Daemon struct {
 	maxMode Mode
 	// webSearch is Config.WebSearch (Story 78.33).
 	webSearch bool
+	// activityFile is Config.ActivityFile (Story 78.37).
+	activityFile string
 	// Codex model list probe (Story 78.32): codexProbed closes when it ends;
 	// codexCat (guarded by mu) is empty after a failure.
 	probeOnce       sync.Once
@@ -132,7 +139,7 @@ func New(cfg Config) (*Daemon, error) {
 		log:         cfg.Log, parser: parser, store: store, detect: cfg.Detect, runner: cfg.Runner,
 		environ: cfg.Environ, tempDir: cfg.TempDir, dial: cfg.Dial, signIn: cfg.SignIn, chatAPIURL: cfg.ChatAPIURL,
 		sessions: map[string]*session{}, starting: map[string]bool{}, tokens: map[string]bool{},
-		maxMode: cfg.MaxMode, webSearch: cfg.WebSearch, codexProbed: make(chan struct{})}
+		maxMode: cfg.MaxMode, webSearch: cfg.WebSearch, activityFile: cfg.ActivityFile, codexProbed: make(chan struct{})}
 	if d.maxMode == "" {
 		d.maxMode = DefaultMaxMode
 	}
@@ -219,7 +226,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 			if d.reclamp(rec) {
 				_ = d.store.Save(rec) // a lowered ceiling holds for the resumed session
 			}
-			d.attach(sessCtx, rec, "", false)
+			d.attach(sessCtx, rec, "", false, resumeStart{})
 		}
 	}
 
@@ -261,7 +268,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 			d.mu.Unlock()
 			go func() {
 				defer d.wg.Done()
-				d.handleStart(sessCtx, l, in)
+				d.handleStart(sessCtx, l, in, "")
 			}()
 		case "approval_response":
 			// Terminal receipt after the session ended: an audit record, never
@@ -296,10 +303,15 @@ func (d *Daemon) sessionCount() int {
 }
 
 // attach starts a session goroutine; prompt is non-empty for a new session,
-// and slot passes a live-process slot already reserved for it.
-func (d *Daemon) attach(ctx context.Context, rec *SessionRecord, prompt string, slot bool) *session {
+// slot passes a live-process slot already reserved for it and res is the
+// start's resume of an earlier session (Story 78.37).
+func (d *Daemon) attach(ctx context.Context, rec *SessionRecord, prompt string, slot bool, res resumeStart) *session {
 	s := newSession(d, rec)
 	s.slot = slot
+	s.resuming = res.ok
+	if res.note {
+		s.note = resumeMissNote
+	}
 	d.mu.Lock()
 	d.sessions[rec.SessionID] = s
 	d.mu.Unlock()
@@ -319,9 +331,10 @@ func (d *Daemon) attach(ctx context.Context, rec *SessionRecord, prompt string, 
 // handleStart validates and starts one session. It acknowledges only after
 // the local record is durable (or the refusal is final), so a crash before
 // that point lets the relay redeliver. l is nil in the session-bound mode
-// (RunSession: no user socket, nothing to acknowledge). It returns the
-// started session, or nil.
-func (d *Daemon) handleStart(ctx context.Context, l *live, in *Inbound) *session {
+// (RunSession: no user socket, nothing to acknowledge), where resumeFrom
+// may name an earlier session whose conversation the new one continues
+// (Story 78.37). It returns the started session, or nil.
+func (d *Daemon) handleStart(ctx context.Context, l *live, in *Inbound, resumeFrom string) *session {
 	sid := in.SessionID
 	ack := func() {
 		if l != nil {
@@ -391,24 +404,56 @@ func (d *Daemon) handleStart(ctx context.Context, l *live, in *Inbound) *session
 		d.refuseStart(ctx, l, in, fmt.Sprintf("archivist connect already runs %d live sessions.", d.maxSessions), true)
 		return nil
 	}
-	cwd, err := d.makeCwd()
-	if err != nil {
-		d.releaseSlot()
-		d.log.Printf("start_session %s: working directory: %v", in.CorrelationID, err)
-		return nil
+	// Story 78.37: a sandbox start may continue an earlier session's
+	// conversation (its cwd path and harness id); an unusable one starts
+	// fresh with the note.
+	var res resumeStart
+	var src *SessionRecord
+	if resumeFrom != "" && l == nil && resumeFrom != sid {
+		var why string
+		if src, why = d.resumeSource(resumeFrom, in.Agent); src == nil {
+			d.log.Printf("session %s cannot be resumed (%s); starting fresh", resumeFrom, why)
+		} else if in.Agent == "codex" {
+			if err := d.takeCodexHome(resumeFrom, sid); err != nil {
+				d.log.Printf("session %s cannot be resumed (Codex home not moved: %v); starting fresh", resumeFrom, err)
+				src = nil
+			}
+		}
+		res = resumeStart{ok: src != nil, note: src == nil}
+	}
+	var cwd string
+	if src != nil {
+		cwd = src.Cwd
+	} else {
+		var err error
+		if cwd, err = d.makeCwd(); err != nil {
+			d.releaseSlot()
+			d.log.Printf("start_session %s: working directory: %v", in.CorrelationID, err)
+			return nil
+		}
 	}
 	rec := &SessionRecord{SessionID: sid, Agent: in.Agent, StartCorrelationID: in.CorrelationID, Cwd: cwd,
 		ExpiresAt: info.ExpiresAt, Status: "active", CreatedAt: now,
 		Mode: string(d.startMode(in)), Model: in.Model, Effort: in.Effort}
+	if src != nil {
+		rec.ClaudeSessionID, rec.CodexThreadID = src.ClaudeSessionID, src.CodexThreadID
+	}
 	if err := d.store.Save(rec); err != nil {
 		d.releaseSlot()
-		_ = os.RemoveAll(cwd)
+		if src == nil {
+			_ = os.RemoveAll(cwd)
+		} else if in.Agent == "codex" {
+			d.giveBackCodexHome(resumeFrom, sid)
+		}
 		d.log.Printf("start_session %s: session record not saved: %v", in.CorrelationID, err)
 		return nil
 	}
+	if src != nil {
+		d.retire(src, sid)
+	}
 	ack()
 	d.log.Printf("session %s starting (cwd %s, mode %s, ceiling %s)", sid, cwd, rec.Mode, d.maxMode)
-	return d.attach(ctx, rec, in.Prompt, true)
+	return d.attach(ctx, rec, in.Prompt, true, res)
 }
 
 // refuseStart acknowledges a start that will not run. When the session is
@@ -629,6 +674,10 @@ type SessionStart struct {
 	// machine flags), checked against this daemon's catalogue by
 	// handleStart like a relay start's.
 	Model, Effort string
+	// ResumeFrom is an earlier session (a paused sandbox task, Story 78.37)
+	// whose harness conversation this session continues ("" = fresh). An
+	// unusable one starts fresh with a note on the first answer.
+	ResumeFrom string
 }
 
 // ValidSessionID reports a relay session UUID.
@@ -670,7 +719,7 @@ func (d *Daemon) RunSession(ctx context.Context, st SessionStart) error {
 	d.startCodexProbe(sessCtx)
 	in := &Inbound{Kind: "start_session", CorrelationID: "sandbox-" + newRunID(), SessionID: st.SessionID,
 		Agent: st.Agent, Prompt: st.Prompt, Mode: string(st.Mode), Model: st.Model, Effort: st.Effort}
-	s := d.handleStart(sessCtx, nil, in)
+	s := d.handleStart(sessCtx, nil, in, st.ResumeFrom)
 	if s == nil {
 		return &FatalError{Code: "START_REFUSED", Message: "the session did not start (see the log above)"}
 	}
@@ -697,6 +746,9 @@ func (d *Daemon) RunSession(ctx context.Context, st SessionStart) error {
 func (d *Daemon) checkSession(ctx context.Context, st SessionStart) error {
 	if !ValidSessionID(st.SessionID) {
 		return &FatalError{Code: "BAD_SESSION", Message: "the session id is not a session UUID"}
+	}
+	if st.ResumeFrom != "" && (!ValidSessionID(st.ResumeFrom) || st.ResumeFrom == st.SessionID) {
+		return &FatalError{Code: "BAD_RESUME", Message: "the session to resume from is not another session UUID"}
 	}
 	if !d.agentUsable(st.Agent) {
 		return &FatalError{Code: "AGENT_UNAVAILABLE", Message: fmt.Sprintf("the %s agent is not available here", st.Agent)}

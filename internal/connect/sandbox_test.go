@@ -50,11 +50,12 @@ func (h *harness) runSession(sid, agent, signIn, prompt string, extraEnv ...stri
 			detects.Add(1)
 			return Detection{}
 		},
-		Environ:   func() []string { return env },
-		TempDir:   h.tmp,
-		SignIn:    signIn,
-		MaxMode:   h.maxMode,
-		WebSearch: h.webSearch,
+		Environ:      func() []string { return env },
+		TempDir:      h.tmp,
+		SignIn:       signIn,
+		MaxMode:      h.maxMode,
+		WebSearch:    h.webSearch,
+		ActivityFile: h.activityFile,
 	}
 	if agent == "claude" {
 		cfg.Claude = ClaudeConfig{Bin: claudeBin, SettingSources: DefaultSettingSources, Executable: archivistBin,
@@ -72,7 +73,7 @@ func (h *harness) runSession(sid, agent, signIn, prompt string, extraEnv ...stri
 	h.d = d
 	go func() {
 		r.done <- d.RunSession(ctx, SessionStart{SessionID: sid, Agent: agent, Prompt: prompt, Mode: h.sessionMode,
-			Model: h.sessionModel, Effort: h.sessionEffort})
+			Model: h.sessionModel, Effort: h.sessionEffort, ResumeFrom: h.resumeFrom})
 	}()
 	h.t.Cleanup(func() {
 		cancel()

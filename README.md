@@ -537,6 +537,40 @@ message resumes it. When every session is busy, the new one is refused.
 The session-bound mode (`connect --session`) serves one session and never
 parks it.
 
+Stopping connect (Ctrl-C) answers every open approval deny before it stops
+the harness (Claude Code: "Denied: archivist connect stopped before an
+approval arrived.", Codex: decline).
+
+Idle pause and resume (session-bound mode, a Mosaic cloud sandbox):
+
+- `ARCHIVIST_ACTIVITY_FILE=<absolute path>` (read only with `--session`)
+  makes connect write `{"v":1,"idleSince":<ms>|null,"approvalSince":<ms>|null}`
+  there (unix milliseconds, 0600, atomic rename) whenever either value
+  changes. `idleSince` is when the session last became quiet: no harness turn
+  in flight (a turn silent for hours is still in flight), no approval open,
+  nothing queued and no interrupt outstanding; it is `null` otherwise.
+  `approvalSince` is when the open approvals went from none to some, `null`
+  when none is open. The sandbox Worker reads it to pause an idle sandbox; no
+  file means busy. A relative path is ignored with a warning.
+- SIGTERM (a pause or stop) first answers every open approval deny (Claude
+  Code: "Denied: the sandbox stopped before an approval arrived.", Codex:
+  decline), stops the harness and exits 0.
+- `--resume-from <uuid>` (with `--session`; another session's id) continues
+  that earlier session's harness conversation from its files in `HOME`
+  (`~/.claude/projects`, `~/.archivist/connect/sessions`,
+  `~/.archivist/connect/codex-home`): the new session reuses the earlier
+  working directory path and its Claude Code session (`--resume`) or Codex
+  thread (`thread/resume`, with the earlier Codex home moved to the new
+  session's and its `auth.json` link recreated). The earlier record is ended.
+  Only the harness conversation is restored: the earlier working directory
+  path is recreated, and in a sandbox that is a fresh container, so the files
+  the agent wrote there earlier are not there.
+  When the earlier session cannot be used (no record, another agent, no
+  harness id) or the resume fails (Codex `thread/resume` refused, Claude
+  Code exiting before its init because no transcript matches), the session
+  starts fresh and its first answer begins with "The earlier conversation
+  could not be restored, so this answer starts without it."
+
 The session home is kept while the session can resume and removed when the
 session stops, fails or is found inactive at the next start.
 

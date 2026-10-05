@@ -502,12 +502,12 @@ func TestCodexSessionLifecycle(t *testing.T) {
 	h.relay.waitStatus(t, sid, "completed", 1)
 	waitFor(t, 15*time.Second, "codex stopped", func() bool { return gone(run.PID) })
 	waitFor(t, 10*time.Second, "token revoked", func() bool { return len(h.api.liveTokens()) == 0 })
-	if _, err := os.Stat(sessionHome); !os.IsNotExist(err) {
-		t.Fatalf("session home kept after stop: %v", err)
-	}
-	if _, err := os.Stat(rec.Cwd); !os.IsNotExist(err) {
-		t.Fatalf("cwd kept after stop: %v", err)
-	}
+	// The stop removes the cwd and home just after the completed status.
+	waitFor(t, 10*time.Second, "session home and cwd removed", func() bool {
+		_, errHome := os.Stat(sessionHome)
+		_, errCwd := os.Stat(rec.Cwd)
+		return os.IsNotExist(errHome) && os.IsNotExist(errCwd)
+	})
 	if _, err := os.Stat(filepath.Join(h.codexOwner(), "auth.json")); err != nil {
 		t.Fatalf("owner auth.json removed: %v", err)
 	}
