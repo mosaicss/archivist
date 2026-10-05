@@ -20,6 +20,16 @@ import (
 // call asks through the approval card is the session's mode's decision.
 const ClaudeBuiltinTools = "Bash,Read,Edit,Write,Glob,Grep"
 
+// Story 78.33: Claude Code's own web search (it runs at Anthropic, not on
+// this machine) is added to --tools and pre-allowed in --allowedTools only
+// when the session has web search; it is a read and never asks. WebFetch,
+// which fetches pages from this machine, is never passed, and the launch
+// env turns it off too (ClaudeDisableWebFetchKey).
+const (
+	ClaudeWebSearchTool = "WebSearch"
+	ClaudeWebFetchTool  = "WebFetch"
+)
+
 // claudeFlagSettings is the --settings value of every launch (Story 78.32).
 const claudeFlagSettings = `{"useAutoModeDuringPlan":false}`
 
@@ -43,6 +53,9 @@ type ClaudeConfig struct {
 	// set per session by claudeLaunchConfig, "" = default).
 	PermissionMode string
 	AllowBypass    bool
+	// WebSearch adds Claude Code's WebSearch tool, pre-allowed (Story 78.33;
+	// set per session by claudeLaunchConfig from the daemon's Config.WebSearch).
+	WebSearch bool
 }
 
 // archivistAllowedTools pre-allows the task mode archivist tools, except
@@ -55,6 +68,26 @@ func archivistAllowedTools() string {
 		out[i] = "mcp__archivist__" + t
 	}
 	return strings.Join(out, ",")
+}
+
+// claudeTools is the --tools value: the built-in tools, plus WebSearch when
+// the session has web search (Story 78.33).
+func claudeTools(cfg ClaudeConfig) string {
+	if cfg.WebSearch {
+		return ClaudeBuiltinTools + "," + ClaudeWebSearchTool
+	}
+	return ClaudeBuiltinTools
+}
+
+// claudeAllowedTools is the --allowedTools value: the archivist read tools,
+// plus WebSearch when the session has web search, so Claude Code never
+// asks for it (verified on 2.1.285: without the entry, default mode raises
+// can_use_tool for WebSearch).
+func claudeAllowedTools(cfg ClaudeConfig) string {
+	if cfg.WebSearch {
+		return archivistAllowedTools() + "," + ClaudeWebSearchTool
+	}
+	return archivistAllowedTools()
 }
 
 // claudeArgs builds the fixed argv for one session process. guidancePath is
@@ -71,8 +104,8 @@ func claudeArgs(cfg ClaudeConfig, mcpConfigPath, guidancePath, cwd, resumeID str
 		"--mcp-config", mcpConfigPath,
 		"--permission-prompt-tool", "stdio",
 		"--setting-sources", cfg.SettingSources,
-		"--tools", ClaudeBuiltinTools,
-		"--allowedTools", archivistAllowedTools(),
+		"--tools", claudeTools(cfg),
+		"--allowedTools", claudeAllowedTools(cfg),
 	}
 	mode := cfg.PermissionMode
 	if mode == "" {
@@ -183,6 +216,24 @@ type controlRequest struct {
 	ToolName  string          `json:"tool_name"`
 	Input     json.RawMessage `json:"input"`
 	ToolUseID string          `json:"tool_use_id"`
+}
+
+// initToolsProblem checks the init frame's tools against the launch (Story
+// 78.33): WebFetch is never allowed, and WebSearch only with web search on.
+// problem fails the session closed; warning (web search on, WebSearch not
+// reported) is only logged, since search being unavailable is not unsafe.
+func initToolsProblem(tools []string, webSearch bool) (problem, warning string) {
+	var problems []string
+	if slices.Contains(tools, ClaudeWebFetchTool) {
+		problems = append(problems, "it reports the WebFetch tool, which archivist connect never enables")
+	}
+	if !webSearch && slices.Contains(tools, ClaudeWebSearchTool) {
+		problems = append(problems, "it reports the WebSearch tool, but web search is off for this session")
+	}
+	if webSearch && !slices.Contains(tools, ClaudeWebSearchTool) {
+		warning = "web search is on, but Claude Code did not report its WebSearch tool; the session runs without web search"
+	}
+	return strings.Join(problems, "; "), warning
 }
 
 // initProblem returns why an init frame fails the subscription proof:

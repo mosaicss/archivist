@@ -307,6 +307,7 @@ archivist connect           # serve workspace sessions until Ctrl-C
 archivist connect --claude-model claude-sonnet-5 --claude-effort low
 archivist connect --codex-model gpt-6-luna --codex-effort low
 archivist connect --max-permission full_auto   # allow Full auto sessions here
+archivist connect --web-search  # sessions here may search the web (provider side)
 ```
 
 Requirements: an `ak_` API key (`archivist auth login`) on a Pro account, and
@@ -357,6 +358,33 @@ permissions as root outside a recognised sandbox, and the session then
 fails rather than running in a lower mode. `--dangerously-skip-permissions`,
 `--bare` and the `auto` and `dontAsk` modes are never used.
 
+### Web search
+
+`--web-search` turns on each harness's own web search: Claude Code's
+`WebSearch` tool (it runs at Anthropic) and Codex's `web_search` set to
+`live` (it runs in the OpenAI Responses backend). The search runs at the
+provider, never on this machine, and the agent's guidance then says to use
+the Mosaic tools for filings and company facts and web search only for news,
+market prices, macro data and events after the latest filing. It is off by
+default for `archivist connect` and on by default for `connect --session`
+(the Mosaic cloud sandbox), where `--web-search=false` turns it off. It is a
+machine setting: the relay and the workspace never choose it. Background
+connect (`--install`, `--service`) does not take `--web-search` yet (refused
+with a message; run `archivist connect --web-search` in the foreground).
+
+A web search is a read: like the Mosaic read tools it never asks, in any
+mode (`read_only` included) and on both harnesses. Claude Code gets
+`WebSearch` in `--tools` and pre-allowed in `--allowedTools`, and the
+daemon's own check allows it; with web search off a `WebSearch` request is
+decided by the mode like any other tool. Codex never asks for a search.
+Fetching pages stays off either way: Claude Code's `WebFetch` is never in
+`--tools`, every Claude launch sets `CLAUDE_CODE_DISABLE_WEB_FETCH=1`, and a
+session whose Claude Code reports `WebFetch` (or `WebSearch` with web search
+off) fails; Codex's standalone page fetch feature is never set. The
+workspace removes links to filing source sites (regulators, exchanges and
+filing vendors) from agent answers and shows each search as a "Searching
+the web" card with its query.
+
 A mode change applies to Claude Code once Claude confirms it
 (`set_permission_mode`; the daemon's own checks switch then too) and to Codex
 at the next turn (every `turn/start` carries the current policy and sandbox;
@@ -392,7 +420,8 @@ The session-bound mode takes the same choices as flags: `connect --session
 <id>] [--effort <id>]`. `--mode`, `--model` and `--effort` need `--session`;
 the model and effort are checked against the same list when the session
 starts, and one this machine does not offer refuses the start: connect
-exits 1 and the sandbox task fails.
+exits 1 and the sandbox task fails. Web search is on there unless
+`--web-search=false` is given.
 
 For each "My Claude Code" session the daemon:
 
@@ -400,11 +429,13 @@ For each "My Claude Code" session the daemon:
   only `HOME`, `PATH`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `TERM`, `TMPDIR`,
   `LC_*` and `XDG_*` in its environment (provider keys and `CLAUDE_*`,
   `ARCHIVIST_*` variables never pass, except an absolute `CLAUDE_CONFIG_DIR`
-  naming an existing directory, so a login kept outside `~/.claude` is found)
+  naming an existing directory, so a login kept outside `~/.claude` is found;
+  the daemon itself adds `CLAUDE_CODE_DISABLE_WEB_FETCH=1`)
   and without your user, project or local Claude settings;
 - refuses the session unless Claude reports a subscription login
   (`apiKeySource: none`) and the permission mode of the session's mode;
-- gives Claude the built-in tools Bash, Read, Edit, Write, Glob and Grep and
+- gives Claude the built-in tools Bash, Read, Edit, Write, Glob and Grep
+  (plus `WebSearch`, pre-allowed, with web search on; never `WebFetch`) and
   the Mosaic search and read tools (`archivist mcp serve` in task mode, under
   a 15 minute task token it rotates and revokes); a tool call the session's
   mode leaves to you becomes an approval card in the workspace (allow once,
@@ -452,7 +483,8 @@ For each "My Codex" session the daemon:
   with network) that can write only the session
   directory (not `/tmp` or `$TMPDIR`, where other sessions' directories
   live; `TMPDIR` points at `<session dir>/.tmp`) with no network, a core
-  shell environment for commands, web search off, history off,
+  shell environment for commands, web search off (`web_search="live"` with
+  web search on), history off,
   no project root markers, and the archivist MCP server (task mode tools,
   task token as above; Mosaic read tools are approved without asking). The
   approval policy and sandbox (from the session's mode, reviewed by you)
@@ -463,7 +495,8 @@ For each "My Codex" session the daemon:
   `openai` provider, the approval policy and sandbox of the session's mode
   reviewed by the user (for `workspace-write`: without network, extra roots,
   `/tmp` or `$TMPDIR`, TMPDIR pointing inside the session directory; for
-  `read-only`: without network), no instruction files, and the archivist MCP
+  `read-only`: without network), the launch's `web_search` value set by its
+  `-c` flags (`config/read`), no instruction files, and the archivist MCP
   server ready with no other MCP server. A later
   switch away from the ChatGPT login ends the session the same way;
 - turns command, file change and archivist tool approvals into workspace

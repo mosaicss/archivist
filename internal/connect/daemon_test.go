@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -65,9 +66,11 @@ type harness struct {
 	debugLog                    bool
 	// claudeEffort is the --claude-effort machine flag.
 	claudeEffort string
-	d            *Daemon
-	cancel       context.CancelFunc
-	done         chan error
+	// webSearch is Config.WebSearch (Story 78.33).
+	webSearch bool
+	d         *Daemon
+	cancel    context.CancelFunc
+	done      chan error
 }
 
 func newHarness(t *testing.T, fakeCfg map[string]any) *harness {
@@ -130,6 +133,7 @@ func (h *harness) start() {
 		Codex:       codexCfg,
 		MaxSessions: h.max,
 		MaxMode:     h.maxMode,
+		WebSearch:   h.webSearch,
 		Log:         logger,
 		Detect: func(ctx context.Context) Detection {
 			if h.codex {
@@ -291,9 +295,13 @@ func TestDaemonSessionLifecycle(t *testing.T) {
 		t.Fatalf("claude runs %d", len(runs))
 	}
 	for _, k := range runs[0].EnvKeys {
-		if !allowedChildKeys[k] {
+		// Story 78.33: the adapter's own WebFetch off switch is the one CLAUDE_ key.
+		if !allowedChildKeys[k] && k != ClaudeDisableWebFetchKey {
 			t.Errorf("child env carries %s", k)
 		}
+	}
+	if !slices.Contains(runs[0].EnvKeys, ClaudeDisableWebFetchKey) {
+		t.Error("Claude child env lacks " + ClaudeDisableWebFetchKey)
 	}
 	rec := h.record(sid)
 	args := strings.Join(runs[0].Args, " ")

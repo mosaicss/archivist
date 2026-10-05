@@ -338,11 +338,16 @@ func (s *session) spawn(ctx context.Context, resumeID string) (err error) {
 	}
 	// Story 78.31: Mosaic's research guidance for this spawn (Mosaic is the
 	// UI: cite_as citations). Live from chat-api, else the embedded copy.
-	g := s.d.fetchGuidance(ctx, guidance.SurfaceMosaicUI, guidance.FormFull)
+	// Story 78.33: the web variant when this daemon turns web search on.
+	g := s.d.fetchGuidance(ctx, guidance.SurfaceMosaicUI, guidance.FormFull, s.d.webSearch)
+	variant := ""
+	if s.d.webSearch {
+		variant = " web"
+	}
 	if g.Source == guidance.SourceLive {
-		s.log.Printf("research guidance %s (%s)", g.Source, g.Digest)
+		s.log.Printf("research guidance%s %s (%s)", variant, g.Source, g.Digest)
 	} else {
-		s.log.Printf("research guidance %s (%s; live fetch: %s)", g.Source, g.Digest, g.Reason)
+		s.log.Printf("research guidance%s %s (%s; live fetch: %s)", variant, g.Source, g.Digest, g.Reason)
 	}
 	if s.rec.Cwd == "" {
 		return errors.New("session has no working directory")
@@ -359,6 +364,7 @@ func (s *session) spawn(ctx context.Context, resumeID string) (err error) {
 	if err != nil {
 		return err
 	}
+	env = ClaudeSessionEnv(env)
 	cfg := s.claudeLaunchConfig()
 	st, err := ClaudeAuthStatus(ctx, s.d.runner, env, s.rec.Cwd, cfg.Bin)
 	if err != nil {
@@ -693,6 +699,15 @@ func (s *session) handleLine(line []byte) {
 			s.failProof("Claude Code did not start on the subscription login: " + problem)
 			return
 		}
+		// Story 78.33: the tools Claude reports must match the launch.
+		problem, warning := initToolsProblem(f.Tools, s.d.webSearch)
+		if problem != "" {
+			s.failClosed("Claude Code did not start with the tools archivist connect allows: "+problem, false)
+			return
+		}
+		if warning != "" && !s.running {
+			s.log.Printf("warning: %s", warning)
+		}
 		if s.resumedID != "" && f.SessionID != s.resumedID {
 			s.log.Printf("warning: --resume=%s reported Claude session %q; earlier context may be missing", s.resumedID, f.SessionID)
 		}
@@ -752,9 +767,16 @@ func (s *session) handleLine(line []byte) {
 }
 
 // failProof enforces the fail-closed subscription proof.
-func (s *session) failProof(msg string) {
+func (s *session) failProof(msg string) { s.failClosed(msg, true) }
+
+// failClosed stops and fails the session; auth marks a failed sign-in or
+// subscription proof (the sandbox's credential exit). A Claude tool proof
+// (Story 78.33) fails the same way without it.
+func (s *session) failClosed(msg string, auth bool) {
 	s.log.Printf("%s; stopping the session", msg)
-	s.authFailed = true
+	if auth {
+		s.authFailed = true
+	}
 	if s.proc != nil && !s.isCodex() {
 		_ = s.proc.WriteJSON(interruptFrame("archivist-proof-" + s.outbox.RunID()))
 	}

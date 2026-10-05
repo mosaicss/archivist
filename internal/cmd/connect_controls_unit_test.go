@@ -71,3 +71,75 @@ func TestConnectHelpListsModes(t *testing.T) {
 		}
 	}
 }
+
+// --web-search (Story 78.33): on by default for --session (a Mosaic cloud
+// sandbox), off for the local daemon; the flag, when given, wins either way.
+func TestResolveWebSearch(t *testing.T) {
+	sess := &connect.SessionStart{SessionID: "x", Agent: "claude", Prompt: "p"}
+	for _, c := range []struct {
+		name string
+		args []string
+		st   *connect.SessionStart
+		want bool
+	}{
+		{"local default", nil, nil, false},
+		{"local on", []string{"--web-search"}, nil, true},
+		{"local on, explicit", []string{"--web-search=true"}, nil, true},
+		{"local off, explicit", []string{"--web-search=false"}, nil, false},
+		{"sandbox default", nil, sess, true},
+		{"sandbox opt out", []string{"--web-search=false"}, sess, false},
+		{"sandbox on, explicit", []string{"--web-search"}, sess, true},
+	} {
+		cmd := newConnectCmd("dev")
+		if err := cmd.ParseFlags(c.args); err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		flag, err := cmd.Flags().GetBool("web-search")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := resolveWebSearch(c.st, cmd.Flags().Changed("web-search"), flag); got != c.want {
+			t.Errorf("%s: web search %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+func TestConnectHelpNamesWebSearch(t *testing.T) {
+	c := newConnectCmd("dev")
+	f := c.Flags().Lookup("web-search")
+	if f == nil || f.DefValue != "false" || !strings.Contains(f.Usage, "--web-search=false") {
+		t.Fatalf("--web-search flag %+v", f)
+	}
+	for _, want := range []string{"--web-search turns on each harness's own web search", "never asks in any mode",
+		"WebFetch) stays off", "does not take --web-search yet"} {
+		if !strings.Contains(c.Long, want) {
+			t.Errorf("long help lacks %q", want)
+		}
+	}
+}
+
+// --web-search with a setup flag is refused before anything runs; background
+// connect does not carry it yet (Story 78.33, follow up in the 78.34 lane).
+func TestValidateWebSearch(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		m       setupMode
+		changed bool
+		exit    int
+		msg     string
+	}{
+		{name: "foreground", changed: true},
+		{name: "install, no flag", m: setupMode{install: true}},
+		{name: "install", m: setupMode{install: true}, changed: true, exit: ExitUsageError,
+			msg: "--web-search is not yet supported for background connect; run 'archivist connect --web-search' in the foreground"},
+		{name: "service", m: setupMode{service: true}, changed: true, exit: ExitUsageError, msg: "not yet supported for background connect"},
+		{name: "status", m: setupMode{status: true}, changed: true, exit: ExitUsageError, msg: "--web-search applies only when connect runs"},
+		{name: "pair", m: setupMode{pair: true}, changed: true, exit: ExitUsageError, msg: "--web-search applies only when connect runs"},
+	} {
+		var stderr bytes.Buffer
+		err := validateWebSearch(&stderr, c.m, c.changed)
+		if exitOf(err) != c.exit || !strings.Contains(stderr.String(), c.msg) {
+			t.Errorf("%s: exit %d stderr %q", c.name, exitOf(err), stderr.String())
+		}
+	}
+}

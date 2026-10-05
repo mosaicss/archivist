@@ -48,6 +48,9 @@ var codexSchemaDefs = []string{
 	"PermissionGrantScope", "ToolRequestUserInputResponse",
 	"LoginAccountParams", "LoginAccountResponse", "AccountLoginCompletedNotification",
 	"CancelLoginAccountParams", "CancelLoginAccountResponse", "CancelLoginAccountStatus",
+	// Story 78.33: the config/read web search proof and webSearch items.
+	"ConfigReadParams", "ConfigReadResponse", "Config", "ConfigLayerMetadata", "ConfigLayerSource",
+	"WebSearchMode", "WebSearchAction",
 }
 
 var codexMethodUnions = []string{"ClientRequest", "ClientNotification", "ServerRequest", "ServerNotification"}
@@ -277,6 +280,9 @@ func TestCodexProtoMatchesSchema(t *testing.T) {
 		{v: codexLoginCompleted{}, defs: []string{"AccountLoginCompletedNotification"}},
 		{v: codexLoginCancelParams{}, defs: []string{"CancelLoginAccountParams"}},
 		{v: codexLoginCancelResult{}, defs: []string{"CancelLoginAccountResponse"}},
+		{v: codexConfigReadParams{}, defs: []string{"ConfigReadParams"}},
+		{v: codexConfigRead{}, defs: []string{"ConfigReadResponse"}, nested: map[string]string{"config": "Config"}},
+		{v: codexConfigOrigin{}, defs: []string{"ConfigLayerMetadata"}, nested: map[string]string{"name": "ConfigLayerSource"}},
 	} {
 		tags := jsonFields(reflect.TypeOf(m.v))
 		if m.only != nil {
@@ -343,6 +349,10 @@ func TestCodexProtoMatchesSchema(t *testing.T) {
 		// Posture-1 sign-in (Story 78.22): the device code variants.
 		{"LoginAccountParams", "chatgptDeviceCode"}:   {"type"},
 		{"LoginAccountResponse", "chatgptDeviceCode"}: {"type", "loginId", "userCode", "verificationUrl"},
+		// Story 78.33: webSearch items (translate_codex.go) and the -c layer kind.
+		{"ThreadItem", "webSearch"}:           {"id", "query", "action", "results"},
+		{"WebSearchAction", "search"}:         {"type", "query", "queries"},
+		{"ConfigLayerSource", "sessionFlags"}: {"type"},
 	}
 	for k, want := range tagged {
 		have := fieldsOf(k[0], k[1])
@@ -373,7 +383,9 @@ func TestCodexProtoMatchesSchema(t *testing.T) {
 		{"CommandExecutionApprovalKind", ""}:     {"command", "writeStdin"},
 		{"SandboxPolicy", "type"}:                {"readOnly", "workspaceWrite", "dangerFullAccess"},
 		{"Account", "type"}:                      {"chatgpt"},
-		{"ThreadItem", "type"}:                   {"userMessage", "agentMessage", "reasoning", "commandExecution", "mcpToolCall", "fileChange"},
+		{"ThreadItem", "type"}:                   {"userMessage", "agentMessage", "reasoning", "commandExecution", "mcpToolCall", "fileChange", "webSearch"},
+		{"WebSearchMode", ""}:                    {"disabled", "live"},
+		{"ConfigLayerSource", "type"}:            {"sessionFlags"},
 		{"PatchChangeKind", "type"}:              {"add", "update", "delete"},
 		{"UserInput", "type"}:                    {"text"},
 		{"LoginAccountParams", "type"}:           {"chatgptDeviceCode"},
@@ -390,7 +402,7 @@ func TestCodexProtoMatchesSchema(t *testing.T) {
 	}
 	methods := map[string][]string{
 		"ClientRequest": {"initialize", "account/read", "model/list", "thread/start", "thread/resume", "turn/start",
-			"turn/interrupt", "thread/backgroundTerminals/clean", "account/login/start", "account/login/cancel"},
+			"turn/interrupt", "thread/backgroundTerminals/clean", "account/login/start", "account/login/cancel", "config/read"},
 		"ClientNotification": {"initialized"},
 		"ServerRequest": {"item/commandExecution/requestApproval", "item/fileChange/requestApproval",
 			"mcpServer/elicitation/request", "item/tool/requestUserInput", "item/permissions/requestApproval"},

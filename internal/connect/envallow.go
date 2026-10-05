@@ -116,6 +116,32 @@ func BuildChildEnv(parent []string, overrides map[string]string) ([]string, erro
 	return env, nil
 }
 
+// ClaudeDisableWebFetchKey turns Claude Code's WebFetch tool off (Claude
+// Code 2.1.285 and later; older versions ignore it). Story 78.33: every
+// Claude session launch sets it, on top of --tools leaving WebFetch out, so
+// no page fetch runs on this machine whether or not web search is on.
+const ClaudeDisableWebFetchKey = "CLAUDE_CODE_DISABLE_WEB_FETCH"
+
+// ClaudeSessionEnv returns env (BuildChildEnv's result) plus the adapter
+// set Claude keys, sorted by key. These are the only CLAUDE_CODE_ keys a
+// Claude session sees: the deny prefixes keep the daemon's own out, and
+// they are fixed here, never overrides.
+func ClaudeSessionEnv(env []string) []string {
+	out := make([]string, 0, len(env)+1)
+	for _, kv := range env {
+		if k, _, _ := strings.Cut(kv, "="); k != ClaudeDisableWebFetchKey {
+			out = append(out, kv)
+		}
+	}
+	out = append(out, ClaudeDisableWebFetchKey+"=1")
+	sort.Slice(out, func(i, j int) bool {
+		ki, _, _ := strings.Cut(out[i], "=")
+		kj, _, _ := strings.Cut(out[j], "=")
+		return ki < kj
+	})
+	return out
+}
+
 // EnvKeys returns the sorted key names of env (never values), for logs.
 func EnvKeys(env []string) []string {
 	keys := make([]string, 0, len(env))

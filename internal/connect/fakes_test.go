@@ -139,8 +139,12 @@ type fakeChatAPI struct {
 	// guidance serves GET /agent-guidance per "surface/form" (Story 78.31);
 	// a missing entry answers 404, so spawns fall back to the embedded copy.
 	guidance map[string]string
-	// guidanceSeen records each guidance request as "surface/form auth=<Authorization>".
+	// guidanceSeen records each guidance request as "surface/form auth=<Authorization>"
+	// ("surface/form/web ..." for a web=1 request, Story 78.33).
 	guidanceSeen []string
+	// guidanceIgnoresWeb answers web=1 like a chat-api before Story 78.33:
+	// the plain "surface/form" text, with no web field.
+	guidanceIgnoresWeb bool
 }
 
 func newFakeChatAPI(t *testing.T, key []byte) *fakeChatAPI {
@@ -279,15 +283,27 @@ func (f *fakeChatAPI) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.Method == "GET" && r.URL.Path == "/agent-guidance" {
 		key := r.URL.Query().Get("surface") + "/" + r.URL.Query().Get("form")
-		f.guidanceSeen = append(f.guidanceSeen, key+" auth="+auth)
+		web := r.URL.Query().Get("web") == "1"
+		if web {
+			f.guidanceSeen = append(f.guidanceSeen, key+"/web auth="+auth)
+		} else {
+			f.guidanceSeen = append(f.guidanceSeen, key+" auth="+auth)
+		}
+		if web && !f.guidanceIgnoresWeb {
+			key += "/web"
+		}
 		text, ok := f.guidance[key]
 		if !ok {
 			reply(404, map[string]any{"error": "not found", "code": "NOT_FOUND"})
 			return
 		}
 		sum := sha256.Sum256([]byte(text))
-		reply(200, map[string]any{"schemaVersion": "mosaic-agent-guidance/1", "surface": r.URL.Query().Get("surface"),
-			"form": r.URL.Query().Get("form"), "digest": "sha256:" + hex.EncodeToString(sum[:]), "text": text})
+		body := map[string]any{"schemaVersion": "mosaic-agent-guidance/1", "surface": r.URL.Query().Get("surface"),
+			"form": r.URL.Query().Get("form"), "digest": "sha256:" + hex.EncodeToString(sum[:]), "text": text}
+		if web && !f.guidanceIgnoresWeb {
+			body["web"] = true
+		}
+		reply(200, body)
 		return
 	}
 	if researchRoute.MatchString(r.URL.Path) {

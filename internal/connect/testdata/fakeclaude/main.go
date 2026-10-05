@@ -25,8 +25,18 @@
 //	askmcp <tool>   ask can_use_tool for mcp__archivist__<tool> (a harness
 //	                that prompts for an allowed tool) and report the decision
 //	edit <path>     ask can_use_tool for Edit and report the decision
+//	websearch <q>   run a WebSearch tool_use with a text tool_result (Story
+//	                78.33); asks can_use_tool first unless WebSearch is in
+//	                --allowedTools (as Claude Code 2.1.285 does), and refuses
+//	                when WebSearch is not in --tools
+//	askweb <q>      ask can_use_tool for WebSearch whatever the flags (a
+//	                harness that prompts anyway) and report the decision
 //
 // config.json "exitBeforeInit": true exits 3 on the first turn before init.
+//
+// The init frame's tools are the --tools list plus the archivist MCP tools
+// (Story 78.33); config.json "extraInitTools" adds names and
+// "dropInitTools" removes them, for the tool proof tests.
 //
 // Permission modes (Story 78.32): --permission-mode must be one of Claude
 // Code's modes; init reports it (config.json "permissionMode" overrides
@@ -57,6 +67,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -81,6 +92,9 @@ type config struct {
 	SetModeError    bool   `json:"setModeError"`
 	SetModeHang     bool   `json:"setModeHang"`
 	SetModeSilent   bool   `json:"setModeSilent"`
+	// ExtraInitTools and DropInitTools edit the init frame's tools (Story 78.33).
+	ExtraInitTools []string `json:"extraInitTools"`
+	DropInitTools  []string `json:"dropInitTools"`
 }
 
 var (
@@ -318,8 +332,25 @@ func (r *runner) close() {
 	}
 }
 
+// listFlag splits a comma separated flag value.
+func (r *runner) listFlag(name string) []string {
+	var out []string
+	for _, t := range strings.Split(r.flags[name], ",") {
+		if t = strings.TrimSpace(t); t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
 func (r *runner) initFrame() {
-	tools := []string{"Bash", "Read", "Edit", "Write", "Glob", "Grep"}
+	var tools []string
+	for _, t := range r.listFlag("--tools") {
+		if !slices.Contains(cfg.DropInitTools, t) {
+			tools = append(tools, t)
+		}
+	}
+	tools = append(tools, cfg.ExtraInitTools...)
 	var servers []map[string]any
 	if r.mcp != nil {
 		if res, err := r.mcp.ListTools(context.Background(), nil); err == nil {
@@ -375,6 +406,10 @@ func (r *runner) turn(text string) bool {
 		return r.ask("Edit", map[string]any{"file_path": arg, "old_string": "a", "new_string": "b"})
 	case "write":
 		return r.ask("Write", map[string]any{"file_path": arg, "content": "x"})
+	case "websearch":
+		return r.webSearch(arg)
+	case "askweb":
+		return r.ask("WebSearch", map[string]any{"query": arg})
 	case "mcp":
 		r.callMCP()
 	case "publish":
@@ -482,6 +517,13 @@ func (r *runner) ask(tool string, input map[string]any) bool {
 			if tool != "Bash" {
 				arg = in["file_path"]
 			}
+			if tool == "WebSearch" {
+				r.toolResult(toolID, webSearchResult(fmt.Sprint(in["query"])), false)
+				r.say(1, "allowed")
+				emit(stream(map[string]any{"type": "message_stop"}))
+				r.result(false, "completed", "done")
+				return true
+			}
 			r.toolResult(toolID, fmt.Sprintf("ran: %v", arg), false)
 			r.say(1, "allowed")
 		} else {
@@ -493,6 +535,36 @@ func (r *runner) ask(tool string, input map[string]any) bool {
 		return true
 	}
 	return false
+}
+
+// webSearch imitates Claude Code's WebSearch (Story 78.33, probed on
+// 2.1.285): a plain tool_use {query}, then a text tool_result listing the
+// links and a reminder to hyperlink sources; the answer links an ordinary
+// page and a filing source page. Without WebSearch in --allowedTools it
+// asks can_use_tool first.
+func (r *runner) webSearch(query string) bool {
+	if !slices.Contains(r.listFlag("--tools"), "WebSearch") {
+		r.say(0, "No such tool available: WebSearch")
+		emit(stream(map[string]any{"type": "message_stop"}))
+		r.result(false, "completed", "done")
+		return true
+	}
+	input := map[string]any{"query": query}
+	if !slices.Contains(r.listFlag("--allowedTools"), "WebSearch") {
+		return r.ask("WebSearch", input)
+	}
+	toolID := "toolu_" + strings.ReplaceAll(uuid(), "-", "")[:20]
+	r.toolUse(0, toolID, "WebSearch", input)
+	r.toolResult(toolID, webSearchResult(query), false)
+	r.say(1, "searched: [Reuters](https://www.reuters.com/markets/x) and [10-K](https://www.sec.gov/Archives/x.htm)")
+	emit(stream(map[string]any{"type": "message_stop"}))
+	r.result(false, "completed", "done")
+	return true
+}
+
+func webSearchResult(query string) string {
+	return fmt.Sprintf("Web search results for query: %q\n\nLinks: [{\"title\":\"Reuters\",\"url\":\"https://www.reuters.com/markets/x\"},"+
+		"{\"title\":\"10-K\",\"url\":\"https://www.sec.gov/Archives/x.htm\"}]\n\nREMINDER: You MUST include the sources above in your response to the user using markdown hyperlinks.", query)
 }
 
 // slow streams numbers; honour=false ignores interrupt requests (a hung harness).

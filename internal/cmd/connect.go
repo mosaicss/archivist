@@ -58,6 +58,14 @@ highest mode a session on this machine may run (default auto_edits;
 full_auto with --session); a session asking for more runs at the ceiling,
 and the workspace can never raise it. A session started without a mode runs
 ask (full_auto with --session), within the ceiling.
+
+Web search: --web-search turns on each harness's own web search, which runs
+at the provider, not on this machine (Claude Code's WebSearch tool, Codex's
+web_search). It is off by default and on with --session; --web-search=false
+turns it off there. Like a Mosaic read, a web search never asks in any mode.
+Page fetching (Claude Code's WebFetch) stays off either way. Background
+connect (--install, --service) does not take --web-search yet; run
+archivist connect --web-search in the foreground.
 ARCHIVIST_CONNECT_DEBUG=1 adds debug lines (context use per turn).
 
 Requires an ak_ API key (archivist auth login) on a Pro account, and Claude
@@ -114,6 +122,7 @@ func newConnectCmd(version string) *cobra.Command {
 	var pair string
 	var install, uninstall, status, serviceMode bool
 	var maxPermission string
+	var webSearch bool
 	// mode holds --mode, --model and --effort (session-bound mode only).
 	var mode sessionControlFlags
 	c := &cobra.Command{
@@ -136,6 +145,9 @@ func newConnectCmd(version string) *cobra.Command {
 				return err
 			}
 			if err := m.validateControls(cmd.ErrOrStderr(), maxPermission, mode); err != nil {
+				return err
+			}
+			if err := validateWebSearch(cmd.ErrOrStderr(), m, cmd.Flags().Changed("web-search")); err != nil {
 				return err
 			}
 			switch {
@@ -168,7 +180,8 @@ func newConnectCmd(version string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			f := connectFlags{model: model, effort: effort, codexModel: codexModel, codexEffort: codexEffort, session: st}
+			f := connectFlags{model: model, effort: effort, codexModel: codexModel, codexEffort: codexEffort, session: st,
+				webSearch: resolveWebSearch(st, cmd.Flags().Changed("web-search"), webSearch)}
 			if m.service {
 				// The ceiling is checked there: a bad one is logged, exit 0.
 				return runServiceMode(cmd, version, f, maxPermission)
@@ -195,6 +208,8 @@ func newConnectCmd(version string) *cobra.Command {
 	_ = c.Flags().MarkHidden("service")
 	c.Flags().StringVar(&maxPermission, "max-permission", "", "Highest permission mode a session on this machine may run: "+
 		connect.ModeHelp()+" (default auto_edits; full_auto with --session)")
+	c.Flags().BoolVar(&webSearch, "web-search", false, "Turn on the harness's own provider side web search for sessions on this machine "+
+		"(default off; on with --session, where --web-search=false turns it off)")
 	c.Flags().StringVar(&mode.mode, "mode", "", "With --session: the session's permission mode (default full_auto), within --max-permission")
 	c.Flags().StringVar(&mode.model, "model", "", "With --session: the session's model (default: --claude-model or --codex-model), from this machine's model list")
 	c.Flags().StringVar(&mode.effort, "effort", "", "With --session: the session's effort (default: --claude-effort or --codex-effort), one the model offers")
@@ -215,6 +230,33 @@ type connectFlags struct {
 	session *connect.SessionStart
 	// maxMode is the permission ceiling (Story 78.32).
 	maxMode connect.Mode
+	// webSearch turns on provider side web search (Story 78.33).
+	webSearch bool
+}
+
+// resolveWebSearch is the --web-search setting (Story 78.33): the flag when
+// given, else on in the session-bound mode (a Mosaic cloud sandbox) and off
+// for the local daemon. It is a machine setting; the relay never sets it.
+func resolveWebSearch(st *connect.SessionStart, changed, flag bool) bool {
+	if changed {
+		return flag
+	}
+	return st != nil
+}
+
+// validateWebSearch refuses --web-search with a setup flag before anything
+// runs: background connect (--install, --service) does not carry it yet,
+// and --pair, --status and --uninstall run no sessions.
+func validateWebSearch(stderr io.Writer, m setupMode, changed bool) error {
+	if !changed || m.count() == 0 {
+		return nil
+	}
+	msg := "--web-search applies only when connect runs"
+	if m.install || m.service {
+		msg = "--web-search is not yet supported for background connect; run 'archivist connect --web-search' in the foreground"
+	}
+	_, _ = fmt.Fprintln(stderr, "Error: "+msg)
+	return &ExitError{Code: ExitUsageError}
 }
 
 // permissionFlags validates --max-permission and the session-bound mode's
@@ -393,6 +435,7 @@ func runConnect(cmd *cobra.Command, version string, check bool, f connectFlags) 
 		AppVersion: version,
 		ChatAPIURL: api.BaseURL,
 		MaxMode:    f.maxMode,
+		WebSearch:  f.webSearch,
 	}
 	if f.session != nil {
 		cfg.Claude, cfg.Codex = sessionConfigs(det, f, exe, baseURL)
@@ -420,8 +463,8 @@ func runConnect(cmd *cobra.Command, version string, check bool, f connectFlags) 
 		if signIn != "" {
 			state = "logged out: signing in first"
 		}
-		log.Printf("archivist connect %s: session-bound mode, session %s, agent %s (%s); permission ceiling %s; key fp:%s; relay %s.",
-			version, f.session.SessionID, f.session.Agent, state, d.MaxMode(), auth.Fingerprint(token), relayURL)
+		log.Printf("archivist connect %s: session-bound mode, session %s, agent %s (%s); permission ceiling %s; web search %s; key fp:%s; relay %s.",
+			version, f.session.SessionID, f.session.Agent, state, d.MaxMode(), onOff(d.WebSearch()), auth.Fingerprint(token), relayURL)
 		return connectResult(stderr, log, d, d.RunSession(ctx, *f.session))
 	}
 	var harnesses []string
@@ -432,9 +475,17 @@ func runConnect(cmd *cobra.Command, version string, check bool, f connectFlags) 
 	if det.Codex.Usable() {
 		harnesses = append(harnesses, fmt.Sprintf("Codex %s at %s (login linked from %s)", det.Codex.Version, det.Codex.Path, det.Codex.Home))
 	}
-	log.Printf("archivist connect %s: %s; permission ceiling %s; key fp:%s; relay %s. Ctrl-C stops.",
-		version, strings.Join(harnesses, "; "), d.MaxMode(), auth.Fingerprint(token), relayURL)
+	log.Printf("archivist connect %s: %s; permission ceiling %s; web search %s; key fp:%s; relay %s. Ctrl-C stops.",
+		version, strings.Join(harnesses, "; "), d.MaxMode(), onOff(d.WebSearch()), auth.Fingerprint(token), relayURL)
 	return connectResult(stderr, log, d, d.Run(ctx))
+}
+
+// onOff names a boolean setting in log lines.
+func onOff(on bool) string {
+	if on {
+		return "on"
+	}
+	return "off"
 }
 
 // connectResult maps how the daemon ended to the typed exit.

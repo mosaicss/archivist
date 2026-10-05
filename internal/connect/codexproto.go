@@ -33,6 +33,29 @@ type codexInitializeResult struct {
 	CodexHome string `json:"codexHome"`
 }
 
+// codexConfigReadParams is config/read (Story 78.33): no cwd (no project
+// layers) and no layer list.
+type codexConfigReadParams struct{}
+
+// codexConfigRead is the config/read response subset the web search proof
+// reads: the effective web_search and where it came from.
+type codexConfigRead struct {
+	Config struct {
+		// WebSearch is a WebSearchMode: disabled, cached, indexed or live.
+		WebSearch *string `json:"web_search"`
+	} `json:"config"`
+	Origins map[string]codexConfigOrigin `json:"origins"`
+}
+
+// codexConfigOrigin is a ConfigLayerMetadata: name.type is the layer kind
+// (sessionFlags for -c overrides).
+type codexConfigOrigin struct {
+	Name struct {
+		Type string `json:"type"`
+	} `json:"name"`
+	Version string `json:"version"`
+}
+
 // codexAccountRead is the account/read response.
 type codexAccountRead struct {
 	Account *struct {

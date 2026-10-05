@@ -170,3 +170,35 @@ func TestConnectMaxPermissionReachesTheDaemon(t *testing.T) {
 		}
 	}
 }
+
+// --web-search reaches the daemon (Story 78.33): on by default in the
+// session-bound mode (a Mosaic cloud sandbox), off with --web-search=false.
+func TestConnectWebSearchReachesTheDaemon(t *testing.T) {
+	for _, tc := range []struct {
+		flags []string
+		want  string
+	}{
+		{nil, "; web search on;"},
+		{[]string{"--web-search=false"}, "; web search off;"},
+		{[]string{"--web-search"}, "; web search on;"},
+	} {
+		dir := t.TempDir()
+		script := "#!/bin/sh\ncase \"$1\" in\n--version) echo 'codex-cli 0.160.0';;\n" +
+			"login) echo 'Not logged in' >&2; exit 1;;\n*) exit 2;;\nesac\n"
+		if err := os.WriteFile(filepath.Join(dir, "codex"), []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("PATH", dir)
+		t.Setenv("CODEX_HOME", filepath.Join(t.TempDir(), "codex-home"))
+		srv, _ := fakeSessionAPI(t, 404, `{"error":"Session not found.","code":"SESSION_NOT_FOUND"}`)
+		t.Setenv("HOME", t.TempDir())
+		t.Setenv("ARCHIVIST_TOKEN", "ak_00000000000000000000")
+		t.Setenv("ARCHIVIST_BASE_URL", srv.URL)
+		t.Setenv("ARCHIVIST_RELAY_URL", "ws://127.0.0.1:1")
+		args := append([]string{"connect", "--session", testSessionID, "--agent", "codex", "--prompt-file", writePrompt(t, "hi")}, tc.flags...)
+		out, _ := runAuthCmd(t, args...)
+		if !strings.Contains(out, tc.want) {
+			t.Fatalf("%v: output lacks %q:\n%s", tc.flags, tc.want, out)
+		}
+	}
+}

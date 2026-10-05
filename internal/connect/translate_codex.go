@@ -19,7 +19,10 @@ import (
 // Beyond the goldens it maps, with existing schemas only: reasoning
 // summary deltas (reasoning-*), turn/plan/updated (data-plan), fileChange
 // items (tool-input-available, data-patch per change, outputs) and the
-// archivist MCP approval elicitation (tool-approval-request).
+// archivist MCP approval elicitation (tool-approval-request). Story 78.33:
+// webSearch items (Codex's provider side search) become a web_search tool
+// call: tool-input-start at item/started, then tool-input-available and
+// tool-output-available at item/completed.
 type CodexTranslator struct {
 	// Model names data-usage.model.
 	Model string
@@ -29,6 +32,7 @@ type CodexTranslator struct {
 	reasoning map[string]bool   // open reasoning items
 	rOrder    []string
 	files     map[string]json.RawMessage // fileChange item id -> changes
+	searches  map[string]bool            // webSearch items whose tool-input-start was sent
 	Skipped   int
 	// Context is the latest context use report (Story 78.32); the session
 	// adds it to data-usage (mosaic-event/3).
@@ -49,7 +53,12 @@ func (t *CodexTranslator) reset() {
 	t.reasoning = map[string]bool{}
 	t.rOrder = nil
 	t.files = map[string]json.RawMessage{}
+	t.searches = map[string]bool{}
 }
+
+// CodexWebSearchTool is the tool name a Codex webSearch item is reported
+// under (Story 78.33), the name Codex's own config uses.
+const CodexWebSearchTool = "web_search"
 
 // In translates one notification (or approval request) from Codex. rpcID
 // is the JSON-RPC id of a server request ("" for notifications).
@@ -336,6 +345,8 @@ func (t *CodexTranslator) item(raw json.RawMessage, completed bool) []Chunk {
 			output, _ = rawValue(item, "result")
 		}
 		return []Chunk{{"type": "tool-output-available", "toolCallId": id, "output": output}}
+	case "webSearch":
+		return t.webSearch(id, item, completed)
 	case "fileChange":
 		changesRaw := item["changes"]
 		if !completed {
@@ -373,6 +384,43 @@ func (t *CodexTranslator) item(raw json.RawMessage, completed bool) []Chunk {
 	}
 	t.Skipped++
 	return nil
+}
+
+// webSearch maps a webSearch item (Story 78.33). item/started carries an
+// empty query, so only tool-input-start goes out then; item/completed
+// carries the query, the action and the results: tool-input-available
+// with {query, action} and tool-output-available with {query, action,
+// results}, null fields left out. A completion without a start emits all
+// three.
+func (t *CodexTranslator) webSearch(id string, item map[string]json.RawMessage, completed bool) []Chunk {
+	start := Chunk{"type": "tool-input-start", "toolCallId": id, "toolName": CodexWebSearchTool}
+	if !completed {
+		if t.searches[id] {
+			return nil // a repeated item/started
+		}
+		t.searches[id] = true
+		return []Chunk{start}
+	}
+	var out []Chunk
+	if !t.searches[id] {
+		out = append(out, start)
+	}
+	delete(t.searches, id)
+	fields := func(keys ...string) map[string]any {
+		m := map[string]any{}
+		for _, k := range keys {
+			if _, ok := nonNull(item, k); !ok {
+				continue
+			}
+			if v, ok := rawValue(item, k); ok {
+				m[k] = v
+			}
+		}
+		return m
+	}
+	return append(out,
+		Chunk{"type": "tool-input-available", "toolCallId": id, "toolName": CodexWebSearchTool, "input": fields("query", "action")},
+		Chunk{"type": "tool-output-available", "toolCallId": id, "output": fields("query", "action", "results")})
 }
 
 func (t *CodexTranslator) closeText(id string) {

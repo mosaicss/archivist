@@ -684,6 +684,7 @@ func (s *session) claudeLaunchConfig() ClaudeConfig {
 	cfg.PermissionMode = claudePermissionMode(s.mode())
 	cfg.AllowBypass = s.d.maxMode == ModeFullAuto
 	cfg.Model, cfg.Effort = s.claudeModelEffort()
+	cfg.WebSearch = s.d.webSearch
 	if cfg.AllowBypass && os.Geteuid() == 0 {
 		s.log.Printf("warning: running as root with the full_auto ceiling: Claude Code refuses bypass permissions as root outside a recognised sandbox, and the session then fails")
 	}
@@ -760,11 +761,19 @@ func (s *session) emitControls() {
 	s.outbox.Emit(Chunk{"type": "data-session-controls", "data": data})
 }
 
+// claudeWebSearch reports Claude Code's WebSearch on a session with web
+// search (Story 78.33): a read, allowed like the Mosaic read tools in every
+// mode. With web search off it is not a read here and the mode decides.
+func (s *session) claudeWebSearch(toolName string) bool {
+	return s.d.webSearch && toolName == ClaudeWebSearchTool
+}
+
 // claudeBackstop answers a can_use_tool request the mode decides (Mosaic
-// read tools, read_only) without a card; true when answered.
+// read tools, WebSearch with web search on, read_only) without a card;
+// true when answered.
 func (s *session) claudeBackstop(requestID string, req controlRequest) bool {
 	var frame map[string]any
-	switch backstop(s.mode(), claudeMosaicRead(req.ToolName)) {
+	switch backstop(s.mode(), claudeMosaicRead(req.ToolName) || s.claudeWebSearch(req.ToolName)) {
 	case verdictAllow:
 		frame = allowFrame(requestID, req.Input)
 	case verdictDeny:

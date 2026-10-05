@@ -92,6 +92,13 @@ func TestConnectSetupFlagsAreExclusive(t *testing.T) {
 		{"connect", "--install", "--effort", "high"},
 		{"connect", "--status", "--mode", "ask"},
 		{"connect", "--service", "--mode", "read_only"},
+		// Story 78.33: --web-search only where connect runs (not yet for background connect).
+		{"connect", "--install", "--web-search"},
+		{"connect", "--install", "--web-search=false"},
+		{"connect", "--service", "--web-search"},
+		{"connect", "--status", "--web-search"},
+		{"connect", "--uninstall", "--web-search"},
+		{"connect", "--pair", "ABCDE-FGHJK", "--web-search"},
 	} {
 		if out, code := runRoot(t, args...); code != ExitUsageError {
 			t.Errorf("%v: exit %d\n%s", args, code, out)
@@ -599,5 +606,27 @@ func TestInstalledCeiling(t *testing.T) {
 		if found != c.found || ok != c.ok || (ok && got != c.want) {
 			t.Errorf("%q: %s %v %v, want %s %v %v", c.args, got, found, ok, c.want, c.found, c.ok)
 		}
+	}
+}
+
+// Story 78.33: --install --web-search is refused with a readable message
+// before anything is written or any service manager runs.
+func TestConnectInstallRefusesWebSearch(t *testing.T) {
+	home := sandbox(t)
+	saveKey(t, home, pairedKey)
+	calls := stubRunner(t, func(string) service.Result { return service.Result{} })
+	out, code := runRoot(t, "connect", "--install", "--web-search")
+	if code != ExitUsageError || !strings.Contains(out, "not yet supported for background connect") ||
+		!strings.Contains(out, "archivist connect --web-search") {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if len(*calls) != 0 {
+		t.Fatalf("service manager ran %v", *calls)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".config", "systemd", "user", service.UnitName)); err == nil {
+		t.Fatal("a unit was written")
+	}
+	if _, err := os.Stat(filepath.Join(home, "Library", "LaunchAgents")); err == nil {
+		t.Fatal("a launch agent was written")
 	}
 }

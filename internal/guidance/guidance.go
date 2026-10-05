@@ -12,6 +12,12 @@
 // falls back to the embedded copy vendored from the mosaic repository's
 // reference/schemas/agent-guidance/1 snapshot; vendor-source.json pins its
 // source commit and per-file digests.
+//
+// Story 78.33: each pair also has a web variant (FetchWeb, EmbeddedWeb) for
+// archivist connect sessions with provider side web search. It is requested
+// with web=1 and accepted only from a response echoing "web": true; an
+// older chat-api ignores web=1, so its plain answer falls back to the
+// embedded web variant. Plain requests are unchanged.
 package guidance
 
 import (
@@ -85,13 +91,26 @@ func validPair(surface, form string) bool {
 	return (surface == SurfaceAgentUI || surface == SurfaceMosaicUI) && (form == FormFull || form == FormCompact)
 }
 
+// fileName is the vendored file of a pair and variant.
+func fileName(surface, form string, web bool) string {
+	if web {
+		return surface + "." + form + ".web.md"
+	}
+	return surface + "." + form + ".md"
+}
+
 // Embedded returns the vendored text for surface and form. It panics on an
 // unknown pair: callers pass the constants above.
-func Embedded(surface, form string) Text {
+func Embedded(surface, form string) Text { return embedded(surface, form, false) }
+
+// EmbeddedWeb is Embedded for the web variant (Story 78.33).
+func EmbeddedWeb(surface, form string) Text { return embedded(surface, form, true) }
+
+func embedded(surface, form string, web bool) Text {
 	if !validPair(surface, form) {
 		panic(fmt.Sprintf("guidance: unknown surface/form %q/%q", surface, form))
 	}
-	b, err := assets.ReadFile("vendor/1/" + surface + "." + form + ".md")
+	b, err := assets.ReadFile("vendor/1/" + fileName(surface, form, web))
 	if err != nil {
 		panic("guidance: embedded file missing: " + err.Error())
 	}
@@ -127,6 +146,8 @@ type response struct {
 	Form          *string `json:"form"`
 	Digest        *string `json:"digest"`
 	Text          *string `json:"text"`
+	// Web is true only on the web variant (Story 78.33); a plain response has none.
+	Web *bool `json:"web"`
 }
 
 // httpClient refuses redirects: a moved endpoint falls back like any other
@@ -141,16 +162,28 @@ var httpClient = &http.Client{
 // large or non UTF-8 text. It never sends credentials and never waits longer
 // than FetchTimeout.
 func Fetch(ctx context.Context, baseURL, surface, form string) Text {
-	live, err := fetchLive(ctx, baseURL, surface, form)
+	return fetch(ctx, baseURL, surface, form, false)
+}
+
+// FetchWeb is Fetch for the web variant (Story 78.33): it asks for web=1 and
+// takes the live text only when the response echoes "web": true (an older
+// chat-api ignores web=1 and answers the plain text); anything else falls
+// back to the embedded web variant.
+func FetchWeb(ctx context.Context, baseURL, surface, form string) Text {
+	return fetch(ctx, baseURL, surface, form, true)
+}
+
+func fetch(ctx context.Context, baseURL, surface, form string, web bool) Text {
+	live, err := fetchLive(ctx, baseURL, surface, form, web)
 	if err != nil {
-		t := Embedded(surface, form)
+		t := embedded(surface, form, web)
 		t.Reason = err.Error()
 		return t
 	}
 	return live
 }
 
-func fetchLive(ctx context.Context, baseURL, surface, form string) (Text, error) {
+func fetchLive(ctx context.Context, baseURL, surface, form string, web bool) (Text, error) {
 	if !validPair(surface, form) {
 		return Text{}, fmt.Errorf("unknown surface/form %q/%q", surface, form)
 	}
@@ -159,7 +192,11 @@ func fetchLive(ctx context.Context, baseURL, surface, form string) (Text, error)
 		return Text{}, errors.New("invalid chat-api base URL")
 	}
 	u := base.JoinPath("agent-guidance")
-	u.RawQuery = url.Values{"surface": {surface}, "form": {form}}.Encode()
+	q := url.Values{"surface": {surface}, "form": {form}}
+	if web {
+		q.Set("web", "1")
+	}
+	u.RawQuery = q.Encode()
 	ctx, cancel := context.WithTimeout(ctx, fetchTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
@@ -210,6 +247,8 @@ func fetchLive(ctx context.Context, baseURL, surface, form string) (Text, error)
 		return Text{}, errors.New("text is not UTF-8")
 	case r.Digest == nil || *r.Digest != Digest(*r.Text):
 		return Text{}, errors.New("digest mismatch")
+	case web && (r.Web == nil || !*r.Web):
+		return Text{}, errors.New("not the web variant")
 	}
 	return Text{Body: *r.Text, Digest: *r.Digest, Source: SourceLive}, nil
 }
