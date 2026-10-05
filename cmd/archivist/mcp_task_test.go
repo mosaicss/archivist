@@ -135,7 +135,7 @@ func TestToolRoutesMatchDryRun(t *testing.T) {
 func newTaskSession(t *testing.T, baseURL, tokenPath string) *mcp.ClientSession {
 	t.Helper()
 	t.Setenv("ARCHIVIST_TOKEN", "")
-	t.Setenv("HOME", t.TempDir())
+	setHome(t, t.TempDir())
 	t.Setenv("ARCHIVIST_BASE_URL", baseURL)
 	newRoot := func() *cobra.Command { return buildRootForTest("dev") }
 	server, count := buildMCPServerWith(newRoot, "dev", fileToken(tokenPath), true)
@@ -221,7 +221,7 @@ func TestMCPServe_TokenFlagsExclusiveAndFileValidated(t *testing.T) {
 	run := func(args ...string) (int, string) {
 		c := exec.Command(bin, args...)
 		// A refused local port: the startup guidance fetch never leaves the host.
-		c.Env = append(os.Environ(), "HOME="+dir, "ARCHIVIST_TOKEN=", "ARCHIVIST_BASE_URL=http://127.0.0.1:1")
+		c.Env = append(os.Environ(), "HOME="+dir, "USERPROFILE="+dir, "ARCHIVIST_TOKEN=", "ARCHIVIST_BASE_URL=http://127.0.0.1:1")
 		c.Stdin = strings.NewReader("")
 		out, _ := c.CombinedOutput()
 		return c.ProcessState.ExitCode(), string(out)

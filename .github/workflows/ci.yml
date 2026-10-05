@@ -29,6 +29,11 @@ jobs:
       - name: go vet
         run: go vet ./...
 
+      # Story 78.34: the Windows build (job objects, schtasks, archivistw)
+      # and its tests compile and vet from Linux too.
+      - name: go vet (GOOS=windows)
+        run: GOOS=windows go vet ./...
+
       - name: Set up Node for versioned Mosaic contract
         uses: actions/setup-node@v7
         with:
@@ -81,6 +86,26 @@ jobs:
           grep -q "^<!-- version: " /tmp/skill-check/SKILL.md || { echo "FAIL: version marker missing"; exit 1; }
           echo "skill bundle OK: SKILL.md present with frontmatter + version marker"
 
+      # Story 78.34: the Windows zip carries archivist.exe and the
+      # console-less archivistw.exe (GUI subsystem) the logon task runs.
+      - name: Verify the Windows archive holds both executables
+        run: |
+          ZIP=$(ls dist/archivist_*_windows_amd64.zip)
+          for exe in archivist.exe archivistw.exe; do
+            unzip -l "$ZIP" | awk '{print $4}' | grep -qx "$exe" || { echo "FAIL: $exe missing from $ZIP"; unzip -l "$ZIP"; exit 1; }
+          done
+          python3 - "$ZIP" <<'PY'
+          import struct, sys, zipfile
+          z = zipfile.ZipFile(sys.argv[1])
+          for name, want in (("archivist.exe", 3), ("archivistw.exe", 2)):
+              b = z.read(name)
+              pe = struct.unpack_from("<I", b, 0x3C)[0]
+              sub = struct.unpack_from("<H", b, pe + 24 + 68)[0]
+              if sub != want:
+                  sys.exit(f"FAIL: {name} PE subsystem {sub}, want {want} (2 GUI, 3 console)")
+          print("windows archive OK: archivist.exe (console) and archivistw.exe (GUI)")
+          PY
+
       - name: Install shellcheck
         run: |
           sudo apt-get update -qq
@@ -100,10 +125,12 @@ jobs:
             exit 0
           fi
           pwsh -NoProfile -NonInteractive -Command '
-            $errors = $null
-            [System.Management.Automation.Language.Parser]::ParseFile("scripts/install.ps1", [ref]$null, [ref]$errors) | Out-Null
-            if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Error $_.ToString() }; exit 1 }
-            "install.ps1 parses"'
+            foreach ($f in "scripts/install.ps1", "scripts/test-install.ps1") {
+              $errors = $null
+              [System.Management.Automation.Language.Parser]::ParseFile($f, [ref]$null, [ref]$errors) | Out-Null
+              if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Error $_.ToString() }; exit 1 }
+              "$f parses"
+            }'
 
       - name: shellcheck ci-drift-check.sh
         run: shellcheck scripts/ci-drift-check.sh
@@ -124,3 +151,63 @@ jobs:
           else
             echo "Marketing page not in this repo — drift check skipped (advisory, see Story 36.10)"
           fi
+
+  # Story 78.34: Windows daemon. The shared session suites, the job object,
+  # hard link, env, resolver and service tests run on Windows; the
+  # installer replays against a fake release with a stub schtasks; and the
+  # real schtasks accepts the task XML (a harmless task, created, queried
+  # and deleted, never run).
+  windows:
+    name: Windows test + installer replay
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test ./...
+
+      # The Windows only tests again, verbose, failing on any skip except
+      # the cross drive link test (it needs RUNNER_TEMP on another volume
+      # than TEMP, which a runner image may lack; a skip is noted, so the
+      # cross drive refusal is proven only where that test ran): the log
+      # shows each ran (job tree kill, breakaway, daemon death, containment
+      # failures, Codex hard link, env case, npm shims, schtasks manager,
+      # supervisor).
+      - name: Windows only tests ran (verbose, no skips but the cross drive test)
+        shell: bash
+        run: |
+          go test -count=1 -v ./internal/winjob ./internal/connect ./internal/cmd ./internal/service \
+            -run 'Test(Windows|Terminate|Close|DaemonDeath|AssignFailure|ResumeFailure|StartResumes|HarnessLookPath|DetectReportsBatchShim|Schtasks|RenderTaskXML|ConnectInstallStatusUninstallWindows|SuperviseDaemon)' \
+            | tee winonly.txt
+          grep -q -- '--- PASS' winonly.txt || { echo "FAIL: no Windows only test ran"; exit 1; }
+          # The cross drive link test needs a second volume, which a runner
+          # image may lack: that one skip is allowed (and noted), no other.
+          if grep -q -- '--- SKIP: TestWindowsCodexLinkAcrossDrivesFails' winonly.txt; then
+            echo "NOTE: TestWindowsCodexLinkAcrossDrivesFails skipped (no second volume on this runner)"
+          fi
+          if grep -- '--- SKIP' winonly.txt | grep -v -- '--- SKIP: TestWindowsCodexLinkAcrossDrivesFails'; then
+            echo "FAIL: a Windows only test was skipped"; exit 1
+          fi
+
+      - name: Real schtasks accepts the task XML
+        env:
+          ARCHIVIST_REAL_SCHTASKS: "1"
+        run: go test ./internal/service -run TestRealSchtasksAcceptsTaskXML -count=1 -v
+
+      - name: install.ps1 replay (fake release, stub schtasks), Windows PowerShell 5.1
+        shell: powershell
+        run: .\scripts\test-install.ps1
+
+      - name: install.ps1 replay, PowerShell 7
+        shell: pwsh
+        run: ./scripts/test-install.ps1

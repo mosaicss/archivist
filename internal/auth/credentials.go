@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/mosaicss/archivist/internal/client"
+	"github.com/mosaicss/archivist/internal/fsutil"
 )
 
 // Accepted token prefixes:
@@ -89,7 +90,7 @@ func Resolve(flagValue string) (string, Source, error) {
 	if err != nil {
 		return "", SourceNone, err
 	}
-	data, err := os.ReadFile(path)
+	data, err := fsutil.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return "", SourceNone, ErrNoToken
@@ -124,7 +125,7 @@ func SavedToken() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	data, err := os.ReadFile(path)
+	data, err := fsutil.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return "", ErrNoToken
@@ -236,7 +237,7 @@ func writeFileAtomic(path string, data []byte) (err error) {
 	if err = f.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	return fsutil.Rename(tmp, path)
 }
 
 // DeleteCredentials removes the credentials file. Idempotent: a missing file

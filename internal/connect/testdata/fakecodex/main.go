@@ -160,6 +160,9 @@ func notify(method string, params any) {
 }
 
 func main() {
+	if helperMode() {
+		return
+	}
 	args := os.Args[1:]
 	if len(args) == 1 && args[0] == "--version" {
 		fmt.Println("codex-cli " + cfg.Version)
@@ -224,7 +227,7 @@ func record(args []string) {
 	sort.Strings(keys)
 	cwd, _ := os.Getwd()
 	b, _ := json.MarshalIndent(map[string]any{"args": args, "envKeys": keys, "codexHome": os.Getenv("CODEX_HOME"),
-		"tmpdir": os.Getenv("TMPDIR"), "cwd": cwd, "pid": os.Getpid()}, "", "  ")
+		"tmpdir": os.Getenv("TMPDIR"), "temp": os.Getenv("TEMP"), "tmp": os.Getenv("TMP"), "cwd": cwd, "pid": os.Getpid()}, "", "  ")
 	_ = os.WriteFile(filepath.Join(dir, fmt.Sprintf("%d.json", os.Getpid())), b, 0o600)
 }
 
@@ -527,7 +530,7 @@ func (s *server) handle(id json.RawMessage, method string, params json.RawMessag
 	case "thread/backgroundTerminals/clean":
 		s.mu.Lock()
 		for _, pid := range s.terminals {
-			_ = syscall.Kill(pid, syscall.SIGKILL)
+			killPID(pid)
 		}
 		s.terminals = nil
 		s.mu.Unlock()
@@ -794,15 +797,13 @@ func (s *server) turn(turn, text string, stop <-chan struct{}) {
 			return
 		}
 	case "grandchild":
-		c := exec.Command("sleep", "300")
-		c.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+		c := detachedSleeper()
 		_ = c.Start()
 		_ = os.WriteFile(filepath.Join(base, "grandchild.pid"), []byte(strconv.Itoa(c.Process.Pid)), 0o600)
 		t.say("spawned")
 	case "orphan":
 		pidFile := filepath.Join(base, "orphan.pid")
-		c := exec.Command("sh", "-c", "setsid sleep 300 </dev/null >/dev/null 2>&1 & echo $! > "+pidFile)
-		_ = c.Run()
+		spawnOrphan(pidFile, "300")
 		t.say("orphaned")
 	case "usage":
 		t.usage()
@@ -865,8 +866,7 @@ func (t *turnCtx) command(command string, background bool) string {
 		fallthrough
 	case "accept":
 		if background {
-			c := exec.Command("sleep", "300")
-			c.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+			c := detachedSleeper()
 			_ = c.Start()
 			go func() { _ = c.Wait() }()
 			t.s.mu.Lock()

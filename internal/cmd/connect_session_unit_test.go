@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"io"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -63,7 +64,11 @@ func TestActivityFileEnv(t *testing.T) {
 	if got := activityFile(log, ""); got != "" {
 		t.Fatalf("empty: %q", got)
 	}
-	if got := activityFile(log, "/run/archivist/../archivist/activity.json"); got != "/run/archivist/activity.json" {
+	// An absolute path on every platform (a /run literal is not absolute on
+	// Windows), with a ".." the result must have cleaned away.
+	dir := t.TempDir()
+	sep := string(filepath.Separator)
+	if got := activityFile(log, dir+sep+"archivist"+sep+".."+sep+"archivist"+sep+"activity.json"); got != filepath.Join(dir, "archivist", "activity.json") {
 		t.Fatalf("absolute: %q", got)
 	}
 	if buf.Len() != 0 {

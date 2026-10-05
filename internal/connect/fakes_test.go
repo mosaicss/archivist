@@ -1,5 +1,3 @@
-//go:build !windows
-
 package connect
 
 import (
@@ -20,10 +18,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
-	"syscall"
 	"testing"
 	"time"
 
@@ -58,9 +56,14 @@ func testBinaries(t *testing.T) (claudeBin, archivistBin string) {
 		if binErr != nil {
 			return
 		}
-		fakeClaude = filepath.Join(binDir, "claude")
-		fakeCodex = filepath.Join(binDir, "codex")
-		archivist = filepath.Join(binDir, "archivist")
+		// Windows runs only .exe files (Story 78.34).
+		exe := ""
+		if runtime.GOOS == "windows" {
+			exe = ".exe"
+		}
+		fakeClaude = filepath.Join(binDir, "claude"+exe)
+		fakeCodex = filepath.Join(binDir, "codex"+exe)
+		archivist = filepath.Join(binDir, "archivist"+exe)
 		for _, b := range []struct{ out, pkg string }{
 			{fakeClaude, "./testdata/fakeclaude"},
 			{fakeCodex, "./testdata/fakecodex"},
@@ -528,15 +531,6 @@ func fakeRuns(t *testing.T, home string) []fakeRun {
 	return out
 }
 
-// processAlive reports whether pid exists (signal 0).
-func processAlive(pid int) bool {
-	p, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-	return p.Signal(syscall.Signal(0)) == nil
-}
-
 // waitFor polls cond until it holds or the timeout passes.
 func waitFor(t *testing.T, timeout time.Duration, what string, cond func() bool) {
 	t.Helper()
@@ -554,4 +548,29 @@ func randomHexKey() []byte {
 	b := make([]byte, 32)
 	_, _ = rand.Read(b)
 	return b
+}
+
+// waitCard waits for the n-th approval card without answering it.
+func (h *harness) waitCard(sid string, n int) map[string]any {
+	h.t.Helper()
+	var req map[string]any
+	waitFor(h.t, 20*time.Second, "approval request", func() bool {
+		reqs := h.relay.eventsOf(sid, "tool-approval-request")
+		if len(reqs) >= n {
+			req = reqs[n-1]["payload"].(map[string]any)
+			return true
+		}
+		return false
+	})
+	return req
+}
+
+func approvalResponses(h *harness, sid string) []map[string]any {
+	var out []map[string]any
+	for _, p := range h.relay.payloads(sid) {
+		if p["type"] == "tool-approval-response" {
+			out = append(out, p)
+		}
+	}
+	return out
 }

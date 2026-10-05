@@ -1,10 +1,12 @@
 // Package service installs `archivist connect` as a background user service
-// (Story 78.30): a launchd agent on macOS, a systemd user unit on Linux. The
-// service runs `archivist connect --service` with a captured environment
-// and the saved credentials file; it never carries ARCHIVIST_TOKEN.
+// (Story 78.30): a launchd agent on macOS, a systemd user unit on Linux, and
+// (Story 78.34) a per-user logon scheduled task on Windows. The service runs
+// `archivist connect --service` with a captured environment and the saved
+// credentials file; it never carries ARCHIVIST_TOKEN.
 //
 // Every manager command goes through an injectable Runner, and status is
-// read from exit codes only (launchctl print output is not an API).
+// read from exit codes only (launchctl print and schtasks /query output are
+// not an API; the latter is localised).
 package service
 
 import (
@@ -17,8 +19,9 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
+
+	"github.com/mosaicss/archivist/internal/fsutil"
 )
 
 // Result is a finished manager command: its exit code and combined output.
@@ -34,9 +37,12 @@ func (r Result) OK() bool { return r.ExitCode == 0 }
 // not run at all (not found, not executable); a non-zero exit is a Result.
 type Runner func(ctx context.Context, name string, args ...string) (Result, error)
 
-// ExecRunner runs the command for real.
+// ExecRunner runs the command for real (without a console window on
+// Windows, where the background daemon has none).
 func ExecRunner(ctx context.Context, name string, args ...string) (Result, error) {
-	out, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
+	cmd := exec.CommandContext(ctx, name, args...)
+	hideWindow(cmd)
+	out, err := cmd.CombinedOutput()
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) {
 		return Result{ExitCode: exitErr.ExitCode(), Output: string(out)}, nil
@@ -64,13 +70,18 @@ type Options struct {
 	Run Runner
 	// UID is the user id (launchd gui/<uid> domain).
 	UID int
-	// User is the user name (loginctl enable-linger).
+	// User is the user name (loginctl enable-linger; the Windows task's
+	// principal).
 	User string
+	// SID is the Windows account security identifier the task name is
+	// derived from (TaskName); empty elsewhere.
+	SID string
 	// ConfigHome is $XDG_CONFIG_HOME when absolute, else empty (~/.config).
 	ConfigHome string
 	// Sleep waits between launchd polls (time.Sleep when nil).
 	Sleep func(time.Duration)
-	// Alive reports whether a process id is alive (signal 0 when nil).
+	// Alive reports whether a process id is alive (processAlive when nil:
+	// signal 0 on Unix, the process exit code on Windows).
 	Alive func(pid int) bool
 }
 
@@ -88,19 +99,6 @@ func (o Options) alive(pid int) bool {
 	return processAlive(pid)
 }
 
-// processAlive sends signal 0: nil means the process exists and is this
-// user's (EPERM, another user's process reusing the id, is not ours).
-func processAlive(pid int) bool {
-	if pid <= 0 {
-		return false
-	}
-	p, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-	return p.Signal(syscall.Signal(0)) == nil
-}
-
 func (o Options) sleep(d time.Duration) {
 	if o.Sleep == nil {
 		time.Sleep(d)
@@ -111,17 +109,19 @@ func (o Options) sleep(d time.Duration) {
 
 // Status is what the service manager reports, from exit codes only.
 type Status struct {
-	// Manager is "systemd" or "launchd".
+	// Manager is "systemd", "launchd" or "Task Scheduler".
 	Manager string
-	// Path is the unit or plist path.
+	// Path is the unit, plist or task XML path.
 	Path string
-	// Installed is true when the unit or plist file exists.
+	// Installed is true when the unit, plist or task XML file exists.
 	Installed bool
-	// Loaded is launchd's job loaded (launchctl print exits 0); systemd
-	// leaves it false.
+	// Loaded is launchd's job loaded (launchctl print exits 0) or the
+	// Windows task registered (schtasks /query exits 0); systemd leaves it
+	// false.
 	Loaded bool
-	// Running is systemd's is-active (Linux), or on macOS the job loaded
-	// and the daemon whose pid is in service.pid alive.
+	// Running is systemd's is-active (Linux), or on macOS and Windows the
+	// job loaded (task registered) and the daemon whose pid is in
+	// service.pid alive.
 	Running bool
 	// Args are the arguments after `connect --service` in the installed
 	// unit or plist (Story 78.32: --max-permission <mode>), read from the
@@ -131,7 +131,7 @@ type Status struct {
 
 // installedArgs reads the service arguments from an installed unit or plist.
 func installedArgs(path string) []string {
-	b, err := os.ReadFile(path)
+	b, err := fsutil.ReadFile(path)
 	if err != nil {
 		return nil
 	}
@@ -153,9 +153,9 @@ type InstallReport struct {
 
 // Manager installs, removes and reports the background service.
 type Manager interface {
-	// Name is "systemd" or "launchd".
+	// Name is "systemd", "launchd" or "Task Scheduler".
 	Name() string
-	// Path is the unit or plist file.
+	// Path is the unit, plist or task XML file.
 	Path() string
 	Install(ctx context.Context) (InstallReport, error)
 	// Uninstall stops and removes the service; removed is false when
@@ -165,7 +165,7 @@ type Manager interface {
 }
 
 // ErrUnsupported is returned by New where no background service exists
-// (Windows: the daemon itself needs a Job Object first).
+// (a platform other than macOS, Linux and Windows).
 var ErrUnsupported = errors.New("background connect is not available on this platform")
 
 // New returns this platform's manager, or ErrUnsupported.
@@ -176,8 +176,8 @@ func New(opts Options) (Manager, error) {
 	return newPlatform(opts)
 }
 
-// InstalledPath is this platform's unit or plist path and whether that file
-// exists; false where no background service exists (Windows).
+// InstalledPath is this platform's unit, plist or task XML path and whether
+// that file exists; false where no background service exists.
 func InstalledPath(home, configHome string) (string, bool) {
 	m, err := New(Options{Home: home, ConfigHome: configHome})
 	if err != nil {
@@ -209,7 +209,7 @@ func WritePID(home string, pid int) (func(), error) {
 		return nil, err
 	}
 	return func() {
-		if b, err := os.ReadFile(path); err == nil && string(b) == content {
+		if b, err := fsutil.ReadFile(path); err == nil && string(b) == content {
 			_ = os.Remove(path)
 		}
 	}, nil
@@ -217,7 +217,7 @@ func WritePID(home string, pid int) (func(), error) {
 
 // readPID returns the pid recorded in PIDPath, or 0.
 func readPID(home string) int {
-	b, err := os.ReadFile(PIDPath(home))
+	b, err := fsutil.ReadFile(PIDPath(home))
 	if err != nil {
 		return 0
 	}
@@ -312,7 +312,7 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) (err error) {
 	if err = f.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	return fsutil.Rename(tmp, path)
 }
 
 // commandError describes a failed manager command with its output.

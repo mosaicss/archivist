@@ -1,5 +1,3 @@
-//go:build !windows
-
 package connect
 
 import (
@@ -10,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -97,6 +96,12 @@ func (h *harness) daemonEnv() []string {
 	}
 	if h.codex {
 		env = append(env, "CODEX_API_KEY=must-not-pass", "CODEX_ACCESS_TOKEN=must-not-pass", "OPENAI_BASE_URL=http://wrong.invalid")
+	}
+	if runtime.GOOS == "windows" {
+		// A Windows daemon's environment always has these (Story 78.34);
+		// lowercase provider keys must be denied like uppercase ones.
+		env = append(env, "USERPROFILE="+h.home, "SystemRoot="+os.Getenv("SystemRoot"),
+			"anthropic_api_key=must-not-pass", "openai_api_key=must-not-pass")
 	}
 	return env
 }
@@ -242,12 +247,19 @@ func (h *harness) record(sid string) *SessionRecord {
 // strayProcesses lists processes whose command line mentions this test's
 // HOME (fake claude config, mcp serve token file) or TMPDIR.
 func (h *harness) strayProcesses() []string {
-	out, _ := exec.Command("ps", "-A", "-o", "pid=,args=").Output()
+	// Both the given and the resolved forms (Windows 8.3 short names expand).
+	marks := []string{h.home, h.tmp}
+	for _, p := range []string{h.home, h.tmp} {
+		if r, err := filepath.EvalSymlinks(p); err == nil && r != p {
+			marks = append(marks, r)
+		}
+	}
 	var stray []string
-	for _, line := range strings.Split(string(out), "\n") {
-		if strings.Contains(line, h.home) || strings.Contains(line, h.tmp) {
-			if !strings.Contains(line, "ps -A") {
+	for _, line := range processCommandLines() {
+		for _, m := range marks {
+			if strings.Contains(line, m) {
 				stray = append(stray, strings.TrimSpace(line))
+				break
 			}
 		}
 	}
@@ -256,6 +268,16 @@ func (h *harness) strayProcesses() []string {
 
 var allowedChildKeys = map[string]bool{"HOME": true, "PATH": true, "USER": true, "LANG": true, "LC_ALL": true,
 	"XDG_CONFIG_HOME": true, "TMPDIR": true}
+
+func init() {
+	// Windows children also carry the core keys the daemon env has there
+	// (os/exec adds SYSTEMROOT), and Codex's TEMP and TMP (Story 78.34).
+	if runtime.GOOS == "windows" {
+		for _, k := range []string{"USERPROFILE", "SystemRoot", "SYSTEMROOT", "TEMP", "TMP"} {
+			allowedChildKeys[k] = true
+		}
+	}
+}
 
 func TestDaemonSessionLifecycle(t *testing.T) {
 	h := newHarness(t, nil)
@@ -315,13 +337,20 @@ func TestDaemonSessionLifecycle(t *testing.T) {
 			t.Errorf("args missing %q: %s", want, args)
 		}
 	}
-	if runs[0].Cwd != rec.Cwd || !strings.HasPrefix(rec.Cwd, h.tmp) {
+	// makeCwd resolves the temp dir (EvalSymlinks), which on Windows also
+	// expands an 8.3 short name (RUNNER~1) to the long one: compare the
+	// resolved forms.
+	tmp, err := filepath.EvalSymlinks(h.tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runs[0].Cwd != rec.Cwd || !strings.HasPrefix(rec.Cwd, tmp) {
 		t.Errorf("cwd %q, record %q", runs[0].Cwd, rec.Cwd)
 	}
 	runDir := filepath.Join(h.home, ".archivist", "connect", "run", sid)
 	for _, f := range []string{"task-token", "mcp.json"} {
 		st, err := os.Stat(filepath.Join(runDir, f))
-		if err != nil || st.Mode().Perm() != 0o600 {
+		if err != nil || !modeIs(st.Mode(), 0o600) {
 			t.Errorf("%s: %v %v", f, st, err)
 		}
 	}

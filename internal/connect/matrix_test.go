@@ -1,5 +1,3 @@
-//go:build !windows
-
 package connect
 
 import (
@@ -8,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/mosaicss/archivist/internal/fsutil"
 )
 
 // Matrix rows not covered by the lifecycle tests: interrupt timeout, task
@@ -87,10 +87,10 @@ func TestMatrixTaskTokenRefresh(t *testing.T) {
 	})
 	waitFor(t, 5*time.Second, "token file matches the one live token", func() bool {
 		_, _, live, _ := h.api.tokenState()
-		b, err := os.ReadFile(tokenFile)
+		b, err := fsutil.ReadFile(tokenFile) // the daemon replaces it atomically
 		return err == nil && len(live) == 1 && strings.TrimSpace(string(b)) == live[0]
 	})
-	if st, err := os.Stat(tokenFile); err != nil || st.Mode().Perm() != 0o600 {
+	if st, err := os.Stat(tokenFile); err != nil || !modeIs(st.Mode(), 0o600) {
 		t.Fatalf("token file %v %v", st, err)
 	}
 	if left, _ := filepath.Glob(filepath.Join(filepath.Dir(tokenFile), ".task-token.tmp-*")); len(left) != 0 {

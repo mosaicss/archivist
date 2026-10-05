@@ -447,12 +447,12 @@ func TestStorePermissionsAndRecords(t *testing.T) {
 		t.Fatal(err)
 	}
 	info, _ := os.Stat(filepath.Join(dir, "sessions", unitSID+".json"))
-	if info.Mode().Perm() != 0o600 {
+	if !modeIs(info.Mode(), 0o600) {
 		t.Fatalf("record mode %v", info.Mode())
 	}
 	for _, d := range []string{dir, filepath.Join(dir, "sessions"), filepath.Join(dir, "run")} {
 		info, _ := os.Stat(d)
-		if info.Mode().Perm() != 0o700 {
+		if !modeIs(info.Mode(), 0o700) {
 			t.Fatalf("%s mode %v", d, info.Mode())
 		}
 	}

@@ -52,7 +52,7 @@ func testOpts(t *testing.T, f *fakeRunner) Options {
 	home := t.TempDir()
 	return Options{
 		Home:   home,
-		Binary: "/opt/archivist/bin/archivist",
+		Binary: testBinary,
 		Env:    []EnvVar{{"PATH", "/usr/bin:/bin"}, {"HOME", home}},
 		Run:    f.run,
 		UID:    501,
@@ -61,10 +61,29 @@ func testOpts(t *testing.T, f *fakeRunner) Options {
 	}
 }
 
+// testBinary is an absolute binary path on every platform ("/opt/..." is
+// not absolute on Windows); the rendered definitions below expect it.
+var testBinary = func() string {
+	if runtime.GOOS == "windows" {
+		return `C:\opt\archivist\bin\archivist`
+	}
+	return "/opt/archivist/bin/archivist"
+}()
+
+// abs makes a slash path absolute on this platform (a drive on Windows).
+func abs(p string) string {
+	if runtime.GOOS == "windows" {
+		return `C:` + filepath.FromSlash(p)
+	}
+	return p
+}
+
 func TestCaptureEnv(t *testing.T) {
+	// CODEX_HOME and CLAUDE_CONFIG_DIR must be absolute on this platform.
+	codexHome, claudeDir := abs("/c"), abs("/u/.claude-b")
 	env := CaptureEnv([]string{
 		"PATH=/a:/b", "HOME=/h", "LANG=en_US.UTF-8", "LC_ALL=C", "LC_CTYPE=x",
-		"CODEX_HOME=/c", "CLAUDE_CONFIG_DIR=relative", "ARCHIVIST_TOKEN=ak_secret",
+		"CODEX_HOME=" + codexHome, "CLAUDE_CONFIG_DIR=relative", "ARCHIVIST_TOKEN=ak_secret",
 		"ARCHIVIST_BASE_URL=http://127.0.0.1:9", "ARCHIVIST_RELAY_URL=", "ANTHROPIC_API_KEY=k",
 		"SHELL=/bin/zsh", "TERM=x", "USER=u", "BAD=a\nb", "CLAUDE_CODE_OAUTH_TOKEN=o",
 	})
@@ -72,12 +91,12 @@ func TestCaptureEnv(t *testing.T) {
 	for _, e := range env {
 		got = append(got, e.Key+"="+e.Value)
 	}
-	want := "PATH=/a:/b HOME=/h LANG=en_US.UTF-8 LC_ALL=C CODEX_HOME=/c ARCHIVIST_BASE_URL=http://127.0.0.1:9"
+	want := "PATH=/a:/b HOME=/h LANG=en_US.UTF-8 LC_ALL=C CODEX_HOME=" + codexHome + " ARCHIVIST_BASE_URL=http://127.0.0.1:9"
 	if strings.Join(got, " ") != want {
 		t.Fatalf("got %v\nwant %s", got, want)
 	}
-	env = CaptureEnv([]string{"CLAUDE_CONFIG_DIR=/u/.claude-b", "PATH=/x\n", "CODEX_HOME=rel"})
-	if len(env) != 1 || env[0] != (EnvVar{"CLAUDE_CONFIG_DIR", "/u/.claude-b"}) {
+	env = CaptureEnv([]string{"CLAUDE_CONFIG_DIR=" + claudeDir, "PATH=/x\n", "CODEX_HOME=rel"})
+	if len(env) != 1 || env[0] != (EnvVar{"CLAUDE_CONFIG_DIR", claudeDir}) {
 		t.Fatalf("got %v", env)
 	}
 }
@@ -135,7 +154,7 @@ func TestSystemdInstallFreshAndRestart(t *testing.T) {
 		t.Fatalf("report %+v", rep)
 	}
 	b, err := os.ReadFile(wantPath)
-	if err != nil || !strings.Contains(string(b), `ExecStart="/opt/archivist/bin/archivist" connect --service`) {
+	if err != nil || !strings.Contains(string(b), `ExecStart="`+strings.ReplaceAll(testBinary, `\`, `\\`)+`" connect --service`) {
 		t.Fatalf("unit %s %v", b, err)
 	}
 	want := []string{
@@ -416,6 +435,10 @@ func TestNewRequiresAbsoluteHome(t *testing.T) {
 		}
 	case "darwin":
 		if err != nil || m.Name() != "launchd" {
+			t.Fatalf("%v %v", m, err)
+		}
+	case "windows":
+		if err != nil || m.Name() != "Task Scheduler" {
 			t.Fatalf("%v %v", m, err)
 		}
 	default:

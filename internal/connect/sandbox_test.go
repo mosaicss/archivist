@@ -1,5 +1,3 @@
-//go:build !windows
-
 package connect
 
 import (
@@ -294,6 +292,9 @@ func TestSessionModeContextCancel(t *testing.T) {
 			func(h *harness, sid string) { h.authPrompt(sid) }},
 	} {
 		t.Run(c.name, func(t *testing.T) {
+			if c.signIn == "claude" {
+				skipOnWindows(t, noPTY)
+			}
 			h := newHarness(t, c.cfg)
 			s := h.api.addSession("claude")
 			r := h.runSession(s.SessionID, "claude", c.signIn, c.prompt)
@@ -327,6 +328,7 @@ func TestSessionModeContextCancel(t *testing.T) {
 // ─── Claude Code sign-in ────────────────────────────────────────────────────
 
 func TestSessionModeClaudeSignIn(t *testing.T) {
+	skipOnWindows(t, noPTY)
 	h := newHarness(t, map[string]any{"loggedIn": false, "authMethod": "none"})
 	s := h.api.addSession("claude")
 	started := time.Now()
@@ -381,6 +383,7 @@ func TestSessionModeClaudeSignIn(t *testing.T) {
 }
 
 func TestSessionModeClaudeSignInRefusesChatMessage(t *testing.T) {
+	skipOnWindows(t, noPTY)
 	h := newHarness(t, map[string]any{"loggedIn": false, "authMethod": "none"})
 	s := h.api.addSession("claude")
 	r := h.runSession(s.SessionID, "claude", "claude", "echo signed in later")
@@ -403,6 +406,7 @@ func TestSessionModeClaudeSignInRefusesChatMessage(t *testing.T) {
 }
 
 func TestSessionModeClaudeSignInWaitsForEnter(t *testing.T) {
+	skipOnWindows(t, noPTY)
 	h := newHarness(t, map[string]any{"loggedIn": false, "authMethod": "none", "loginEnter": true})
 	s := h.api.addSession("claude")
 	r := h.runSession(s.SessionID, "claude", "claude", "echo entered")
@@ -413,6 +417,7 @@ func TestSessionModeClaudeSignInWaitsForEnter(t *testing.T) {
 }
 
 func TestSessionModeClaudeSignInFailures(t *testing.T) {
+	skipOnWindows(t, noPTY)
 	cases := []struct {
 		name string
 		cfg  map[string]any
@@ -459,6 +464,7 @@ func TestSessionModeClaudeProofFailureExitsNonZero(t *testing.T) {
 }
 
 func TestSessionModeStopDuringSignIn(t *testing.T) {
+	skipOnWindows(t, noPTY)
 	h := newHarness(t, map[string]any{"loggedIn": false})
 	s := h.api.addSession("claude")
 	r := h.runSession(s.SessionID, "claude", "claude", "echo never")

@@ -138,6 +138,28 @@ func (p *Proc) owns(e psEntry) bool {
 	return p != nil && (p.isTracked(e.id) || p.ownsGroup(e.pgid))
 }
 
+// ownsGroup reports whether pgid is p's group or the group of a process p
+// tracked (a detached command that made itself a group leader).
+func (p *Proc) ownsGroup(pgid int) bool {
+	if pgid == p.PID() {
+		return true
+	}
+	p.trackMu.Lock()
+	defer p.trackMu.Unlock()
+	for id := range p.tracked {
+		if id.pid == pgid {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *Proc) isTracked(id procID) bool {
+	p.trackMu.Lock()
+	defer p.trackMu.Unlock()
+	return p.tracked[id]
+}
+
 // subtree returns root and every descendant in the snapshot.
 func subtree(root psEntry, children map[int][]psEntry) []psEntry {
 	out := []psEntry{root}

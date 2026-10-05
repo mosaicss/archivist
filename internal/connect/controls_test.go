@@ -1,5 +1,3 @@
-//go:build !windows
-
 package connect
 
 import (
@@ -1040,6 +1038,7 @@ func TestControlsSandboxModelAndEffort(t *testing.T) {
 // ─── review pass 1 rows ─────────────────────────────────────────────────────
 
 func TestPathInsideAndCodexFileInCwd(t *testing.T) {
+	skipOnWindows(t, "Unix path literals in the file change items")
 	cwd := t.TempDir()
 	outside := t.TempDir()
 	if err := os.Symlink(outside, filepath.Join(cwd, "link")); err != nil {
@@ -1510,6 +1509,7 @@ func TestControlsInitWithPendingModePasses(t *testing.T) {
 
 // An unreadable ancestor is never taken for a missing one.
 func TestPathInsideUnreadableAncestor(t *testing.T) {
+	skipOnWindows(t, "a 0o000 directory is readable on Windows")
 	if os.Geteuid() == 0 {
 		t.Skip("root reads any directory")
 	}

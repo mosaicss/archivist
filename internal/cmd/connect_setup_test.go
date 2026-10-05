@@ -44,9 +44,12 @@ func runRoot(t *testing.T, args ...string) (string, int) {
 func sandbox(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setHome(t, home)
 	t.Setenv("ARCHIVIST_TOKEN", "")
 	t.Setenv("XDG_CONFIG_HOME", "")
+	// On Windows --service would otherwise supervise a copy of the test
+	// binary; these tests run the daemon itself (Story 78.34).
+	t.Setenv("ARCHIVIST_SERVICE_SUPERVISED", "1")
 	return home
 }
 
@@ -336,7 +339,7 @@ func TestConnectServiceModeLogsAndExitsZeroWhenTerminal(t *testing.T) {
 			t.Errorf("log lacks %q:\n%s", want, b)
 		}
 	}
-	if info, _ := os.Stat(service.LogPath(home)); info.Mode().Perm() != 0o600 {
+	if info, _ := os.Stat(service.LogPath(home)); runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatalf("log mode %v", info.Mode().Perm())
 	}
 }
@@ -434,17 +437,6 @@ func TestServiceExitMapping(t *testing.T) {
 	}
 	if err := serviceExit(log, errors.New("boom")); err == nil {
 		t.Fatal("plain error must exit non-zero")
-	}
-}
-
-func TestConnectServiceUnsupportedMessage(t *testing.T) {
-	if runtime.GOOS != "windows" {
-		t.Skip("windows only")
-	}
-	sandbox(t)
-	out, code := runRoot(t, "connect", "--install")
-	if code != ExitGenericError || !strings.Contains(out, "Background connect is not available on Windows yet") {
-		t.Fatalf("exit %d\n%s", code, out)
 	}
 }
 

@@ -29,7 +29,7 @@ func TestConnectRefusesNonOwnerKeysOffline(t *testing.T) {
 	var hits atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hits.Add(1) }))
 	defer srv.Close()
-	t.Setenv("HOME", t.TempDir())
+	setHome(t, t.TempDir())
 	t.Setenv("ARCHIVIST_BASE_URL", srv.URL)
 	t.Setenv("ARCHIVIST_RELAY_URL", strings.Replace(srv.URL, "http", "ws", 1))
 	for _, tok := range []string{
@@ -52,7 +52,7 @@ func TestConnectRefusesNonOwnerKeysOffline(t *testing.T) {
 }
 
 func TestConnectValidatesLocalFlags(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setHome(t, t.TempDir())
 	for _, args := range [][]string{
 		{"connect", "--claude-effort", "turbo"},
 		{"connect", "--claude-model", "--dangerously-skip-permissions"},
@@ -71,6 +71,7 @@ func TestConnectValidatesLocalFlags(t *testing.T) {
 // stubClaude puts a shell `claude` answering --version and auth status
 // (subscription login) first on PATH; nothing else is reachable.
 func stubClaude(t *testing.T) {
+	skipShellStubs(t)
 	t.Helper()
 	dir := t.TempDir()
 	script := "#!/bin/sh\ncase \"$1\" in\n--version) echo '2.1.280 (Claude Code)';;\n" +
@@ -106,7 +107,7 @@ func TestConnectTicketRefusalExitCodes(t *testing.T) {
 			w.WriteHeader(c.status)
 			_, _ = w.Write([]byte(c.body))
 		}))
-		t.Setenv("HOME", t.TempDir())
+		setHome(t, t.TempDir())
 		t.Setenv("ARCHIVIST_TOKEN", "ak_00000000000000000000")
 		t.Setenv("ARCHIVIST_BASE_URL", srv.URL)
 		t.Setenv("ARCHIVIST_RELAY_URL", "ws://127.0.0.1:1")
@@ -124,7 +125,7 @@ func TestConnectRefusesCleartextRemoteRelay(t *testing.T) {
 	var hits atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hits.Add(1) }))
 	defer srv.Close()
-	t.Setenv("HOME", t.TempDir())
+	setHome(t, t.TempDir())
 	t.Setenv("ARCHIVIST_TOKEN", "ak_00000000000000000000")
 	t.Setenv("ARCHIVIST_BASE_URL", srv.URL)
 	t.Setenv("ARCHIVIST_RELAY_URL", "ws://relay.example.test")
@@ -137,7 +138,7 @@ func TestConnectRefusesCleartextRemoteRelay(t *testing.T) {
 // The relay URL is validated first, --check included (exit 2, nothing run).
 func TestConnectCheckRejectsBadRelayURL(t *testing.T) {
 	stubClaude(t)
-	t.Setenv("HOME", t.TempDir())
+	setHome(t, t.TempDir())
 	t.Setenv("ARCHIVIST_RELAY_URL", "wss://relay.example.test/?q=1")
 	out, err := runAuthCmd(t, "connect", "--check")
 	if exitCodeFrom(err) != cmd.ExitUsageError || !strings.Contains(out, "ARCHIVIST_RELAY_URL") || strings.Contains(out, "path:") {

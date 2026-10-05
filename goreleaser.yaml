@@ -1,7 +1,7 @@
 # goreleaser config for the Mosaic Archivist CLI.
 #
 # Builds 5 platform targets (darwin arm64/amd64, linux arm64/amd64, windows
-# amd64), produces .tar.gz + .zip archives, emits a single SHA256SUMS file,
+# amd64) plus the console-less archivistw.exe (windows amd64), produces .tar.gz + .zip archives, emits a single SHA256SUMS file,
 # a universal macOS binary, a skill-bundle.tar.gz release asset, SLSA
 # provenance attestation (via release.yml), and optional macOS notarization
 # (conditional on APPLE_API_KEY_ID being set — see operator checklist).
@@ -37,6 +37,25 @@ builds:
       - -X main.date={{ time "2006-01-02" }}
     mod_timestamp: "{{ .CommitTimestamp }}"
 
+  # Story 78.34: the console-less Windows companion. Same main, linked for
+  # the GUI subsystem (-H windowsgui) so the logon scheduled task that runs
+  # `archivistw.exe connect --service` opens no console or Terminal window.
+  - id: archivistw
+    main: ./cmd/archivist
+    binary: archivistw
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - windows
+    goarch:
+      - amd64
+    ldflags:
+      - -s -w -H windowsgui
+      - -X main.version={{.Version}}
+      - -X main.commit={{.ShortCommit}}
+      - -X main.date={{ time "2006-01-02" }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
 universal_binaries:
   - id: archivist-universal
     ids:
@@ -51,6 +70,10 @@ archives:
       # archive is missing entirely because `universal_binaries.replace: true`
       # deletes the per-arch darwin binaries.
       - archivist-universal
+      # Windows only: the zip holds archivist.exe and archivistw.exe, the
+      # other archives one binary, hence allow_different_binary_count.
+      - archivistw
+    allow_different_binary_count: true
     name_template: "archivist_v{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     formats:
       - tar.gz

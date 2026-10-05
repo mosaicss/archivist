@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -141,6 +142,7 @@ func ExecCombinedRunner(ctx context.Context, env []string, dir, bin string, args
 	cmd.Env = env
 	cmd.Dir = dir
 	cmd.WaitDelay = 2 * time.Second
+	hideWindow(cmd)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return out, fmt.Errorf("%s %s: %w", bin, strings.Join(args, " "), err)
@@ -156,6 +158,7 @@ func ExecRunner(ctx context.Context, env []string, dir, bin string, args ...stri
 	cmd.Env = env
 	cmd.Dir = dir
 	cmd.WaitDelay = 2 * time.Second
+	hideWindow(cmd)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -203,6 +206,11 @@ func detectCodex(ctx context.Context, o DetectOptions) CodexInfo {
 	var c CodexInfo
 	path, err := o.LookPath("codex")
 	if err != nil {
+		// A script shim with no native exe (Windows): installed, not usable.
+		var shim *NativeHarnessError
+		if errors.As(err, &shim) {
+			c.Path, c.Problem = shim.Shim, shim.Error()
+		}
 		return c
 	}
 	c.Path, c.Home = path, o.CodexHome
@@ -286,6 +294,10 @@ func detectClaude(ctx context.Context, lookPath LookPath, run Runner, env []stri
 	path, err := lookPath("claude")
 	if err != nil {
 		c.Problem, c.ProblemCode = "Claude Code (claude) was not found on PATH", "missing"
+		var shim *NativeHarnessError
+		if errors.As(err, &shim) {
+			c.Problem = shim.Error()
+		}
 		return c
 	}
 	c.Path = path

@@ -284,14 +284,45 @@ written by the binary it runs (a ceiling it does not know falls back to the
 default).
 
 `--status` exits 0 when the service is running (Linux: the unit is active;
-macOS: the job is loaded and the daemon in `service.pid` is alive) and a key
+macOS: the job is loaded and the daemon in `service.pid` is alive; Windows:
+the task is registered and the daemon in `service.pid` is alive) and a key
 is saved, else 1, and prints the ceiling and the last log line. A loaded launchd job whose
 daemon has stopped shows "loaded, not running"; a job loaded a moment ago gets
 about 5 seconds to write its pid first. `--pair`, `--install`,
 `--uninstall` and `--status` are used one at a time.
 
-Windows: `install.ps1 -Pair CODE` installs and pairs; background connect is
-not available on Windows yet.
+#### Windows
+
+In PowerShell (designed to need no admin rights; nothing asks for elevation):
+
+```powershell
+& ([scriptblock]::Create((irm https://github.com/mosaicss/archivist/releases/latest/download/install.ps1))) -Pair ABCDE-FGHJK
+```
+
+`install.ps1` installs or updates `archivist.exe` and `archivistw.exe` in
+`%LOCALAPPDATA%\Programs\archivist` (a running exe is renamed aside, never
+overwritten), adds that folder to your user PATH, then pairs, installs and
+reports background connect like `install.sh`. Options: `-Pair CODE`,
+`-NoService`; `ARCHIVIST_INSTALL_DIR`, `ARCHIVIST_INSTALL_VERSION` and
+`ARCHIVIST_RELEASE_BASE_URL` work as for `install.sh`.
+
+On Windows `--install` registers a scheduled task
+`MosaicArchivistConnect-<user>-<hash>` (the hash, 8 hex digits derived from
+your account's SID, survives renaming the PC or the account and keeps two
+users with similar names apart) that starts at your login (logon trigger
+and principal for your user only, least privilege, no time limit, runs on
+battery). It runs `archivistw.exe connect --service`, the same program
+built without a console window, which supervises the daemon: an unexpected
+exit restarts it after 10 seconds, a clean stop leaves it stopped. The task
+definition is kept in `~\.archivist\connect\MosaicArchivistConnect.xml` and
+the captured environment in `~\.archivist\connect\service.env`; `--status`
+reads the task's registration and the daemon's `service.pid`. Ending the task
+or signing out ends every session's process tree (each Claude Code or Codex
+session runs in its own Windows job object). Claude Code and Codex must be
+the native executables: an npm install is used through its native
+`claude.exe` or `codex.exe`, never through the `.cmd` script; Codex sessions
+run in Codex's unelevated Windows sandbox. archivist is not code signed yet,
+so SmartScreen or Smart App Control may warn about it or block it.
 
 Install script options: `--pair CODE`, `--no-service` (pair only).
 `ARCHIVIST_INSTALL_DIR` changes the install directory,
@@ -589,7 +620,8 @@ reported context use and window after each turn, as also sent on
 `data-usage`).
 
 `ARCHIVIST_RELAY_URL` overrides the relay address (default
-`wss://relay.mosaic-finance.com`). macOS and Linux only for now.
+`wss://relay.mosaic-finance.com`). It runs on macOS, Linux and Windows
+(Windows 10 or 11; each session's process tree is held in a job object).
 
 Exit codes: 0 stopped by Ctrl-C (or `--check` found a usable Claude Code or
 Codex); 1 refused or stopped (feature not enabled, another `archivist connect`

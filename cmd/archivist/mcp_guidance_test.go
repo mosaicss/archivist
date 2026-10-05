@@ -118,7 +118,7 @@ func TestMCPServeTaskModeFetchesLiveMosaicUIGuidance(t *testing.T) {
 		t.Fatal(err)
 	}
 	serve := exec.Command(bin, "mcp", "serve", "--token-file", tokenPath)
-	serve.Env = append(os.Environ(), "HOME="+dir, "ARCHIVIST_TOKEN=", "ARCHIVIST_BASE_URL="+srv.URL)
+	serve.Env = append(os.Environ(), "HOME="+dir, "USERPROFILE="+dir, "ARCHIVIST_TOKEN=", "ARCHIVIST_BASE_URL="+srv.URL)
 	cs, err := mcp.NewClient(&mcp.Implementation{Name: "task-guidance-test", Version: "0"}, nil).
 		Connect(context.Background(), &mcp.CommandTransport{Command: serve}, nil)
 	if err != nil {

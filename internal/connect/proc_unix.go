@@ -27,6 +27,22 @@ func signalGroup(pgid int, sig syscall.Signal) {
 	_ = syscall.Kill(-pgid, sig)
 }
 
+// procTree is the process group itself on Unix: the child leads its own
+// group (Setpgid), so the group id is its pid.
+type procTree struct{}
+
+// attachProc has nothing to attach on Unix (the group exists at start).
+func attachProc(*exec.Cmd) (procTree, error) { return procTree{}, nil }
+
+// alive reports whether any process remains in the child's group.
+func (procTree) alive(pgid int) bool { return groupAlive(pgid) }
+
+// signal sends sig to the child's group.
+func (procTree) signal(pgid int, sig syscall.Signal) { signalGroup(pgid, sig) }
+
+// release is a no-op on Unix.
+func (procTree) release() {}
+
 // groupAlive reports whether any process remains in group pgid.
 func groupAlive(pgid int) bool {
 	return syscall.Kill(-pgid, 0) == nil

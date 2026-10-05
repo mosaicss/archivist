@@ -1,0 +1,5 @@
+# Story 78.34: check every text file out with LF on every platform. The
+# embedded contracts and guidance (internal/mosaicevent/vendor,
+# internal/guidance) are verified by SHA-256 digest; a CRLF checkout on
+# Windows (core.autocrlf) changed their bytes and failed those checks.
+* text=auto eol=lf

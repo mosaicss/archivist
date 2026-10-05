@@ -22,7 +22,7 @@ func TestSkillVersionMismatchWarning(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	t.Setenv("HOME", tmpHome)
+	setHome(t, tmpHome)
 
 	cmd := NewVersionCmd("0.2.0", "abc1234", "2026-05-20")
 	var stdout, stderr bytes.Buffer
@@ -67,7 +67,7 @@ func TestSkillVersionNoWarningWhenMatching(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	t.Setenv("HOME", tmpHome)
+	setHome(t, tmpHome)
 
 	cmd := NewVersionCmd("0.2.0", "abc1234", "2026-05-20")
 	var stderr bytes.Buffer
@@ -85,7 +85,7 @@ func TestSkillVersionNoWarningWhenMatching(t *testing.T) {
 
 // TestSkillVersionNoWarningWhenAbsent verifies no warning when skill file is missing.
 func TestSkillVersionNoWarningWhenAbsent(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setHome(t, t.TempDir())
 
 	cmd := NewVersionCmd("0.2.0", "abc1234", "2026-05-20")
 	var stderr bytes.Buffer
@@ -116,7 +116,7 @@ func TestReadSkillVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	t.Setenv("HOME", tmpHome)
+	setHome(t, tmpHome)
 
 	ver, path := readSkillVersion()
 	if ver != "v1.2.3" {
@@ -142,7 +142,7 @@ func TestReadSkillVersionAfterFrontmatter(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	t.Setenv("HOME", tmpHome)
+	setHome(t, tmpHome)
 
 	ver, _ := readSkillVersion()
 	if ver != "v0.2.13" {

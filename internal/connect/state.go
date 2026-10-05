@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	"github.com/mosaicss/archivist/internal/fsutil"
 )
 
 // errCorruptRecord marks a session record that exists but cannot be used.
@@ -109,7 +111,7 @@ func (s *Store) Load(id string) (*SessionRecord, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	data, err := os.ReadFile(path)
+	data, err := fsutil.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
@@ -179,7 +181,7 @@ func (s *Store) RunDir(id string) (string, error) {
 // RemoveRunDir deletes a session's runtime files (token, MCP config).
 func (s *Store) RemoveRunDir(id string) {
 	if uuidRe.MatchString(id) {
-		_ = os.RemoveAll(filepath.Join(s.dir, "run", id))
+		_ = fsutil.RemoveAll(filepath.Join(s.dir, "run", id))
 	}
 }
 
@@ -199,7 +201,7 @@ func (s *Store) CodexHomePath(id string) (string, error) {
 // auth.json, is never touched: RemoveAll removes the link itself.
 func (s *Store) RemoveCodexHome(id string) {
 	if dir, err := s.CodexHomePath(id); err == nil {
-		_ = os.RemoveAll(dir)
+		_ = fsutil.RemoveAll(dir)
 	}
 }
 
@@ -229,7 +231,7 @@ func removeSessionCwd(dir string) bool {
 	if !sessionCwdOK(dir) {
 		return false
 	}
-	return os.RemoveAll(filepath.Clean(dir)) == nil
+	return fsutil.RemoveAll(filepath.Clean(dir)) == nil
 }
 
 // writeFileAtomic writes data to path through a 0600 temp file and rename,
@@ -257,7 +259,7 @@ func writeFileAtomic(path string, data []byte) error {
 	if err := tmp.Close(); err != nil {
 		return cleanup(err)
 	}
-	if err := os.Rename(name, path); err != nil {
+	if err := fsutil.Rename(name, path); err != nil {
 		_ = os.Remove(name)
 		return err
 	}

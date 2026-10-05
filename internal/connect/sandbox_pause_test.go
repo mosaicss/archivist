@@ -42,21 +42,6 @@ func (h *harness) waitActivity(what string, cond func(a activityRecord) bool) ac
 	return got
 }
 
-// waitCard waits for the n-th approval card without answering it.
-func (h *harness) waitCard(sid string, n int) map[string]any {
-	h.t.Helper()
-	var req map[string]any
-	waitFor(h.t, 20*time.Second, "approval request", func() bool {
-		reqs := h.relay.eventsOf(sid, "tool-approval-request")
-		if len(reqs) >= n {
-			req = reqs[n-1]["payload"].(map[string]any)
-			return true
-		}
-		return false
-	})
-	return req
-}
-
 func idle(a activityRecord) bool { return a.IdleSince != nil && a.ApprovalSince == nil }
 func busy(a activityRecord) bool { return a.IdleSince == nil && a.ApprovalSince == nil }
 
@@ -212,16 +197,6 @@ func TestWriteActivityTransitions(t *testing.T) {
 }
 
 // ─── deny on SIGTERM ────────────────────────────────────────────────────────
-
-func approvalResponses(h *harness, sid string) []map[string]any {
-	var out []map[string]any
-	for _, p := range h.relay.payloads(sid) {
-		if p["type"] == "tool-approval-response" {
-			out = append(out, p)
-		}
-	}
-	return out
-}
 
 func TestSandboxStopDeniesPendingApprovals(t *testing.T) {
 	for _, agent := range []string{"claude", "codex"} {
