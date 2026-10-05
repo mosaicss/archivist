@@ -60,7 +60,8 @@ func TestSandboxActivityFileClaude(t *testing.T) {
 		t.Fatalf("idleSince %d outside the run", *a.IdleSince)
 	}
 	_, raw, _ := readActivity(t, h.activityFile)
-	if want := `{"v":1,"idleSince":` + jsonInt(*a.IdleSince) + `,"approvalSince":null}`; raw != want {
+	// Story 78.38 adds the login the Claude session runs on.
+	if want := `{"v":1,"idleSince":` + jsonInt(*a.IdleSince) + `,"approvalSince":null,"login":"claude.ai"}`; raw != want {
 		t.Fatalf("activity file %s, want %s", raw, want)
 	}
 	if st, err := os.Stat(h.activityFile); err != nil || st.Mode().Perm() != 0o600 {
@@ -478,5 +479,59 @@ func TestSandboxResumeFromValidated(t *testing.T) {
 		}
 		r := h.runSession(s.SessionID, "claude", "", "echo x")
 		wantFatal(t, r.wait(), "BAD_RESUME", false)
+	}
+}
+
+// The 78.37 activity file names the login a Claude session runs on once
+// its spawn proof passed (claude.ai, Console, API key mode) and never for
+// Codex (Story 78.38).
+func TestActivityFileCarriesLogin(t *testing.T) {
+	type run func(t *testing.T, h *harness, sid string) *sandboxRun
+	cases := []struct {
+		name, agent, want string
+		cfg               map[string]any
+		start             run
+	}{
+		{"claude.ai", "claude", "claude.ai", nil, func(t *testing.T, h *harness, sid string) *sandboxRun {
+			return h.runSession(sid, "claude", "", "echo hi")
+		}},
+		{"console", "claude", "console", map[string]any{"loggedIn": true, "authMethod": "api_key", "apiKeySource": "/login managed key"},
+			func(t *testing.T, h *harness, sid string) *sandboxRun {
+				return h.runSessionWith(sid, "claude", "", "echo hi", sessionOpts{login: ClaudeLoginConsole})
+			}},
+		{"api key", "claude", "api_key", map[string]any{"loggedIn": false, "authMethod": "none"},
+			func(t *testing.T, h *harness, sid string) *sandboxRun {
+				file := filepath.Join(h.tmp, "signin.json")
+				r := h.runSessionWith(sid, "claude", "claude", "echo hi", sessionOpts{signinFile: file})
+				h.waitPrompts(sid, 1)
+				writeSignin(t, file, map[string]any{"id": randomUUID(), "method": "api_key", "key": testSigninKey})
+				return r
+			}},
+		{"codex", "codex", "", nil, func(t *testing.T, h *harness, sid string) *sandboxRun {
+			return h.runSession(sid, "codex", "", "echo hi")
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			setDuration(t, &signinPollEvery, 50*time.Millisecond)
+			var h *harness
+			if c.agent == "codex" {
+				h = newCodexHarness(t, nil)
+			} else {
+				h = newHarness(t, c.cfg)
+			}
+			h.activityFile = filepath.Join(t.TempDir(), "run", "activity.json")
+			s := h.api.addSession(c.agent)
+			r := c.start(t, h, s.SessionID)
+			waitFor(t, 30*time.Second, "turn", func() bool { return strings.Contains(h.relay.text(s.SessionID), "hi") })
+			a := h.waitActivity("idle after the turn", idle)
+			if a.Login != c.want {
+				t.Fatalf("activity login %q, want %q", a.Login, c.want)
+			}
+			if _, raw, _ := readActivity(t, h.activityFile); c.want == "" && strings.Contains(raw, `"login"`) {
+				t.Fatalf("activity file %s names a login", raw)
+			}
+			r.stop()
+		})
 	}
 }

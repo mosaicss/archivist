@@ -16,7 +16,12 @@ var secretPatterns = []struct {
 	fingerprint bool
 }{
 	{regexp.MustCompile(`(?i)Bearer\s+[^\s"',;]+`), false},
-	{regexp.MustCompile(`sk-ant-[A-Za-z0-9_\-]+`), false},
+	// Anthropic keys: the whole key the sign in request file's rule accepts
+	// (Story 78.38; its base64url body is an assumption from the keys seen so
+	// far) plus other printable characters, except quotes,
+	// whitespace, backslash and the delimiters ( ) , < > [ ] { } that end a
+	// key in text and JSON.
+	{regexp.MustCompile(`sk-ant-[!#-&*+\x2d-;=?-Z^_a-z|~]+`), false},
 	{regexp.MustCompile(`mst_[A-Za-z0-9_.\-]+`), true},
 	{regexp.MustCompile(`mc_pat_[A-Za-z0-9_\-]+`), true},
 	{regexp.MustCompile(`\bak_[A-Za-z0-9_\-]+`), true},

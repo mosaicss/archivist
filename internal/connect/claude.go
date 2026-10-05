@@ -56,6 +56,16 @@ type ClaudeConfig struct {
 	// WebSearch adds Claude Code's WebSearch tool, pre-allowed (Story 78.33;
 	// set per session by claudeLaunchConfig from the daemon's Config.WebSearch).
 	WebSearch bool
+	// Login is the Claude login a session-bound sandbox session starts on
+	// (Story 78.38; outside the sandbox only a claude.ai subscription runs):
+	// ClaudeLoginConsole when the sandbox home already holds a logged in
+	// login other than claude.ai (a remembered Console login).
+	Login ClaudeLogin
+	// SignInFile is the sandbox's sign in request file (Story 78.38,
+	// ARCHIVIST_SIGNIN_FILE; "" = none): while a Claude sign in waits the
+	// session polls it for the user's switch to a Console login or to their
+	// own API key. Ignored outside the session-bound sandbox mode.
+	SignInFile string
 }
 
 // archivistAllowedTools pre-allows the task mode archivist tools, except
@@ -240,9 +250,33 @@ func initToolsProblem(tools []string, webSearch bool) (problem, warning string) 
 // permissionMode must be one of modes (the session's mapped mode, or one a
 // pending set_permission_mode asked for).
 func initProblem(f claudeFrame, modes []string) string {
+	return initLoginProblem(f, modes, ClaudeLoginSubscription)
+}
+
+// initLoginProblem is initProblem for a session's login (Story 78.38): a
+// claude.ai login must report apiKeySource none and API key mode the
+// environment key. A Console login (sandbox only) must report a key source
+// (never none: a home whose login exists only for its settings, such as an
+// apiKeyHelper, leaves the -p run without a credential) and, when the
+// spawn's claude auth status named one (statusSource), that same source.
+func initLoginProblem(f claudeFrame, modes []string, login ClaudeLogin, statusSource ...string) string {
 	var problems []string
-	if f.APIKeySource != "none" {
-		problems = append(problems, fmt.Sprintf("apiKeySource is %q, not \"none\"", f.APIKeySource))
+	switch login {
+	case ClaudeLoginAPIKey:
+		if f.APIKeySource != ClaudeAPIKeySource {
+			problems = append(problems, fmt.Sprintf("apiKeySource is %q, not %q", f.APIKeySource, ClaudeAPIKeySource))
+		}
+	case ClaudeLoginConsole:
+		switch {
+		case f.APIKeySource == "" || f.APIKeySource == "none":
+			problems = append(problems, fmt.Sprintf("apiKeySource is %q, not the Console login's key", f.APIKeySource))
+		case len(statusSource) > 0 && statusSource[0] != "" && f.APIKeySource != statusSource[0]:
+			problems = append(problems, fmt.Sprintf("apiKeySource is %q, not %q as claude auth status reported", f.APIKeySource, statusSource[0]))
+		}
+	default:
+		if f.APIKeySource != "none" {
+			problems = append(problems, fmt.Sprintf("apiKeySource is %q, not \"none\"", f.APIKeySource))
+		}
 	}
 	if len(modes) == 0 || !slices.Contains(modes, f.PermissionMode) {
 		problems = append(problems, fmt.Sprintf("permissionMode is %q, not \"%s\"", f.PermissionMode, strings.Join(modes, "\" or \"")))

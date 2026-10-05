@@ -95,6 +95,11 @@ ARCHIVIST_ACTIVITY_FILE=<absolute path> (session-bound mode only) makes
 connect write {"v":1,"idleSince":ms|null,"approvalSince":ms|null} there
 whenever either changes: since when nothing has been in flight, and since
 when an approval has waited (unix milliseconds).
+ARCHIVIST_SIGNIN_FILE=<absolute path> (session-bound mode only) is read
+while a Claude Code sign-in waits: {"id","method":"console"} switches to
+claude auth login --console, {"id","method":"api_key","key"} runs the
+session with that key as ANTHROPIC_API_KEY (never logged). In this mode any
+Claude Code login reported as logged in is accepted.
 
 One-step setup: the workspace shows a pairing code.
 
@@ -415,8 +420,9 @@ func runConnect(cmd *cobra.Command, version string, check bool, f connectFlags) 
 
 	det := detect(cmd.Context())
 	var signIn string
+	var claudeLogin connect.ClaudeLogin
 	if f.session != nil {
-		if signIn, err = sessionHarness(stderr, det, f.session.Agent); err != nil {
+		if signIn, claudeLogin, err = sessionHarness(stderr, det, f.session.Agent); err != nil {
 			return err
 		}
 	} else if !det.Claude.Usable() && !det.Codex.Usable() {
@@ -460,6 +466,10 @@ func runConnect(cmd *cobra.Command, version string, check bool, f connectFlags) 
 		cfg.Claude, cfg.Codex = sessionConfigs(det, f, exe, baseURL)
 		cfg.SignIn = signIn
 		cfg.ActivityFile = activityFile(log, os.Getenv(activityFileEnv))
+		if f.session.Agent == "claude" {
+			cfg.Claude.Login = claudeLogin
+			cfg.Claude.SignInFile = runFile(log, signInFileEnv, os.Getenv(signInFileEnv))
+		}
 	} else {
 		cfg.Claude, cfg.Codex = harnessConfigs(det, f, exe, baseURL)
 		// Say why an installed harness is not offered.
@@ -480,13 +490,19 @@ func runConnect(cmd *cobra.Command, version string, check bool, f connectFlags) 
 	defer stop()
 	if f.session != nil {
 		state := "logged in"
-		if signIn != "" {
+		switch {
+		case signIn != "":
 			state = "logged out: signing in first"
+		case cfg.Claude.Login != connect.ClaudeLoginSubscription:
+			state = "logged in, " + cfg.Claude.Login.String() + " login"
 		}
 		log.Printf("archivist connect %s: session-bound mode, session %s, agent %s (%s); permission ceiling %s; web search %s; key fp:%s; relay %s.",
 			version, f.session.SessionID, f.session.Agent, state, d.MaxMode(), onOff(d.WebSearch()), auth.Fingerprint(token), relayURL)
 		if f.session.ResumeFrom != "" || cfg.ActivityFile != "" {
 			log.Printf("resume from %s; activity file %s.", orNone(f.session.ResumeFrom), orNone(cfg.ActivityFile))
+		}
+		if cfg.Claude.SignInFile != "" {
+			log.Printf("sign in request file %s.", cfg.Claude.SignInFile)
 		}
 		return connectResult(stderr, log, d, d.RunSession(ctx, *f.session))
 	}
@@ -516,6 +532,25 @@ func activityFile(log *connect.Logger, v string) string {
 	}
 	if !filepath.IsAbs(v) {
 		log.Printf("warning: %s %q is not an absolute path; no activity file is written", activityFileEnv, v)
+		return ""
+	}
+	return filepath.Clean(v)
+}
+
+// signInFileEnv names the session-bound mode's sign in request file (Story
+// 78.38): the sandbox Worker writes the user's choice of another Claude
+// sign in method (a Console account, their own API key) there.
+const signInFileEnv = "ARCHIVIST_SIGNIN_FILE"
+
+// runFile is a session-bound mode file setting: an absolute path, else none
+// (a warning; for the sign in request file the Claude sign in then offers
+// only the claude.ai login).
+func runFile(log *connect.Logger, name, v string) string {
+	if v == "" {
+		return ""
+	}
+	if !filepath.IsAbs(v) {
+		log.Printf("warning: %s %q is not an absolute path; it is ignored", name, v)
 		return ""
 	}
 	return filepath.Clean(v)
@@ -564,29 +599,34 @@ func connectResult(stderr io.Writer, log *connect.Logger, d *connect.Daemon, err
 
 // sessionHarness checks the session-bound mode's harness: it must be
 // installed at a supported version; a logged-out one is signed in first
-// (its name is returned). A login of the wrong kind (an API key, a Console
-// login) is refused, never replaced.
-func sessionHarness(stderr io.Writer, det connect.Detection, agent string) (string, error) {
-	refuse := func(msg string, code int) (string, error) {
+// (its name is returned). Claude Code logged in with something other than
+// a claude.ai subscription (a remembered Console login) runs on it: in the
+// sandbox no built in sign in method is refused (Story 78.38; the local
+// daemon keeps its claude.ai only gate). A Codex login of the wrong kind
+// (an API key) is refused, never replaced.
+func sessionHarness(stderr io.Writer, det connect.Detection, agent string) (string, connect.ClaudeLogin, error) {
+	refuse := func(msg string, code int) (string, connect.ClaudeLogin, error) {
 		_, _ = fmt.Fprintln(stderr, "archivist connect: "+msg)
-		return "", &ExitError{Code: code}
+		return "", connect.ClaudeLoginSubscription, &ExitError{Code: code}
 	}
 	if agent == "claude" {
 		c := det.Claude
 		switch {
 		case c.Usable():
-			return "", nil
+			return "", connect.ClaudeLoginSubscription, nil
 		case c.ProblemCode == "auth" && c.Auth != nil && !c.Auth.LoggedIn:
-			return "claude", nil
+			return "claude", connect.ClaudeLoginSubscription, nil
+		case c.ProblemCode == "auth" && c.Auth != nil && c.Auth.LoggedIn:
+			return "", connect.ClaudeLoginConsole, nil
 		}
-		return "", claudeExitWith(stderr, c)
+		return "", connect.ClaudeLoginSubscription, claudeExitWith(stderr, c)
 	}
 	x := det.Codex
 	switch {
 	case x.Path == "":
 		return refuse("Codex (codex) was not found on PATH", ExitNotFound)
 	case x.Usable():
-		return "", nil
+		return "", connect.ClaudeLoginSubscription, nil
 	case x.Version == "" || !x.VersionOK:
 		return refuse(x.Problem, ExitGenericError)
 	case x.APILogin:
@@ -594,7 +634,7 @@ func sessionHarness(stderr io.Writer, det connect.Detection, agent string) (stri
 	case x.Home == "":
 		return refuse(x.Problem, ExitGenericError)
 	}
-	return "codex", nil // not logged in, or no auth.json in the owner's home
+	return "codex", connect.ClaudeLoginSubscription, nil // not logged in, or no auth.json in the owner's home
 }
 
 // claudeExitWith prints Claude Code's problem and returns its typed exit.

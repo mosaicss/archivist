@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"os/exec"
@@ -320,10 +321,16 @@ func (s *session) signInCodex(ctx context.Context, deadline time.Time) (signInRe
 	}
 }
 
-// ─── Claude Code: claude auth login --claudeai under a PTY ──────────────────
+// ─── Claude Code: claude auth login under a PTY ─────────────────────────────
 
 // claudeLoginArgs is the fixed sign-in argv (a claude.ai subscription).
 var claudeLoginArgs = []string{"auth", "login", "--claudeai"}
+
+// claudeConsoleLoginArgs is the Console sign in argv (Story 78.38, sandbox
+// only, on the user's request). Verified on Claude Code 2.1.289
+// (2026-10-05): it prints the same "visit: <url>" and paste prompt as the
+// claude.ai login, with a platform.claude.com link.
+var claudeConsoleLoginArgs = []string{"auth", "login", "--console"}
 
 // claudeLoginHosts are the hosts a Claude sign-in link may point at.
 var claudeLoginHosts = []string{"claude.com", "claude.ai", "anthropic.com"}
@@ -366,10 +373,140 @@ func signInCode(text string) (string, bool) {
 	return code, true
 }
 
+// ─── sandbox sign in methods (Story 78.38) ──────────────────────────────────
+
+// Anthropic's hosting condition for Claude Code forbids removing a built in
+// sign in method, so in the session-bound sandbox mode the Claude sign in
+// card also offers a Console account and the user's own API key. The
+// sandbox Worker writes the user's choice to the sign in request file
+// (ARCHIVIST_SIGNIN_FILE, atomically): {"id", "method": "console"} or
+// {"id", "method": "api_key", "key"}. In the Mosaic sandbox the key is a
+// fixed placeholder that the Worker's egress swaps for the user's key on
+// api.anthropic.com only. While a Claude sign in waits the session reads
+// the file about every second and acts once per new id; an unreadable,
+// unparseable or unknown request, or a seen id, is ignored. console
+// restarts the login as `claude auth login --console` with a new prompt
+// and a fresh sign in window (signInTimeout from the switch, but never past
+// twice signInTimeout from the sign in's start); api_key ends the login and
+// runs the session in API key mode. A login that already exited or reported
+// success is settled first: a request never replaces a completed login.
+
+// signinPollEvery is how often a waiting Claude sign in reads the request
+// file (a var so tests can shorten it).
+var signinPollEvery = time.Second
+
+// maxSigninFile bounds the request file read.
+const maxSigninFile = 4096
+
+// signinRequest is one sign in request. Key is never logged.
+type signinRequest struct {
+	ID     string `json:"id"`
+	Method string `json:"method"`
+	Key    string `json:"key"`
+}
+
+// readSigninRequest reads the sign in request file. ok is false when the
+// file is missing, unreadable, too large or not a valid request; nothing
+// read from the file ever reaches an error or a log.
+func readSigninRequest(path string) (req signinRequest, present, ok bool) {
+	f, err := os.Open(path)
+	if err != nil {
+		return req, false, false
+	}
+	defer func() { _ = f.Close() }()
+	b, err := io.ReadAll(io.LimitReader(f, maxSigninFile+1))
+	if err != nil || len(b) > maxSigninFile || json.Unmarshal(b, &req) != nil || !signinIDOK(req.ID) {
+		return signinRequest{}, true, false
+	}
+	switch req.Method {
+	case "console":
+		ok = req.Key == ""
+	case "api_key":
+		ok = ValidAPIKey(req.Key)
+	}
+	if !ok {
+		return signinRequest{}, true, false
+	}
+	return req, true, true
+}
+
+// signinIDOK accepts 1 to 128 printable ASCII characters, no whitespace.
+func signinIDOK(id string) bool {
+	if id == "" || len(id) > 128 {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		if id[i] < '!' || id[i] > '~' {
+			return false
+		}
+	}
+	return true
+}
+
+// pollSignin returns a sign in request not acted on before (sandbox mode
+// with a request file only). An invalid file is logged once per change of
+// its content, without the content.
+func (s *session) pollSignin() (signinRequest, bool) {
+	path := s.d.claude.SignInFile
+	if !s.d.sandbox || path == "" {
+		return signinRequest{}, false
+	}
+	req, present, ok := readSigninRequest(path)
+	if !ok {
+		if present {
+			if st, err := os.Stat(path); err == nil && !st.ModTime().Equal(s.signinBad) {
+				s.signinBad = st.ModTime()
+				s.log.Printf("sign in request file ignored: not a valid request")
+			}
+		}
+		return signinRequest{}, false
+	}
+	if s.signinSeen[req.ID] {
+		return signinRequest{}, false
+	}
+	if s.signinSeen == nil {
+		s.signinSeen = map[string]bool{}
+	}
+	s.signinSeen[req.ID] = true
+	return req, true
+}
+
+// claudeLogin is the Claude login this session runs on: always a claude.ai
+// subscription outside the session-bound sandbox mode.
+func (s *session) claudeLogin() ClaudeLogin {
+	if !s.d.sandbox {
+		return ClaudeLoginSubscription
+	}
+	return s.login
+}
+
+// claudeEnv adds the API key mode key to a Claude child environment (only
+// in API key mode; the value is never logged).
+func (s *session) claudeEnv(env []string) ([]string, error) {
+	if s.claudeLogin() != ClaudeLoginAPIKey {
+		return env, nil
+	}
+	return ClaudeAPIKeyEnv(env, s.apiKey)
+}
+
+// claudePrompt is the sign in card text for a login link.
+func claudePrompt(console bool, deadline time.Time) string {
+	if console {
+		return "Sign in to Claude Code with your Claude Console account: open the link and sign in, " +
+			"then send the code the page shows as your next message. Usage is billed to your Console organization. " +
+			expiryText(deadline)
+	}
+	return "Sign in to Claude Code with your Claude subscription: open the link and sign in, " +
+		"then send the code the page shows as your next message. " + expiryText(deadline)
+}
+
 // signInClaude runs `claude auth login --claudeai` under a PTY, sends its
 // link as the prompt, writes the next user_message as the pasted code and,
 // after the command exits, re-runs the claude auth status proof. The PTY
-// output echoes the code, so none of it is logged.
+// output echoes the code, so none of it is logged. In the sandbox it also
+// follows the sign in request file (Story 78.38): a Console request
+// restarts the login as `claude auth login --console` with a new prompt,
+// an API key request ends the login in API key mode.
 func (s *session) signInClaude(ctx context.Context, deadline time.Time) (signInResult, error) {
 	bin := s.d.claude.Bin
 	env, err := BuildChildEnv(s.d.environ(), nil)
@@ -381,10 +518,18 @@ func (s *session) signInClaude(ctx context.Context, deadline time.Time) (signInR
 		return signInFailed, fmt.Errorf("start claude auth login: %w", err)
 	}
 	s.log.Printf("claude auth login started under a PTY (pid %d, env keys %v)", pt.pid(), EnvKeys(env))
-	defer pt.kill()
+	defer func() { pt.kill() }() // pt changes on a Console switch
 
+	var poll <-chan time.Time
+	if s.d.sandbox && s.d.claude.SignInFile != "" {
+		tick := time.NewTicker(signinPollEvery)
+		defer tick.Stop()
+		poll = tick.C
+	}
 	timer := time.NewTimer(time.Until(deadline))
 	defer timer.Stop()
+	limit := deadline.Add(signInTimeout) // a Console switch never runs past it
+	console, consoles := false, 0
 	prompted, codes, entered := false, 0, false
 	var mark int // output length when the last code was written
 	for {
@@ -394,10 +539,16 @@ func (s *session) signInClaude(ctx context.Context, deadline time.Time) (signInR
 			if !prompted {
 				if link := claudeLoginURL(out); link != "" {
 					prompted = true
-					s.emitAuthPrompt("claude", "claude-signin-"+s.outbox.RunID(), link,
-						"Sign in to Claude Code with your Claude subscription: open the link and sign in, "+
-							"then send the code the page shows as your next message. "+expiryText(deadline), "", deadline)
-					s.log.Printf("claude sign-in prompt sent")
+					id := "claude-signin-" + s.outbox.RunID()
+					if console {
+						id = fmt.Sprintf("claude-console-%s-%d", s.outbox.RunID(), consoles)
+					}
+					s.emitAuthPrompt("claude", id, link, claudePrompt(console, deadline), "", deadline)
+					if console {
+						s.log.Printf("claude sign-in prompt sent (console)")
+					} else {
+						s.log.Printf("claude sign-in prompt sent")
+					}
 				}
 			}
 			if codes > 0 && !entered && strings.Contains(strings.ToLower(string(out[mark:])), "login successful") {
@@ -415,16 +566,78 @@ func (s *session) signInClaude(ctx context.Context, deadline time.Time) (signInR
 			case exitErr != nil:
 				return signInFailed, fmt.Errorf("claude auth login did not accept the code (%v)", exitErr)
 			}
+			login := ClaudeLoginSubscription
+			if console {
+				login = ClaudeLoginConsole
+			}
 			st, err := ClaudeAuthStatus(ctx, s.d.runner, env, s.rec.Cwd, bin)
 			if err != nil {
 				return signInFailed, fmt.Errorf("claude auth status after the sign-in: %w", err)
 			}
-			if !st.Subscription() {
-				return signInFailed, fmt.Errorf("after the sign-in, Claude Code is not logged in with a claude.ai subscription (loggedIn=%v, authMethod=%q)",
-					st.LoggedIn, st.AuthMethod)
+			if problem := st.LoginProblem(s.d.sandbox, login); problem != "" {
+				return signInFailed, errors.New("after the sign-in, " + problem)
 			}
+			s.login = login
 			return signedIn, nil
+		case <-poll:
+			// Settle a login that exited or succeeded before any request.
+			select {
+			case <-pt.done:
+				continue // the next select takes pt.done
+			default:
+			}
+			if codes > 0 && strings.Contains(strings.ToLower(string(pt.output()[mark:])), "login successful") {
+				continue
+			}
+			req, ok := s.pollSignin()
+			if !ok {
+				continue
+			}
+			if req.Method == "api_key" {
+				s.log.Printf("sign in request %s: using the API key from the sign in request file", Scrub(req.ID))
+				pt.kill()
+				kenv, err := ClaudeAPIKeyEnv(env, req.Key)
+				if err != nil {
+					return signInFailed, err
+				}
+				st, err := ClaudeAuthStatus(ctx, s.d.runner, kenv, s.rec.Cwd, bin)
+				if err != nil {
+					return signInFailed, fmt.Errorf("claude auth status with the API key: %w", err)
+				}
+				if problem := st.LoginProblem(true, ClaudeLoginAPIKey); problem != "" {
+					return signInFailed, errors.New("with the API key, " + problem)
+				}
+				s.login, s.apiKey = ClaudeLoginAPIKey, req.Key
+				return signedIn, nil
+			}
+			s.log.Printf("sign in request %s: switching to a Console login", Scrub(req.ID))
+			pt.kill()
+			next, err := startPTY(bin, claudeConsoleLoginArgs, env, s.rec.Cwd)
+			if err != nil {
+				return signInFailed, fmt.Errorf("start claude auth login --console: %w", err)
+			}
+			pt = next
+			s.log.Printf("claude auth login --console started under a PTY (pid %d, env keys %v)", pt.pid(), EnvKeys(env))
+			console, prompted, codes, entered, mark = true, false, 0, false, 0
+			consoles++
+			// A fresh sign in window from the switch, capped at twice
+			// signInTimeout from the start; the new prompt names it.
+			deadline = time.Now().Add(signInTimeout)
+			if deadline.After(limit) {
+				deadline = limit
+			}
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			timer.Reset(time.Until(deadline))
 		case <-timer.C:
+			if consoles > 0 {
+				return signInFailed, fmt.Errorf("no sign-in by %s UTC, the end of the Console sign-in window; the login was stopped",
+					deadline.UTC().Format("15:04:05"))
+			}
 			return signInFailed, fmt.Errorf("no sign-in within %v; the login was stopped", signInTimeout)
 		case <-ctx.Done():
 			return signInAborted, ctx.Err()

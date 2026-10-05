@@ -2,8 +2,11 @@ package connect
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -34,6 +37,19 @@ type sandboxRun struct {
 // starts logged out; extraEnv joins the daemon environment.
 func (h *harness) runSession(sid, agent, signIn, prompt string, extraEnv ...string) *sandboxRun {
 	h.t.Helper()
+	return h.runSessionWith(sid, agent, signIn, prompt, sessionOpts{}, extraEnv...)
+}
+
+// sessionOpts are the Story 78.38 Claude settings of a session-bound run:
+// the sign in request file and the login the session starts on.
+type sessionOpts struct {
+	signinFile string
+	login      ClaudeLogin
+}
+
+// runSessionWith is runSession with the Claude sign in settings.
+func (h *harness) runSessionWith(sid, agent, signIn, prompt string, o sessionOpts, extraEnv ...string) *sandboxRun {
+	h.t.Helper()
 	claudeBin, archivistBin := testBinaries(h.t)
 	api := client.New(testOwnerKey, "test")
 	api.BaseURL = h.api.srv.URL
@@ -57,7 +73,7 @@ func (h *harness) runSession(sid, agent, signIn, prompt string, extraEnv ...stri
 	}
 	if agent == "claude" {
 		cfg.Claude = ClaudeConfig{Bin: claudeBin, SettingSources: DefaultSettingSources, Executable: archivistBin,
-			BaseURL: h.api.srv.URL}
+			BaseURL: h.api.srv.URL, Login: o.login, SignInFile: o.signinFile}
 	} else {
 		cfg.Codex = CodexConfig{Bin: testCodexBinary(h.t), Version: "0.160.0", OwnerHome: h.codexOwner(),
 			Executable: archivistBin, BaseURL: h.api.srv.URL}
@@ -425,8 +441,8 @@ func TestSessionModeClaudeSignInFailures(t *testing.T) {
 		want string
 	}{
 		{"wrong code", map[string]any{"loggedIn": false}, "bad-code", "did not accept the code"},
-		{"proof fails", map[string]any{"loggedIn": false, "loginAuthMethod": "oauth_token"}, "good-code",
-			"not logged in with a claude.ai subscription"},
+		{"proof fails", map[string]any{"loggedIn": false, "loginLoggedOut": true}, "good-code",
+			"after the sign-in, Claude Code is not logged in"},
 		{"no link", map[string]any{"loggedIn": false, "loginNoURL": true}, "", "before printing a sign-in link"},
 		{"timeout", map[string]any{"loggedIn": false}, "", "no sign-in within"},
 	}
@@ -455,8 +471,9 @@ func TestSessionModeClaudeSignInFailures(t *testing.T) {
 }
 
 func TestSessionModeClaudeProofFailureExitsNonZero(t *testing.T) {
-	// Logged in, but not with a subscription: no sign-in, the proof fails.
-	h := newHarness(t, map[string]any{"loggedIn": true, "authMethod": "api_key"})
+	// Logged in with a key while the session runs on the claude.ai login
+	// (Story 78.38: no Console login known): the init proof fails.
+	h := newHarness(t, map[string]any{"loggedIn": true, "authMethod": "api_key", "apiKeySource": "/login managed key"})
 	s := h.api.addSession("claude")
 	r := h.runSession(s.SessionID, "claude", "", "echo never")
 	wantFatal(t, r.wait(), "SESSION_FAILED", true)
@@ -676,5 +693,542 @@ func TestClaudeLoginURL(t *testing.T) {
 		if _, got := signInCode(in); got != ok {
 			t.Errorf("signInCode(%q) = %v", in, got)
 		}
+	}
+}
+
+// ─── sandbox sign in methods (Story 78.38) ─────────────────────────────────
+
+// testSigninKey is the sign in request file's key: the shape of the sandbox
+// Worker's placeholder (never a real key).
+const testSigninKey = "sk-ant-mosaic-sandbox-placeholder-0000000000000000"
+
+// writeSignin writes the sign in request file as the Worker does: a
+// temporary file, then a rename.
+func writeSignin(t *testing.T, path string, req map[string]any) {
+	t.Helper()
+	b, _ := json.Marshal(req)
+	writeSigninRaw(t, path, b)
+}
+
+func writeSigninRaw(t *testing.T, path string, b []byte) {
+	t.Helper()
+	if err := os.WriteFile(path+".tmp", b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(path+".tmp", path); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// authPrompts lists the session's data-auth-prompt payload data in order.
+func (h *harness) authPrompts(sid string) []map[string]any {
+	var out []map[string]any
+	for _, p := range h.relay.payloads(sid) {
+		if p["type"] == "data-auth-prompt" {
+			d, _ := p["data"].(map[string]any)
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
+// waitPrompts waits for n auth prompts and returns them.
+func (h *harness) waitPrompts(sid string, n int) []map[string]any {
+	h.t.Helper()
+	waitFor(h.t, 20*time.Second, fmt.Sprintf("%d auth prompts", n), func() bool { return len(h.authPrompts(sid)) >= n })
+	return h.authPrompts(sid)
+}
+
+// fakeLogins lists the argv of every fake `claude auth login`.
+func fakeLogins(t *testing.T, home string) []string {
+	t.Helper()
+	b, _ := os.ReadFile(filepath.Join(home, ".fakeclaude", "logins.jsonl"))
+	var out []string
+	for _, line := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+		var rec struct {
+			Args []string `json:"args"`
+		}
+		if line != "" && json.Unmarshal([]byte(line), &rec) == nil {
+			out = append(out, strings.Join(rec.Args, " "))
+		}
+	}
+	return out
+}
+
+// fakeKeyRuns lists each fake -p run's ANTHROPIC_API_KEY fingerprint ("" =
+// unset) and whether the key name was in its environment.
+func fakeKeyRuns(t *testing.T, home string) (fps []string, keyed []bool) {
+	t.Helper()
+	entries, _ := os.ReadDir(filepath.Join(home, ".fakeclaude", "runs"))
+	for _, e := range entries {
+		b, err := os.ReadFile(filepath.Join(home, ".fakeclaude", "runs", e.Name()))
+		if err != nil {
+			continue
+		}
+		var r struct {
+			EnvKeys []string `json:"envKeys"`
+			FP      string   `json:"apiKeyFingerprint"`
+		}
+		if json.Unmarshal(b, &r) == nil {
+			fps = append(fps, r.FP)
+			keyed = append(keyed, slices.Contains(r.EnvKeys, ClaudeAPIKeyEnvKey))
+		}
+	}
+	return fps, keyed
+}
+
+func keyFingerprint(k string) string {
+	h := sha256.Sum256([]byte(k))
+	return hex.EncodeToString(h[:])
+}
+
+// A Console request during the claude.ai sign in restarts the login as
+// `claude auth login --console`: a second auth prompt (new promptId, the
+// Console link and wording, a fresh window) and the pasted code signs in;
+// the session runs on the Console login.
+func TestSessionModeClaudeConsoleSwitch(t *testing.T) {
+	skipOnWindows(t, noPTY)
+	setDuration(t, &signinPollEvery, 50*time.Millisecond)
+	h := newHarness(t, map[string]any{"loggedIn": false, "authMethod": "none"})
+	file := filepath.Join(h.tmp, "signin.json")
+	s := h.api.addSession("claude")
+	r := h.runSessionWith(s.SessionID, "claude", "claude", "echo after console", sessionOpts{signinFile: file})
+	first := h.waitPrompts(s.SessionID, 1)[0]
+	if !strings.HasPrefix(first["url"].(string), "https://claude.com/cai/oauth/authorize?") {
+		t.Fatalf("first prompt %v", first)
+	}
+	switched := time.Now()
+	writeSignin(t, file, map[string]any{"id": randomUUID(), "method": "console"})
+	prompts := h.waitPrompts(s.SessionID, 2)
+	second := prompts[1]
+	msg, _ := second["message"].(string)
+	if second["provider"] != "claude" || second["promptId"] == first["promptId"] || second["promptId"] == "" ||
+		!strings.HasPrefix(second["url"].(string), "https://platform.claude.com/oauth/authorize?") ||
+		!strings.Contains(msg, "Claude Console account") || !strings.Contains(msg, "expires at") ||
+		strings.ContainsAny(msg, "-—") {
+		t.Fatalf("console prompt %v", second)
+	}
+	// The Console prompt carries a fresh window from the switch.
+	h.checkPromptContract(s.SessionID, second, "", switched)
+	h.message(s.SessionID, "good-code")
+	waitFor(t, 30*time.Second, "turn after console", func() bool {
+		return strings.Contains(h.relay.text(s.SessionID), "after console")
+	})
+	if got := fakeLogins(t, h.home); len(got) != 2 || got[0] != "--claudeai" || got[1] != "--console" {
+		t.Fatalf("logins %v, want --claudeai then --console", got)
+	}
+	if log := h.log.String(); !strings.Contains(log, "switching to a Console login") ||
+		!strings.Contains(log, "console login, apiKeySource /login managed key") || strings.Contains(log, "good-code") {
+		t.Fatalf("log:\n%s", log)
+	}
+	if fps, keyed := fakeKeyRuns(t, h.home); len(fps) != 1 || fps[0] != "" || keyed[0] {
+		t.Fatalf("a Console session got ANTHROPIC_API_KEY: %v %v", fps, keyed)
+	}
+	r.stop()
+	r.noUserSocket()
+}
+
+// An API key request ends the login: Claude Code runs with
+// ANTHROPIC_API_KEY set to the file's key (and the proof needs that key in
+// use); the key never reaches the log or the relay.
+func TestSessionModeClaudeAPIKeySwitch(t *testing.T) {
+	skipOnWindows(t, noPTY)
+	setDuration(t, &signinPollEvery, 50*time.Millisecond)
+	h := newHarness(t, map[string]any{"loggedIn": false, "authMethod": "none"})
+	file := filepath.Join(h.tmp, "signin.json")
+	s := h.api.addSession("claude")
+	r := h.runSessionWith(s.SessionID, "claude", "claude", "echo keyed turn", sessionOpts{signinFile: file})
+	h.waitPrompts(s.SessionID, 1)
+	writeSignin(t, file, map[string]any{"id": randomUUID(), "method": "api_key", "key": testSigninKey})
+	waitFor(t, 30*time.Second, "keyed turn", func() bool { return strings.Contains(h.relay.text(s.SessionID), "keyed turn") })
+	// A respawn keeps the key: the next turn runs in the same process here,
+	// so check the spawn record and the proof calls.
+	fps, keyed := fakeKeyRuns(t, h.home)
+	if len(fps) != 1 || fps[0] != keyFingerprint(testSigninKey) || !keyed[0] {
+		t.Fatalf("claude runs %v %v, want one with the sign in key", fps, keyed)
+	}
+	b, _ := os.ReadFile(filepath.Join(h.home, ".fakeclaude", "statuses.jsonl"))
+	if !strings.Contains(string(b), keyFingerprint(testSigninKey)) {
+		t.Fatalf("no claude auth status ran with the key: %s", b)
+	}
+	if len(h.authPrompts(s.SessionID)) != 1 {
+		t.Fatal("an API key switch sent another auth prompt")
+	}
+	if got := h.relay.statuses(s.SessionID); !slices.Contains(got, "running") || slices.Contains(got, "failed") {
+		t.Fatalf("statuses %v", got)
+	}
+	r.stop()
+	// The logger scrubs keys, so "[redacted]" would mean a line tried to
+	// print one: neither may appear.
+	if log := h.log.String(); strings.Contains(log, testSigninKey) || strings.Contains(log, "placeholder") ||
+		redactedLines(log) != 0 ||
+		!strings.Contains(log, "api key login, apiKeySource ANTHROPIC_API_KEY") ||
+		!strings.Contains(log, ClaudeAPIKeyEnvKey) {
+		t.Fatalf("log (the key must never appear, its name must):\n%s", log)
+	}
+	for _, p := range h.relay.payloads(s.SessionID) {
+		if b, _ := json.Marshal(p); strings.Contains(string(b), testSigninKey) || strings.Contains(string(b), "[redacted]") ||
+			strings.Contains(string(b), "placeholder") {
+			t.Fatalf("the key reached the relay: %s", b)
+		}
+	}
+	r.noUserSocket()
+}
+
+// Each request id acts once: a rewritten seen id, an unparseable file, an
+// unknown method or a malformed key are ignored. A later new id (Console,
+// then API key) still acts.
+func TestSessionModeClaudeSigninRequestsIgnored(t *testing.T) {
+	skipOnWindows(t, noPTY)
+	setDuration(t, &signinPollEvery, 50*time.Millisecond)
+	h := newHarness(t, map[string]any{"loggedIn": false, "authMethod": "none"})
+	file := filepath.Join(h.tmp, "signin.json")
+	s := h.api.addSession("claude")
+	r := h.runSessionWith(s.SessionID, "claude", "claude", "echo finally", sessionOpts{signinFile: file})
+	h.waitPrompts(s.SessionID, 1)
+	seen := randomUUID()
+	writeSignin(t, file, map[string]any{"id": seen, "method": "console"})
+	h.waitPrompts(s.SessionID, 2)
+	for _, raw := range []string{
+		`{"id":"` + seen + `","method":"console"}`,
+		`{"id":"` + seen + `","method":"api_key","key":"` + testSigninKey + `"}`,
+		`not json`,
+		`{"id":"` + randomUUID() + `","method":"bedrock"}`,
+		`{"id":"` + randomUUID() + `","method":"api_key","key":"sk-ant-short"}`,
+		`{"id":"` + randomUUID() + `","method":"api_key"}`,
+		`{"id":"` + randomUUID() + `","method":"console","key":"` + testSigninKey + `"}`,
+		`{"method":"console"}`,
+	} {
+		writeSigninRaw(t, file, []byte(raw))
+		time.Sleep(200 * time.Millisecond) // several polls
+	}
+	if n := len(h.authPrompts(s.SessionID)); n != 2 {
+		t.Fatalf("%d auth prompts after ignored requests, want 2", n)
+	}
+	if got := fakeLogins(t, h.home); len(got) != 2 {
+		t.Fatalf("logins %v after ignored requests", got)
+	}
+	if !strings.Contains(h.log.String(), "sign in request file ignored: not a valid request") {
+		t.Fatalf("no ignored request logged:\n%s", h.log.String())
+	}
+	// The user changes their mind again: an API key with a new id.
+	writeSignin(t, file, map[string]any{"id": randomUUID(), "method": "api_key", "key": testSigninKey})
+	waitFor(t, 30*time.Second, "turn", func() bool { return strings.Contains(h.relay.text(s.SessionID), "finally") })
+	if fps, _ := fakeKeyRuns(t, h.home); len(fps) != 1 || fps[0] != keyFingerprint(testSigninKey) {
+		t.Fatalf("claude runs %v", fps)
+	}
+	r.stop()
+	if log := h.log.String(); strings.Contains(log, testSigninKey) || redactedLines(log) != 0 {
+		t.Fatalf("the key was logged:\n%s", log)
+	}
+}
+
+// Without a sign in request file (an older Worker) a request never acts.
+func TestSessionModeClaudeNoSigninFile(t *testing.T) {
+	skipOnWindows(t, noPTY)
+	setDuration(t, &signinPollEvery, 50*time.Millisecond)
+	h := newHarness(t, map[string]any{"loggedIn": false, "authMethod": "none"})
+	file := filepath.Join(h.tmp, "signin.json")
+	writeSignin(t, file, map[string]any{"id": randomUUID(), "method": "console"})
+	s := h.api.addSession("claude")
+	r := h.runSession(s.SessionID, "claude", "claude", "echo plain")
+	h.waitPrompts(s.SessionID, 1)
+	time.Sleep(300 * time.Millisecond)
+	if n := len(h.authPrompts(s.SessionID)); n != 1 {
+		t.Fatalf("%d prompts without a configured file", n)
+	}
+	h.message(s.SessionID, "good-code")
+	waitFor(t, 30*time.Second, "turn", func() bool { return strings.Contains(h.relay.text(s.SessionID), "plain") })
+	r.stop()
+}
+
+// A sandbox home holding a Console login (a remembered sign in) starts in
+// Console login mode without a sign in; the claude.ai mode refuses the same
+// home at the init proof (TestSessionModeClaudeProofFailureExitsNonZero).
+func TestSessionModeClaudeRememberedConsoleLogin(t *testing.T) {
+	h := newHarness(t, map[string]any{"loggedIn": true, "authMethod": "api_key", "apiKeySource": "/login managed key"})
+	s := h.api.addSession("claude")
+	r := h.runSessionWith(s.SessionID, "claude", "", "echo remembered", sessionOpts{login: ClaudeLoginConsole})
+	waitFor(t, 30*time.Second, "turn", func() bool { return strings.Contains(h.relay.text(s.SessionID), "remembered") })
+	r.stop()
+}
+
+// The local daemon keeps its claude.ai only gate whatever the session's
+// login field says: no Console or API key login passes, and no key is ever
+// added to a child (the sandbox rules apply only in the session-bound mode).
+func TestLocalModeKeepsClaudeAIGate(t *testing.T) {
+	s := &session{d: &Daemon{}, login: ClaudeLoginAPIKey, apiKey: testSigninKey}
+	if s.claudeLogin() != ClaudeLoginSubscription {
+		t.Fatalf("local login %v", s.claudeLogin())
+	}
+	if env, err := s.claudeEnv([]string{"HOME=/h"}); err != nil || strings.Join(env, ",") != "HOME=/h" {
+		t.Fatalf("local env %v %v", env, err)
+	}
+	if req, ok := s.pollSignin(); ok {
+		t.Fatalf("local mode read a sign in request %v", req.Method)
+	}
+	console := &AuthStatus{LoggedIn: true, AuthMethod: "api_key", APIKeySource: "/login managed key"}
+	keyed := &AuthStatus{LoggedIn: true, AuthMethod: "api_key", APIKeySource: ClaudeAPIKeySource}
+	sub := &AuthStatus{LoggedIn: true, AuthMethod: "claude.ai"}
+	for _, login := range []ClaudeLogin{ClaudeLoginSubscription, ClaudeLoginConsole, ClaudeLoginAPIKey} {
+		for _, st := range []*AuthStatus{console, keyed, {LoggedIn: true, AuthMethod: "oauth_token"}, nil} {
+			if p := st.LoginProblem(false, login); !strings.Contains(p, "not logged in with a claude.ai subscription") {
+				t.Errorf("local %v accepted %+v (%q)", login, st, p)
+			}
+		}
+		if p := sub.LoginProblem(false, login); p != "" {
+			t.Errorf("local refused a subscription: %s", p)
+		}
+	}
+	init := claudeFrame{APIKeySource: "/login managed key", PermissionMode: "default"}
+	if initLoginProblem(init, []string{"default"}, s.claudeLogin()) == "" {
+		t.Fatal("local init proof accepted a Console key")
+	}
+	// Sandbox rules, for contrast.
+	cases := []struct {
+		st    *AuthStatus
+		login ClaudeLogin
+		ok    bool
+	}{
+		{console, ClaudeLoginSubscription, false}, {console, ClaudeLoginConsole, true}, {console, ClaudeLoginAPIKey, false},
+		{&AuthStatus{LoggedIn: true, AuthMethod: "oauth_token"}, ClaudeLoginSubscription, false},
+		{keyed, ClaudeLoginAPIKey, true}, {sub, ClaudeLoginSubscription, true}, {sub, ClaudeLoginAPIKey, false},
+		{&AuthStatus{AuthMethod: "none"}, ClaudeLoginConsole, false}, {nil, ClaudeLoginSubscription, false},
+	}
+	for _, c := range cases {
+		if got := c.st.LoginProblem(true, c.login) == ""; got != c.ok {
+			t.Errorf("sandbox %v %+v: ok %v, want %v", c.login, c.st, got, c.ok)
+		}
+	}
+	inits := []struct {
+		source string
+		login  ClaudeLogin
+		ok     bool
+	}{
+		{"none", ClaudeLoginSubscription, true}, {"/login managed key", ClaudeLoginSubscription, false},
+		{ClaudeAPIKeySource, ClaudeLoginSubscription, false}, {"/login managed key", ClaudeLoginConsole, true},
+		{"none", ClaudeLoginConsole, false}, {"", ClaudeLoginConsole, false}, {ClaudeAPIKeySource, ClaudeLoginAPIKey, true},
+		{"/login managed key", ClaudeLoginAPIKey, false}, {"none", ClaudeLoginAPIKey, false},
+	}
+	for _, c := range inits {
+		f := claudeFrame{APIKeySource: c.source, PermissionMode: "default"}
+		if got := initLoginProblem(f, []string{"default"}, c.login) == ""; got != c.ok {
+			t.Errorf("init %q %v: ok %v, want %v", c.source, c.login, got, c.ok)
+		}
+	}
+	// A Console init must name the source the spawn's auth status reported.
+	f := claudeFrame{APIKeySource: "/login managed key", PermissionMode: "default"}
+	if initLoginProblem(f, []string{"default"}, ClaudeLoginConsole, "/login managed key") != "" ||
+		initLoginProblem(f, []string{"default"}, ClaudeLoginConsole, "") != "" ||
+		initLoginProblem(f, []string{"default"}, ClaudeLoginConsole, "apiKeyHelper") == "" {
+		t.Fatal("Console init source check")
+	}
+}
+
+func TestReadSigninRequest(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "signin.json")
+	if _, present, ok := readSigninRequest(path); present || ok {
+		t.Fatal("a missing file read as a request")
+	}
+	for raw, want := range map[string]string{
+		`{"id":"a1","method":"console"}`:                                                    "console",
+		`{"id":"a1","method":"api_key","key":"` + testSigninKey + `"}`:                      "api_key",
+		`{"id":"a1","method":"console","extra":true}`:                                       "console",
+		`{"id":"a 1","method":"console"}`:                                                   "",
+		`{"id":"","method":"console"}`:                                                      "",
+		`{"id":"` + strings.Repeat("a", 129) + `","method":"console"}`:                      "",
+		`{"id":"a1","method":"api_key","key":"sk-ant-has space 0123456789"}`:                "",
+		`{"id":"a1","method":"api_key","key":"sk-other-0123456789abcdef"}`:                  "",
+		`{"id":"a1","method":"api_key","key":"sk-ant-0123456789.abcdef"}`:                   "",
+		`{"id":"a1","method":"api_key","key":"sk-ant-0123456789abcde"}`:                     "",
+		`{"id":"a1","method":"Console"}`:                                                    "",
+		`[1]`:                                                                               "",
+		`{"id":"a1","method":"console","pad":"` + strings.Repeat("x", maxSigninFile) + `"}`: "",
+	} {
+		writeSigninRaw(t, path, []byte(raw))
+		req, present, ok := readSigninRequest(path)
+		if !present || ok != (want != "") || (ok && req.Method != want) {
+			t.Errorf("%.60s: present %v ok %v method %q, want %q", raw, present, ok, req.Method, want)
+		}
+	}
+}
+
+func TestClaudeAPIKeyEnv(t *testing.T) {
+	env := ClaudeSessionEnv([]string{"PATH=/bin", "HOME=/h", ClaudeAPIKeyEnvKey + "=old"})
+	got, err := ClaudeAPIKeyEnv(env, testSigninKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "ANTHROPIC_API_KEY,CLAUDE_CODE_DISABLE_WEB_FETCH,HOME,PATH"
+	if strings.Join(EnvKeys(got), ",") != want || !slices.Contains(got, ClaudeAPIKeyEnvKey+"="+testSigninKey) {
+		t.Fatalf("env keys %v", EnvKeys(got))
+	}
+	bad := "sk-ant-x\nINJECTED=1 0123456789"
+	if _, err := ClaudeAPIKeyEnv(env, bad); err == nil || strings.Contains(err.Error(), "INJECTED") {
+		t.Fatalf("bad key: %v", err)
+	}
+	// The deny prefix still keeps the daemon's own key out.
+	if EnvAllowed(ClaudeAPIKeyEnvKey) {
+		t.Fatal("ANTHROPIC_API_KEY allowed from the daemon environment")
+	}
+	if _, err := BuildChildEnv(nil, map[string]string{ClaudeAPIKeyEnvKey: testSigninKey}); err == nil {
+		t.Fatal("ANTHROPIC_API_KEY accepted as an override")
+	}
+}
+
+// redactedLines counts log lines where Scrub removed something, except the
+// fake Claude's deliberate secret stderr line: the logger scrubs keys, so
+// such a line would mean the daemon tried to print one.
+func redactedLines(log string) int {
+	n := 0
+	for _, line := range strings.Split(log, "\n") {
+		if strings.Contains(line, "[redacted]") && !strings.Contains(line, "fakeclaude: stderr line with a secret") {
+			n++
+		}
+	}
+	return n
+}
+
+// lastLoginPID is the pid of the newest fake `claude auth login`.
+func lastLoginPID(t *testing.T, home string) int {
+	t.Helper()
+	b, _ := os.ReadFile(filepath.Join(home, ".fakeclaude", "logins.jsonl"))
+	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
+	var rec struct {
+		PID int `json:"pid"`
+	}
+	if len(lines) == 0 || json.Unmarshal([]byte(lines[len(lines)-1]), &rec) != nil || rec.PID == 0 {
+		t.Fatalf("no login pid in %s", b)
+	}
+	return rec.PID
+}
+
+// noLiveLogin checks the login process (and its group) is gone.
+func noLiveLogin(t *testing.T, pid int) {
+	t.Helper()
+	waitFor(t, 10*time.Second, "login process gone", func() bool { return !processAlive(pid) && !groupAlive(pid) })
+}
+
+// Proof failures after a switch fail the sign in closed: an API key that
+// claude auth status does not report in use, and a Console login that
+// leaves Claude Code logged out. No turn runs and the key is never logged.
+func TestSessionModeClaudeSwitchProofFailures(t *testing.T) {
+	skipOnWindows(t, noPTY)
+	cases := []struct {
+		name string
+		cfg  map[string]any
+		req  map[string]any
+		code bool
+		want string
+	}{
+		{"api key not in use", map[string]any{"loggedIn": false, "authMethod": "none", "statusIgnoresKey": true},
+			map[string]any{"method": "api_key", "key": testSigninKey}, false,
+			"with the API key, Claude Code is not logged in"},
+		{"console still logged out", map[string]any{"loggedIn": false, "authMethod": "none", "loginLoggedOut": true},
+			map[string]any{"method": "console"}, true, "after the sign-in, Claude Code is not logged in"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			setDuration(t, &signinPollEvery, 50*time.Millisecond)
+			h := newHarness(t, c.cfg)
+			file := filepath.Join(h.tmp, "signin.json")
+			s := h.api.addSession("claude")
+			r := h.runSessionWith(s.SessionID, "claude", "claude", "echo never", sessionOpts{signinFile: file})
+			h.waitPrompts(s.SessionID, 1)
+			c.req["id"] = randomUUID()
+			writeSignin(t, file, c.req)
+			if c.code {
+				h.waitPrompts(s.SessionID, 2)
+				h.message(s.SessionID, "good-code")
+			}
+			if msg := wantFatal(t, r.wait(), "SESSION_FAILED", true); !strings.Contains(msg, c.want) {
+				t.Fatalf("message %q, want %q", msg, c.want)
+			}
+			h.relay.waitStatus(t, s.SessionID, "failed", 1)
+			if len(fakeRuns(t, h.home)) != 0 {
+				t.Fatal("a turn ran after a failed proof")
+			}
+			if log := h.log.String(); strings.Contains(log, testSigninKey) || redactedLines(log) != 0 {
+				t.Fatalf("the key was logged:\n%s", log)
+			}
+			noLiveLogin(t, lastLoginPID(t, h.home))
+		})
+	}
+}
+
+// stop_session after a Console switch ends the second login's PTY too.
+func TestSessionModeClaudeStopAfterConsoleSwitch(t *testing.T) {
+	skipOnWindows(t, noPTY)
+	setDuration(t, &signinPollEvery, 50*time.Millisecond)
+	h := newHarness(t, map[string]any{"loggedIn": false, "authMethod": "none"})
+	file := filepath.Join(h.tmp, "signin.json")
+	s := h.api.addSession("claude")
+	r := h.runSessionWith(s.SessionID, "claude", "claude", "echo never", sessionOpts{signinFile: file})
+	h.waitPrompts(s.SessionID, 1)
+	first := lastLoginPID(t, h.home)
+	writeSignin(t, file, map[string]any{"id": randomUUID(), "method": "console"})
+	h.waitPrompts(s.SessionID, 2)
+	second := lastLoginPID(t, h.home)
+	if second == first {
+		t.Fatal("no second login")
+	}
+	noLiveLogin(t, first)
+	r.stop()
+	h.relay.waitStatus(t, s.SessionID, "completed", 1)
+	noLiveLogin(t, second)
+}
+
+// Console switches get a fresh window, capped at twice signInTimeout from
+// the sign in's start; the capped prompt names the capped expiry and the
+// timeout then fails the sign in, leaving no live login.
+func TestSessionModeClaudeConsoleWindowCap(t *testing.T) {
+	skipOnWindows(t, noPTY)
+	setDuration(t, &signinPollEvery, 50*time.Millisecond)
+	setDuration(t, &signInTimeout, 2*time.Second)
+	h := newHarness(t, map[string]any{"loggedIn": false, "authMethod": "none"})
+	file := filepath.Join(h.tmp, "signin.json")
+	s := h.api.addSession("claude")
+	r := h.runSessionWith(s.SessionID, "claude", "claude", "echo never", sessionOpts{signinFile: file})
+	p1 := h.waitPrompts(s.SessionID, 1)[0]
+	exp1, _ := p1["expiresAt"].(float64)
+	limit := exp1 + float64(signInTimeout.Milliseconds())
+	time.Sleep(1200 * time.Millisecond)
+	writeSignin(t, file, map[string]any{"id": randomUUID(), "method": "console"})
+	p2 := h.waitPrompts(s.SessionID, 2)[1]
+	if exp2, _ := p2["expiresAt"].(float64); exp2 <= exp1 || exp2 > limit {
+		t.Fatalf("second expiry %v, want in (%v, %v]", exp2, exp1, limit)
+	}
+	time.Sleep(1200 * time.Millisecond)
+	writeSignin(t, file, map[string]any{"id": randomUUID(), "method": "console"})
+	p3 := h.waitPrompts(s.SessionID, 3)[2]
+	if exp3, _ := p3["expiresAt"].(float64); exp3 != limit {
+		t.Fatalf("capped expiry %v, want %v", exp3, limit)
+	}
+	if msg := wantFatal(t, r.wait(), "SESSION_FAILED", true); !strings.Contains(msg, "end of the Console sign-in window") {
+		t.Fatalf("message %q", msg)
+	}
+	if now := float64(time.Now().UnixMilli()); now > limit+3000 {
+		t.Fatalf("the sign in ran %v ms past the cap", now-limit)
+	}
+	noLiveLogin(t, lastLoginPID(t, h.home))
+}
+
+// Scrub covers every printable character an Anthropic key may hold (the
+// sign in request file's rule), stopping at quotes and JSON delimiters.
+func TestScrubAnthropicKeys(t *testing.T) {
+	full := "sk-ant-" + "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-"
+	if !ValidAPIKey(full) || !ValidAPIKey(testSigninKey) {
+		t.Fatal("the fixtures must be valid keys (sk-ant- plus the assumed base64url body)")
+	}
+	for _, key := range []string{testSigninKey, full, "sk-ant-api03-a.b~c|d^e=f?g@h!i#j$k%l&m*n+o/p:q;r", "sk-ant-XYZ_123-abc"} {
+		for _, in := range []string{key, "key " + key + " end", `{"key":"` + key + `"}`, "(" + key + ")", "<" + key + ">"} {
+			out := Scrub(in)
+			if strings.Contains(out, key[7:]) || !strings.Contains(out, "[redacted]") {
+				t.Errorf("Scrub(%q) = %q", in, out)
+			}
+		}
+	}
+	if got := Scrub(`{"key":"sk-ant-abc","next":1}`); got != `{"key":"[redacted]","next":1}` {
+		t.Errorf("JSON delimiters: %q", got)
 	}
 }
