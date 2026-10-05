@@ -1010,21 +1010,23 @@ func (s *session) answerApproval(in *Inbound) {
 	}
 }
 
-// stop ends the session for good (stop_session).
+// stop ends the session for good (stop_session). The process tree is gone,
+// the token revoked, the record ended and the session's files removed
+// before "completed" is reported (as failSession precedes "failed").
 func (s *session) stop(emitCompleted bool) {
 	s.stopping = true
 	s.flushCoalesced()
 	s.stopProcess(false)
 	s.revokeToken()
-	if emitCompleted {
-		s.emitStatus("completed", "")
-	}
 	s.rec.Status = "ended"
 	s.save()
 	s.d.store.RemoveRunDir(s.id)
 	removeSessionCwd(s.rec.Cwd)
 	if s.isCodex() {
 		s.d.store.RemoveCodexHome(s.id)
+	}
+	if emitCompleted {
+		s.emitStatus("completed", "")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), drainTimeout)
 	defer cancel()

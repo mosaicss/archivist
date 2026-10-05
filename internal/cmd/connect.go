@@ -96,12 +96,13 @@ connect write {"v":1,"idleSince":ms|null,"approvalSince":ms|null} there
 whenever either changes: since when nothing has been in flight, and since
 when an approval has waited (unix milliseconds).
 
-One-step setup (macOS and Linux): the workspace shows a pairing code.
+One-step setup: the workspace shows a pairing code.
 
   archivist connect --pair CODE   redeem a pairing code for a new key and save it
   archivist connect --install     run connect as a background user service
-                                  (launchd agent or systemd user unit) that
-                                  starts at login and restarts after a crash;
+                                  (launchd agent, systemd user unit or Windows
+                                  logon task) that starts at login and
+                                  restarts after a crash;
                                   add --max-permission <mode> to set the
                                   service's ceiling (default auto_edits)
   archivist connect --status      report the service, its ceiling and the saved key
@@ -109,8 +110,8 @@ One-step setup (macOS and Linux): the workspace shows a pairing code.
 
 The service uses the saved key (~/.archivist/credentials), never
 ARCHIVIST_TOKEN, and logs to ~/.archivist/connect/connect.log. These four
-flags are used one at a time. Windows: --pair works; background connect is
-not available on Windows yet.
+flags are used one at a time. Windows runs the task as archivistw.exe
+(installed next to archivist.exe by install.ps1), without a console window.
 
 Exit codes: 0 ok; 1 refused or stopped (feature off, superseded, too old,
 or a session-bound start refused, for example a model or effort this
@@ -211,7 +212,7 @@ func newConnectCmd(version string) *cobra.Command {
 	c.Flags().StringVar(&promptFile, "prompt-file", "", "Session-bound mode: file holding the session's first prompt")
 	c.Flags().StringVar(&resumeFrom, "resume-from", "", "Session-bound mode: an earlier session (UUID) whose harness conversation this session continues")
 	c.Flags().StringVar(&pair, "pair", "", "Redeem a pairing code from the Mosaic workspace for a new key and save it")
-	c.Flags().BoolVar(&install, "install", false, "Install and start connect as a background user service (macOS, Linux)")
+	c.Flags().BoolVar(&install, "install", false, "Install and start connect as a background user service (macOS launchd agent, Linux systemd user unit, Windows logon task)")
 	c.Flags().BoolVar(&uninstall, "uninstall", false, "Stop and remove the background service")
 	c.Flags().BoolVar(&status, "status", false, "Report the background service and the saved key")
 	c.Flags().BoolVar(&serviceMode, "service", false, "Run as the background service (used by the service definition)")
@@ -389,7 +390,7 @@ func runConnect(cmd *cobra.Command, version string, check bool, f connectFlags) 
 	}
 	codexHome := connect.OwnerCodexHome(os.Environ(), home)
 	detect := func(ctx context.Context) connect.Detection {
-		return connect.DetectWith(ctx, connect.DetectOptions{LookPath: exec.LookPath, Run: connect.ExecRunner,
+		return connect.DetectWith(ctx, connect.DetectOptions{LookPath: connect.HarnessLookPath(exec.LookPath), Run: connect.ExecRunner,
 			RunCombined: connect.ExecCombinedRunner, Env: childEnv, Dir: home, CodexHome: codexHome})
 	}
 

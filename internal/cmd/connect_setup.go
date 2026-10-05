@@ -15,7 +15,6 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 
@@ -187,10 +186,6 @@ func runPair(cmd *cobra.Command, version, raw string) error {
 // none (exit 1).
 func newServiceManager(cmd *cobra.Command, args []string) (service.Manager, string, error) {
 	stderr := cmd.ErrOrStderr()
-	if runtime.GOOS == "windows" {
-		_, _ = fmt.Fprintln(stderr, "archivist connect: Background connect is not available on Windows yet. Your key is saved; run archivist connect on a macOS or Linux machine.")
-		return nil, "", &ExitError{Code: ExitGenericError}
-	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "archivist connect: %v\n", err)
@@ -204,7 +199,8 @@ func newServiceManager(cmd *cobra.Command, args []string) (service.Manager, stri
 		opts.ConfigHome = xdg
 	}
 	if bin, err := stableBinary(); err == nil {
-		opts.Binary = bin
+		// Windows runs the console-less companion next to it (Story 78.34).
+		opts.Binary = serviceBinary(bin)
 	}
 	m, err := service.New(opts)
 	if err != nil {
@@ -251,7 +247,7 @@ func stableBinary() (string, error) {
 func runServiceInstall(cmd *cobra.Command, maxPermission string) error {
 	stderr, stdout := cmd.ErrOrStderr(), cmd.OutOrStdout()
 	if !connect.Supported() {
-		_, _ = fmt.Fprintln(stderr, "archivist connect: Background connect is not available on Windows yet.")
+		_, _ = fmt.Fprintln(stderr, "archivist connect: Background connect is not available on this system.")
 		return &ExitError{Code: ExitGenericError}
 	}
 	// The service never sees ARCHIVIST_TOKEN: it needs a saved owner key.
@@ -259,6 +255,9 @@ func runServiceInstall(cmd *cobra.Command, maxPermission string) error {
 	if err != nil || !strings.HasPrefix(token, "ak_") {
 		_, _ = fmt.Fprintln(stderr, "archivist connect --install needs a saved ak_ key. Run 'archivist connect --pair CODE' with a code from Mosaic (or 'archivist auth login --token ak_...') first.")
 		return &ExitError{Code: ExitAuthError}
+	}
+	if err := checkServiceBinary(stderr); err != nil {
+		return err
 	}
 	kept := false
 	if maxPermission == "" {
@@ -288,7 +287,7 @@ func runServiceInstall(cmd *cobra.Command, maxPermission string) error {
 	}
 	_, _ = fmt.Fprintf(stdout, "Background connect %s (%s: %s).\n", verb, m.Name(), rep.Path)
 	switch {
-	case m.Name() == "launchd":
+	case m.Name() == "launchd" || m.Name() == "Task Scheduler":
 		_, _ = fmt.Fprintln(stdout, "It runs now and starts again at every login.")
 	case rep.LingerOK:
 		_, _ = fmt.Fprintln(stdout, "It runs now and starts again at boot (lingering enabled).")
@@ -380,7 +379,8 @@ func runServiceStatus(cmd *cobra.Command) error {
 	return &ExitError{Code: ExitGenericError}
 }
 
-// runServiceMode is what the service definition runs: the normal daemon
+// runServiceMode is what the service definition runs (on Windows through
+// the supervisor, runServiceSupervisor): the normal daemon
 // with its output in the log file, using the saved credentials file only
 // (ARCHIVIST_TOKEN and --token are ignored, even when the user manager or
 // launchctl setenv injects them). It writes ~/.archivist/connect/service.pid
@@ -389,8 +389,9 @@ func runServiceStatus(cmd *cobra.Command) error {
 // problem, feature off, no usable harness, bad configuration, including a
 // --max-permission this version does not know, as after a downgrade) exits
 // 0 so the manager leaves it stopped until 'archivist connect --install', the
-// next login (macOS, Linux without lingering) or the next boot; an
-// unexpected failure exits non-zero and the manager restarts it after 10 s.
+// next login (macOS, Windows logon task, Linux without lingering) or the next
+// boot; an unexpected failure exits non-zero and the manager (on Windows the
+// supervisor) restarts it after 10 s.
 func runServiceMode(cmd *cobra.Command, version string, f connectFlags, maxPermission string) error {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -407,6 +408,12 @@ func runServiceMode(cmd *cobra.Command, version string, f connectFlags, maxPermi
 	cmd.SetErr(logf)
 	log := connect.NewLogger(logf)
 	log.Printf("service start %s (pid %d, %s)", version, os.Getpid(), time.Now().UTC().Format(time.RFC3339))
+	// Windows: the task runs a supervisor that runs this same command as
+	// the daemon (Story 78.34); elsewhere the service manager supervises.
+	defer setServiceCrashOutput(logf)()
+	if serviceSupervisorNeeded() {
+		return runServiceSupervisor(cmd.Context(), log, home, serviceChildArgs(cmd))
+	}
 	var refusal strings.Builder
 	maxMode, err := permissionFlags(&refusal, maxPermission, sessionControlFlags{}, nil)
 	if err != nil {
@@ -442,7 +449,7 @@ func serviceExit(log *connect.Logger, err error) error {
 	case err == nil:
 		return nil
 	case errors.As(err, &exitErr) && !exitErr.unexpected:
-		log.Printf("service stopped (exit %d); it stays stopped until 'archivist connect --install', the next login (macOS, Linux without lingering) or the next boot", exitErr.Code)
+		log.Printf("service stopped (exit %d); it stays stopped until 'archivist connect --install', the next login (macOS, Windows logon task, Linux without lingering) or the next boot", exitErr.Code)
 		return nil
 	default:
 		log.Printf("service failed; it restarts in 10 s")

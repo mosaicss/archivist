@@ -8,12 +8,14 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -224,15 +226,32 @@ func runUpdate(ctx context.Context, cmd *cobra.Command, current string) error {
 	}
 
 	if runtime.GOOS == "windows" {
-		// Windows: cannot rename over a running binary; write to .new
-		newPath := currentBin + ".new"
-		if err := copyFile(tmpBin.Name(), newPath); err != nil {
-			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "archivist update: failed to write update: %v\n", err)
+		// Windows (Story 78.34): a running exe cannot be overwritten but can
+		// be renamed, so archivist.exe and archivistw.exe (the background
+		// service's console-less companion, when the archive has it) are
+		// renamed to unique .old-<id> names and the new ones copied in.
+		stageDir, err := os.MkdirTemp("", "archivist-update-*")
+		if err != nil {
+			return &ExitError{Code: ExitServerError}
+		}
+		defer func() { _ = os.RemoveAll(stageDir) }()
+		staged, err := stageWindowsBinaries(tmpArchive.Name(), filepath.Base(currentBin), stageDir)
+		if err != nil {
+			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "archivist update: extract failed: %v\n", err)
+			return &ExitError{Code: ExitServerError}
+		}
+		if err := swapBinaries(filepath.Dir(currentBin), staged); err != nil {
+			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "archivist update: failed to replace the binaries: %v\n", err)
 			return &ExitError{Code: ExitServerError}
 		}
 		_, _ = fmt.Fprintf(cmd.OutOrStdout(),
-			"Update downloaded to %s — restart your shell and run 'mv archivist.new archivist' or re-run the installer.\n",
-			newPath)
+			"Updated from v%s to v%s. Run 'archivist version' to confirm.\n",
+			normalCurrent, normalLatest)
+		if home, err := os.UserHomeDir(); err == nil {
+			if hint := serviceRestartHint(home, ""); hint != "" {
+				_, _ = fmt.Fprintln(cmd.OutOrStdout(), hint)
+			}
+		}
 		return nil
 	}
 
@@ -257,6 +276,80 @@ func runUpdate(ctx context.Context, cmd *cobra.Command, current string) error {
 		}
 	}
 	return nil
+}
+
+// stageWindowsBinaries extracts the Windows zip's executables into dir and
+// maps each to the name it replaces: archivist.exe to the running
+// executable's own name (a renamed copy such as archivist2.exe is the one
+// updated), and archivistw.exe, when the archive has it, to archivistw.exe.
+// A missing archivist.exe, or any extraction error other than a missing
+// archivistw.exe, fails.
+func stageWindowsBinaries(archive, currentName, dir string) (map[string]string, error) {
+	if strings.EqualFold(currentName, "archivistw.exe") {
+		currentName = "archivist.exe"
+	}
+	primary := filepath.Join(dir, "archivist.exe")
+	if err := extractBinaryFromZip(archive, "archivist.exe", primary); err != nil {
+		return nil, err
+	}
+	staged := map[string]string{currentName: primary}
+	companion := filepath.Join(dir, "archivistw.exe")
+	switch err := extractBinaryFromZip(archive, "archivistw.exe", companion); {
+	case err == nil:
+		staged["archivistw.exe"] = companion
+	case !errors.Is(err, errBinaryNotInZip):
+		return nil, err
+	}
+	return staged, nil
+}
+
+// swapBinaries installs each staged file (name -> source path) into dir:
+// an existing file is first renamed to a unique <name>.old-<id> (a running
+// Windows exe can be renamed, not overwritten), then the new one copied in.
+// A failed copy puts the renamed file back. Stale <name>.old-* files of the
+// staged names from earlier swaps, and the legacy <name>.new, are removed best effort (one still running
+// stays until next time); nothing else in dir is touched (it may be a shared
+// folder such as ~/bin or an npm prefix).
+func swapBinaries(dir string, staged map[string]string) error {
+	names := make([]string, 0, len(staged))
+	for name := range staged {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if olds, err := filepath.Glob(filepath.Join(dir, globEscape(name)+".old-*")); err == nil {
+			for _, o := range olds {
+				_ = os.Remove(o)
+			}
+		}
+		// The pre-78.34 updater left <name>.new beside the binary.
+		_ = os.Remove(filepath.Join(dir, name+".new"))
+	}
+	id := fmt.Sprintf("%d-%d", time.Now().UnixNano(), os.Getpid())
+	for _, name := range names {
+		target := filepath.Join(dir, name)
+		old := ""
+		if _, err := os.Stat(target); err == nil {
+			old = target + ".old-" + id
+			if err := os.Rename(target, old); err != nil {
+				return fmt.Errorf("move %s aside: %w", name, err)
+			}
+		}
+		if err := copyFile(staged[name], target); err != nil {
+			_ = os.Remove(target)
+			if old != "" {
+				_ = os.Rename(old, target)
+			}
+			return fmt.Errorf("write %s: %w", name, err)
+		}
+		_ = os.Chmod(target, 0o755)
+	}
+	return nil
+}
+
+// globEscape quotes the filepath.Match metacharacters in a literal name.
+func globEscape(name string) string {
+	return strings.NewReplacer("*", "[*]", "?", "[?]", "[", "[[]").Replace(name)
 }
 
 // serviceRestartHint is the one line telling a user whose background service
@@ -449,8 +542,11 @@ func extractBinaryFromZip(archivePath, binaryName, destPath string) error {
 			return err
 		}
 	}
-	return fmt.Errorf("binary %q not found in zip archive", binaryName)
+	return fmt.Errorf("binary %q: %w", binaryName, errBinaryNotInZip)
 }
+
+// errBinaryNotInZip means the archive holds no file of that name.
+var errBinaryNotInZip = errors.New("not found in zip archive")
 
 // copyFile copies src to dst.
 func copyFile(src, dst string) error {

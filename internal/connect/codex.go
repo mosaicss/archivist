@@ -68,9 +68,10 @@ var (
 
 // codexShellEnv is what Codex passes to the commands it runs
 // (shell_environment_policy include_only), on top of "core"; the CA bundle
-// keys (CACertKeys) are listed too.
-var codexShellEnv = append([]string{"PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "LC_*", "TERM", "TMPDIR", "TZ"},
-	CACertKeys...)
+// keys (CACertKeys) are listed too, and on Windows the core keys the child
+// env allowlist admits there (platformAllowKeys, Story 78.34).
+var codexShellEnv = append(append([]string{"PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "LC_*", "TERM", "TMPDIR", "TZ"},
+	CACertKeys...), platformAllowKeys...)
 
 // tomlValue renders v as a TOML value for -c (JSON strings and arrays of
 // strings are valid TOML).
@@ -143,6 +144,7 @@ func codexArgs(cfg CodexConfig, tokenFile string, publish []string) []string {
 	if cfg.BaseURL != "" {
 		set = append(set, [2]string{"mcp_servers.archivist.env", "{ARCHIVIST_BASE_URL=" + tomlValue(cfg.BaseURL) + "}"})
 	}
+	set = append(set, codexPlatformConfig...)
 	args := []string{"app-server", "--stdio", "--strict-config"}
 	for _, kv := range set {
 		args = append(args, "-c", kv[0]+"="+kv[1])
@@ -151,7 +153,8 @@ func codexArgs(cfg CodexConfig, tokenFile string, publish []string) []string {
 }
 
 // codexHome prepares the session's private CODEX_HOME: a 0700 directory
-// whose only seeded entry is auth.json, a symlink to the owner's auth.json.
+// whose only seeded entry is auth.json, a link to the owner's auth.json (a
+// symlink on Unix, a hard link on Windows: linkOwnerAuth).
 // Codex rewrites auth.json in place on refresh, so the link keeps the
 // owner's single login current; a copy would split the single-use refresh
 // token between two homes. A resume needs the existing home (rollouts and
@@ -184,19 +187,8 @@ func (s *session) codexHome(resume bool) (string, error) {
 	if err := os.Chmod(home, 0o700); err != nil {
 		return "", err
 	}
-	link := filepath.Join(home, "auth.json")
-	target, err := os.Readlink(link)
-	switch {
-	case err == nil && target == ownerAuth:
-	case err == nil:
-		return "", &proofError{fmt.Sprintf("the session's auth.json links to %s, not the owner's login", target)}
-	case errors.Is(err, os.ErrNotExist):
-		if err := os.Symlink(ownerAuth, link); err != nil {
-			return "", err
-		}
-	default:
-		// Not a symlink: something wrote a separate login into the home.
-		return "", &proofError{"the session's auth.json is not a link to the owner's login"}
+	if err := linkOwnerAuth(ownerAuth, filepath.Join(home, "auth.json")); err != nil {
+		return "", err
 	}
 	return home, nil
 }
@@ -263,7 +255,7 @@ func (s *session) spawnCodex(ctx context.Context, threadID, instructions string)
 	if err := os.MkdirAll(tmp, 0o700); err != nil {
 		return fmt.Errorf("session temp directory: %w", err)
 	}
-	env, err := BuildChildEnv(s.d.environ(), map[string]string{"TMPDIR": tmp})
+	env, err := BuildChildEnv(s.d.environ(), codexTempEnv(tmp))
 	if err != nil {
 		return err
 	}

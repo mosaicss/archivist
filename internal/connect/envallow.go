@@ -33,6 +33,11 @@ func init() {
 	for _, k := range CACertKeys {
 		allowKeys[k] = true
 	}
+	// Story 78.34: the Windows core keys (none elsewhere), stored in the
+	// form envKey compares.
+	for _, k := range platformAllowKeys {
+		allowKeys[envKey(k)] = true
+	}
 }
 
 // allowPrefixes are copied from the daemon environment when present.
@@ -61,18 +66,21 @@ func claudeConfigDirAllowed(v string) bool {
 	return err == nil && info.IsDir()
 }
 
-// EnvAllowed reports whether key may reach a harness child.
+// EnvAllowed reports whether key may reach a harness child. On Windows,
+// where environment keys are case-insensitive, the allowlist and the deny
+// prefixes compare case-insensitively (envKey); elsewhere exactly.
 func EnvAllowed(key string) bool {
+	k := envKey(key)
 	for _, p := range denyPrefixes {
-		if strings.HasPrefix(key, p) {
+		if strings.HasPrefix(k, p) {
 			return false
 		}
 	}
-	if allowKeys[key] {
+	if allowKeys[k] {
 		return true
 	}
 	for _, p := range allowPrefixes {
-		if strings.HasPrefix(key, p) {
+		if strings.HasPrefix(k, p) {
 			return true
 		}
 	}
@@ -83,35 +91,44 @@ func EnvAllowed(key string) bool {
 // key) built only from allowlisted parent keys (plus an absolute, existing
 // CLAUDE_CONFIG_DIR), then overrides. An override
 // for a key outside the allowlist, or under a deny prefix, is an error.
+// Keys keep the parent's spelling (on Windows an override of a key the
+// parent has under another case replaces that entry and keeps its name).
 func BuildChildEnv(parent []string, overrides map[string]string) ([]string, error) {
-	vals := map[string]string{}
+	type entry struct{ name, value string }
+	vals := map[string]entry{}
 	for _, kv := range parent {
 		k, v, ok := strings.Cut(kv, "=")
-		if ok && k == ClaudeConfigDirKey {
+		if ok && envKey(k) == envKey(ClaudeConfigDirKey) {
 			if claudeConfigDirAllowed(v) {
-				vals[k] = v
+				vals[envKey(k)] = entry{k, v}
 			}
 			continue
 		}
 		if !ok || k == "" || !EnvAllowed(k) {
 			continue
 		}
-		vals[k] = v
+		vals[envKey(k)] = entry{k, v}
 	}
 	for k, v := range overrides {
 		if !EnvAllowed(k) {
 			return nil, fmt.Errorf("connect: environment override %q is not allowed", k)
 		}
-		vals[k] = v
+		name := k
+		if cur, ok := vals[envKey(k)]; ok {
+			name = cur.name
+		}
+		vals[envKey(k)] = entry{name, v}
 	}
 	keys := make([]string, 0, len(vals))
-	for k := range vals {
-		keys = append(keys, k)
+	byName := make(map[string]string, len(vals))
+	for _, e := range vals {
+		keys = append(keys, e.name)
+		byName[e.name] = e.value
 	}
 	sort.Strings(keys)
 	env := make([]string, 0, len(keys))
 	for _, k := range keys {
-		env = append(env, k+"="+vals[k])
+		env = append(env, k+"="+byName[k])
 	}
 	return env, nil
 }

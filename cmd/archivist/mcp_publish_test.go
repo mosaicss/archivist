@@ -93,7 +93,7 @@ func newFakeArtifactAPI(t *testing.T) *fakeArtifactAPI {
 func newPublishSession(t *testing.T, baseURL, dir string, pub bool) (*mcp.ClientSession, int) {
 	t.Helper()
 	t.Setenv("ARCHIVIST_TOKEN", "")
-	t.Setenv("HOME", t.TempDir())
+	setHome(t, t.TempDir())
 	t.Setenv("ARCHIVIST_BASE_URL", baseURL)
 	tokenPath := filepath.Join(t.TempDir(), "task-token")
 	if err := os.WriteFile(tokenPath, []byte(testTaskToken+"\n"), 0o600); err != nil {
@@ -298,7 +298,7 @@ func TestMCPServePublishFlags(t *testing.T) {
 	run := func(args ...string) (int, string) {
 		c := exec.Command(bin, args...)
 		// A refused local port: the startup guidance fetch never leaves the host.
-		c.Env = append(os.Environ(), "HOME="+dir, "ARCHIVIST_TOKEN=", "ARCHIVIST_BASE_URL=http://127.0.0.1:1")
+		c.Env = append(os.Environ(), "HOME="+dir, "USERPROFILE="+dir, "ARCHIVIST_TOKEN=", "ARCHIVIST_BASE_URL=http://127.0.0.1:1")
 		c.Stdin = strings.NewReader("")
 		out, _ := c.CombinedOutput()
 		return c.ProcessState.ExitCode(), string(out)

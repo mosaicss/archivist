@@ -1,5 +1,3 @@
-//go:build !windows
-
 package connect
 
 import (
@@ -10,6 +8,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/mosaicss/archivist/internal/fsutil"
 )
 
 // Tests for the 78.16 review round: durability of handled ids, slot
@@ -218,7 +218,7 @@ func TestReviewRefreshRejectsMalformedAndTracksFailedRevoke(t *testing.T) {
 		}
 		return false
 	})
-	b, _ := os.ReadFile(filepath.Join(h.home, ".archivist", "connect", "run", sid, "task-token"))
+	b, _ := fsutil.ReadFile(filepath.Join(h.home, ".archivist", "connect", "run", sid, "task-token"))
 	if strings.Contains(string(b), "badtoken_") {
 		t.Fatal("malformed token reached the token file")
 	}

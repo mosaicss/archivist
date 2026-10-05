@@ -50,7 +50,7 @@ func (s *stubServer) last() string {
 // stdout, stderr and the exit code (0 on success, -1 on a non-typed error).
 func runVerb(t *testing.T, baseURL string, argv ...string) (stdout, stderr string, code int) {
 	t.Helper()
-	t.Setenv("HOME", t.TempDir())
+	setHome(t, t.TempDir())
 	t.Setenv("ARCHIVIST_TOKEN", "mc_pat_testtoken")
 	t.Setenv("ARCHIVIST_BASE_URL", baseURL)
 	root := NewRootCmd("0.2.22", "abc1234", "2026-10-01")
@@ -285,7 +285,7 @@ func TestSearchLastAllowedCallSucceeds(t *testing.T) {
 
 func TestSearchStdinQueryAndCursor(t *testing.T) {
 	srv := newStub(t, 200, nil, searchBody(t, []map[string]any{passageJSON(testChunkID, 1, testPermalink)}, false, nil, nil))
-	t.Setenv("HOME", t.TempDir())
+	setHome(t, t.TempDir())
 	t.Setenv("ARCHIVIST_TOKEN", "mc_pat_testtoken")
 	t.Setenv("ARCHIVIST_BASE_URL", srv.URL)
 	root := NewRootCmd("0.2.22", "x", "y")

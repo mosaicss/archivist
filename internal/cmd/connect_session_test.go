@@ -29,7 +29,7 @@ func writePrompt(t *testing.T, body string) string {
 // Session-bound mode flags (Story 78.22): all three together, a session
 // UUID, claude or codex, and a readable prompt within the relay limit.
 func TestConnectValidatesSessionFlags(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setHome(t, t.TempDir())
 	ok := writePrompt(t, "summarize the 10-K")
 	cases := map[string][]string{
 		"session only":      {"connect", "--session", testSessionID},
@@ -88,6 +88,7 @@ func fakeSessionAPI(t *testing.T, status int, body string) (*httptest.Server, fu
 // the session is checked with chat-api before any socket, and an unknown
 // session ends the run with no relay ticket minted.
 func TestConnectSessionModeChecksTheSessionFirst(t *testing.T) {
+	skipShellStubs(t)
 	dir := t.TempDir()
 	script := "#!/bin/sh\ncase \"$1\" in\n--version) echo 'codex-cli 0.160.0';;\n" +
 		"login) echo 'Not logged in' >&2; exit 1;;\n*) exit 2;;\nesac\n"
@@ -97,7 +98,7 @@ func TestConnectSessionModeChecksTheSessionFirst(t *testing.T) {
 	t.Setenv("PATH", dir)
 	t.Setenv("CODEX_HOME", filepath.Join(t.TempDir(), "codex-home")) // no auth.json yet
 	srv, calls := fakeSessionAPI(t, 404, `{"error":"Session not found.","code":"SESSION_NOT_FOUND"}`)
-	t.Setenv("HOME", t.TempDir())
+	setHome(t, t.TempDir())
 	t.Setenv("ARCHIVIST_TOKEN", "ak_00000000000000000000")
 	t.Setenv("ARCHIVIST_BASE_URL", srv.URL)
 	t.Setenv("ARCHIVIST_RELAY_URL", "ws://127.0.0.1:1")
@@ -117,6 +118,7 @@ func TestConnectSessionModeChecksTheSessionFirst(t *testing.T) {
 // The requested harness missing, or logged in with an API key, is refused
 // with its typed exit before any network call.
 func TestConnectSessionModeRefusesUnusableHarness(t *testing.T) {
+	skipShellStubs(t)
 	for name, tc := range map[string]struct {
 		script string
 		code   int
@@ -135,7 +137,7 @@ func TestConnectSessionModeRefusesUnusableHarness(t *testing.T) {
 			t.Setenv("PATH", dir)
 			t.Setenv("CODEX_HOME", t.TempDir())
 			srv, calls := fakeSessionAPI(t, 500, `{}`)
-			t.Setenv("HOME", t.TempDir())
+			setHome(t, t.TempDir())
 			t.Setenv("ARCHIVIST_TOKEN", "ak_00000000000000000000")
 			t.Setenv("ARCHIVIST_BASE_URL", srv.URL)
 			t.Setenv("ARCHIVIST_RELAY_URL", "ws://127.0.0.1:1")
@@ -154,6 +156,7 @@ func TestConnectSessionModeRefusesUnusableHarness(t *testing.T) {
 // daemon's own effective ceiling (Daemon.MaxMode), default full_auto in the
 // session-bound mode.
 func TestConnectMaxPermissionReachesTheDaemon(t *testing.T) {
+	skipShellStubs(t)
 	for _, tc := range []struct {
 		flags []string
 		want  string
@@ -170,7 +173,7 @@ func TestConnectMaxPermissionReachesTheDaemon(t *testing.T) {
 		t.Setenv("PATH", dir)
 		t.Setenv("CODEX_HOME", filepath.Join(t.TempDir(), "codex-home"))
 		srv, _ := fakeSessionAPI(t, 404, `{"error":"Session not found.","code":"SESSION_NOT_FOUND"}`)
-		t.Setenv("HOME", t.TempDir())
+		setHome(t, t.TempDir())
 		t.Setenv("ARCHIVIST_TOKEN", "ak_00000000000000000000")
 		t.Setenv("ARCHIVIST_BASE_URL", srv.URL)
 		t.Setenv("ARCHIVIST_RELAY_URL", "ws://127.0.0.1:1")
@@ -185,6 +188,7 @@ func TestConnectMaxPermissionReachesTheDaemon(t *testing.T) {
 // --web-search reaches the daemon (Story 78.33): on by default in the
 // session-bound mode (a Mosaic cloud sandbox), off with --web-search=false.
 func TestConnectWebSearchReachesTheDaemon(t *testing.T) {
+	skipShellStubs(t)
 	for _, tc := range []struct {
 		flags []string
 		want  string
@@ -218,6 +222,7 @@ func TestConnectWebSearchReachesTheDaemon(t *testing.T) {
 // (Story 78.37): a valid resume source passes flag validation and both are
 // logged before the session check.
 func TestConnectResumeAndActivityReachTheDaemon(t *testing.T) {
+	skipShellStubs(t)
 	dir := t.TempDir()
 	script := "#!/bin/sh\ncase \"$1\" in\n--version) echo 'codex-cli 0.160.0';;\n" +
 		"login) echo 'Not logged in' >&2; exit 1;;\n*) exit 2;;\nesac\n"

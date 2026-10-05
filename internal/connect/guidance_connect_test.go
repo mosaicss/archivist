@@ -38,7 +38,7 @@ func TestClaudeSpawnInjectsEmbeddedGuidanceWhenChatAPIFails(t *testing.T) {
 		t.Fatal("Claude did not read the embedded mosaic-ui full guidance")
 	}
 	st, err := os.Stat(path)
-	if err != nil || st.Mode().Perm() != 0o600 {
+	if err != nil || !modeIs(st.Mode(), 0o600) {
 		t.Fatalf("guidance file %v %v", st, err)
 	}
 	if !strings.Contains(h.log.String(), "research guidance embedded ("+want.Digest+"; live fetch: status 404)") {

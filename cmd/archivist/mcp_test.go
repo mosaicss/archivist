@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -578,7 +579,11 @@ func buildTestBinary(t *testing.T) string {
 			return
 		}
 		testBinDir = dir
-		testBinPath = filepath.Join(dir, "archivist-test-bin")
+		name := "archivist-test-bin"
+		if runtime.GOOS == "windows" {
+			name += ".exe" // Windows runs only .exe files (Story 78.34)
+		}
+		testBinPath = filepath.Join(dir, name)
 		build := exec.Command("go", "build", "-o", testBinPath, ".")
 		build.Dir = "."
 		if out, err := build.CombinedOutput(); err != nil {
@@ -618,7 +623,8 @@ func TestMCPServe_StdioSubprocess(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	cmdServe := exec.Command(bin, "mcp", "serve")
-	cmdServe.Env = append(os.Environ(), "ARCHIVIST_TOKEN=mc_pat_testtoken", "ARCHIVIST_BASE_URL="+srv.URL, "HOME="+t.TempDir())
+	home := t.TempDir()
+	cmdServe.Env = append(os.Environ(), "ARCHIVIST_TOKEN=mc_pat_testtoken", "ARCHIVIST_BASE_URL="+srv.URL, "HOME="+home, "USERPROFILE="+home)
 
 	client := mcp.NewClient(&mcp.Implementation{Name: "mcp-stdio-test", Version: "0.0.0"}, nil)
 	cs, err := client.Connect(context.Background(), &mcp.CommandTransport{Command: cmdServe}, nil)
@@ -667,7 +673,8 @@ func TestMCPServe_StdioRawToolsListJSON(t *testing.T) {
 
 	proc := exec.Command(bin, "mcp", "serve")
 	// A refused local port: the startup guidance fetch never leaves the host.
-	proc.Env = append(os.Environ(), "ARCHIVIST_TOKEN=mc_pat_testtoken", "HOME="+t.TempDir(), "ARCHIVIST_BASE_URL=http://127.0.0.1:1")
+	home := t.TempDir()
+	proc.Env = append(os.Environ(), "ARCHIVIST_TOKEN=mc_pat_testtoken", "HOME="+home, "USERPROFILE="+home, "ARCHIVIST_BASE_URL=http://127.0.0.1:1")
 	stdin, err := proc.StdinPipe()
 	if err != nil {
 		t.Fatal(err)

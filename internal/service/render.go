@@ -7,6 +7,7 @@ import (
 	"html"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"unicode"
 )
@@ -38,18 +39,30 @@ var absoluteOnly = map[string]bool{"CODEX_HOME": true, "CLAUDE_CONFIG_DIR": true
 // CaptureEnv picks the service environment from environ (os.Environ form):
 // PATH, HOME, LANG, LC_ALL, an absolute CODEX_HOME and CLAUDE_CONFIG_DIR,
 // and ARCHIVIST_BASE_URL and ARCHIVIST_RELAY_URL when set. Empty values and
-// values with control characters are dropped.
+// values with control characters are dropped. On Windows keys match
+// case-insensitively (Path is PATH there, Story 78.34).
 func CaptureEnv(environ []string) []EnvVar {
+	return captureEnv(environ, runtime.GOOS == "windows")
+}
+
+// captureEnv is CaptureEnv; fold matches keys case-insensitively.
+func captureEnv(environ []string, fold bool) []EnvVar {
+	norm := func(k string) string {
+		if fold {
+			return strings.ToUpper(k)
+		}
+		return k
+	}
 	vals := map[string]string{}
 	for _, kv := range environ {
 		k, v, ok := strings.Cut(kv, "=")
 		if ok {
-			vals[k] = v
+			vals[norm(k)] = v
 		}
 	}
 	var out []EnvVar
 	for _, k := range capturedKeys {
-		v, ok := vals[k]
+		v, ok := vals[norm(k)]
 		if !ok || v == "" || hasControl(v) {
 			continue
 		}
@@ -169,13 +182,24 @@ func xmlEscape(s string) string {
 	return buf.String()
 }
 
-// ServiceArgs returns the arguments after `connect --service` in a unit or
-// plist this package rendered (systemd ExecStart= or launchd
-// ProgramArguments), or nil when there are none or the file is not one of
+// ServiceArgs returns the arguments after `connect --service` in a unit,
+// plist or task XML this package rendered (systemd ExecStart=, launchd
+// ProgramArguments, or the task's Command and Arguments, read from its
+// UTF-16LE encoding), or nil when there are none or the file is not one of
 // ours.
 func ServiceArgs(content string) []string {
 	var argv []string
-	if strings.Contains(content, "<plist") {
+	if decoded, ok := decodeUTF16LE(content); ok {
+		content = decoded
+	}
+	if strings.Contains(content, "<Task ") {
+		command, ok1 := taskElement(content, "Command")
+		arguments, ok2 := taskElement(content, "Arguments")
+		if !ok1 || !ok2 {
+			return nil
+		}
+		argv = append([]string{command}, splitWindowsArgs(arguments)...)
+	} else if strings.Contains(content, "<plist") {
 		_, rest, ok := strings.Cut(content, "<key>ProgramArguments</key>")
 		if !ok {
 			return nil
@@ -202,6 +226,20 @@ func ServiceArgs(content string) []string {
 }
 
 var plistString = regexp.MustCompile(`<string>([^<]*)</string>`)
+
+// taskElement is the unescaped text of the first <name>...</name> in a task
+// XML.
+func taskElement(content, name string) (string, bool) {
+	_, rest, ok := strings.Cut(content, "<"+name+">")
+	if !ok {
+		return "", false
+	}
+	text, _, ok := strings.Cut(rest, "</"+name+">")
+	if !ok {
+		return "", false
+	}
+	return html.UnescapeString(text), true
+}
 
 // systemdSplit undoes RenderSystemdUnit's ExecStart= quoting: words split on
 // spaces, double quoted words with backslash escapes, %% and $$ halved.

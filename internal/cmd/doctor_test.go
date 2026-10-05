@@ -21,7 +21,7 @@ func makeDoctorRoot(t *testing.T, baseURL string) (*cobra.Command, *bytes.Buffer
 	t.Helper()
 	// Sandbox HOME: the credentials file rung (41.3) must never read the
 	// developer's real ~/.archivist/credentials in tests.
-	t.Setenv("HOME", t.TempDir())
+	setHome(t, t.TempDir())
 	root := cmd.NewRootCmd("0.4.2", "abc1234", "2026-05-20")
 	var buf bytes.Buffer
 	root.SetOut(&buf)
@@ -39,7 +39,7 @@ func makeDoctorRoot(t *testing.T, baseURL string) (*cobra.Command, *bytes.Buffer
 // makeDoctorRootWithSkill creates a root command with a valid matching skill file.
 func makeDoctorRootWithSkill(t *testing.T, baseURL string) (*cobra.Command, *bytes.Buffer) {
 	t.Helper()
-	t.Setenv("HOME", t.TempDir())
+	setHome(t, t.TempDir())
 	f, err := os.CreateTemp("", "SKILL-*.md")
 	if err != nil {
 		t.Fatalf("could not create temp skill file: %v", err)

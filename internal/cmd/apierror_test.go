@@ -256,7 +256,7 @@ func TestNoCredentialExit4(t *testing.T) {
 		{"usage"},
 	}
 	for _, argv := range cases {
-		t.Setenv("HOME", t.TempDir())
+		setHome(t, t.TempDir())
 		t.Setenv("ARCHIVIST_TOKEN", "")
 		t.Setenv("ARCHIVIST_BASE_URL", srv.URL)
 		root := NewRootCmd("0.2.22", "abc1234", "2026-10-01")

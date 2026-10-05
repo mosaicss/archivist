@@ -16,7 +16,7 @@ func TestVersionCommand(t *testing.T) {
 	// Isolate HOME: readSkillVersion reads ~/.claude/skills/archivist/SKILL.md,
 	// and a dev machine with the skill installed would append a skill line
 	// that breaks the expected output (39.10 finding).
-	t.Setenv("HOME", t.TempDir())
+	setHome(t, t.TempDir())
 	root := NewRootCmd("0.1.0-test", "abc1234", "2026-05-19")
 	root.SetArgs([]string{"version"})
 	out := &bytes.Buffer{}
@@ -36,7 +36,7 @@ func TestVersionCommandPattern(t *testing.T) {
 	// Isolate HOME: readSkillVersion reads ~/.claude/skills/archivist/SKILL.md,
 	// and a dev machine with the skill installed would append a skill line
 	// that breaks the expected output (39.10 finding).
-	t.Setenv("HOME", t.TempDir())
+	setHome(t, t.TempDir())
 	root := NewRootCmd("dev", "unknown", "unknown")
 	root.SetArgs([]string{"version"})
 	out := &bytes.Buffer{}

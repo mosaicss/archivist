@@ -15,6 +15,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/mosaicss/archivist/internal/client"
+	"github.com/mosaicss/archivist/internal/fsutil"
 	"github.com/mosaicss/archivist/internal/guidance"
 	"github.com/mosaicss/archivist/internal/mosaicevent"
 )
@@ -608,7 +609,7 @@ func (d *Daemon) revokeLeftoverToken(sessionID string) {
 	if !uuidRe.MatchString(sessionID) {
 		return
 	}
-	data, err := os.ReadFile(filepath.Join(d.store.Dir(), "run", sessionID, "task-token"))
+	data, err := fsutil.ReadFile(filepath.Join(d.store.Dir(), "run", sessionID, "task-token"))
 	if err != nil {
 		return
 	}

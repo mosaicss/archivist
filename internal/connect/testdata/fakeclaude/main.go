@@ -77,7 +77,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -191,6 +190,9 @@ func emit(v any) {
 }
 
 func main() {
+	if helperMode() {
+		return
+	}
 	args := os.Args[1:]
 	if len(args) == 1 && (args[0] == "--version" || args[0] == "-v") {
 		fmt.Println("2.1.280 (Claude Code)")
@@ -480,11 +482,10 @@ func (r *runner) turn(text string) bool {
 		// A detached grandchild whose parent exits at once and which exits
 		// itself shortly after: an orphan for the subreaper to reap.
 		pidFile := filepath.Join(base, "orphanexit.pid")
-		_ = exec.Command("sh", "-c", "setsid sleep 0.3 </dev/null >/dev/null 2>&1 & echo $! > "+pidFile).Run()
+		spawnOrphan(pidFile, "0.3")
 		r.say(0, "orphaned")
 	case "spawn":
-		c := exec.Command("sleep", "300")
-		c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		c := groupSleeper()
 		_ = c.Start()
 		_ = os.WriteFile(filepath.Join(base, "spawned.pid"), []byte(fmt.Sprint(c.Process.Pid)), 0o600)
 		r.say(0, "spawned")

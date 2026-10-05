@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -17,12 +19,12 @@ import (
 func sandboxAuthHome(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setHome(t, home)
 	return home
 }
 
 func credPath(home string) string {
-	return home + "/.archivist/credentials"
+	return filepath.Join(home, ".archivist", "credentials")
 }
 
 // serveCLITokens returns an httptest server mocking GET /account/cli-tokens
@@ -111,7 +113,7 @@ func TestAuthLoginWithTokenSavesCredential(t *testing.T) {
 		t.Errorf("file content: got %q, want token plus newline", string(data))
 	}
 	fi, _ := os.Stat(credPath(home))
-	if fi.Mode().Perm() != 0o600 {
+	if runtime.GOOS != "windows" && fi.Mode().Perm() != 0o600 {
 		t.Errorf("file mode: got %o, want 0600", fi.Mode().Perm())
 	}
 
@@ -287,8 +289,10 @@ func TestAuthStatusShowsSourceFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(output, "source: file (~/.archivist/credentials)") {
-		t.Errorf("expected 'source: file (~/.archivist/credentials)' in output, got:\n%s", output)
+	// The path uses the platform separator (~\.archivist\credentials on Windows).
+	want := "source: file (" + filepath.Join("~", ".archivist", "credentials") + ")"
+	if !strings.Contains(output, want) {
+		t.Errorf("expected %q in output, got:\n%s", want, output)
 	}
 }
 

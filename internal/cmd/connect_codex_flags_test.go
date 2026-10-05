@@ -14,7 +14,7 @@ import (
 )
 
 func TestConnectValidatesCodexFlags(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setHome(t, t.TempDir())
 	for _, args := range [][]string{
 		{"connect", "--codex-effort", "turbo"},
 		{"connect", "--codex-model", "-x="},
@@ -37,6 +37,7 @@ func TestConnectStartsWithCodexOnly(t *testing.T) { runCodexStartup(t, false) }
 func TestConnectWarnsAboutUnusableHarness(t *testing.T) { runCodexStartup(t, true) }
 
 func runCodexStartup(t *testing.T, brokenClaude bool) {
+	skipShellStubs(t)
 	dir := t.TempDir()
 	script := "#!/bin/sh\ncase \"$1\" in\n--version) echo 'codex-cli 0.160.0';;\n" +
 		"login) echo 'Logged in using ChatGPT' >&2;;\n*) exit 2;;\nesac\n"
@@ -67,7 +68,7 @@ func runCodexStartup(t *testing.T, brokenClaude bool) {
 		_, _ = w.Write([]byte(`{"error":"The requested endpoint does not exist.","code":"FEATURE_DISABLED"}`))
 	}))
 	defer srv.Close()
-	t.Setenv("HOME", t.TempDir())
+	setHome(t, t.TempDir())
 	t.Setenv("ARCHIVIST_TOKEN", "ak_00000000000000000000")
 	t.Setenv("ARCHIVIST_BASE_URL", srv.URL)
 	t.Setenv("ARCHIVIST_RELAY_URL", "ws://127.0.0.1:1")

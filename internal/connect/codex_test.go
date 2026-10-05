@@ -1,5 +1,3 @@
-//go:build !windows
-
 package connect
 
 import (
@@ -9,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -85,6 +84,8 @@ type codexRunRecord struct {
 	EnvKeys   []string `json:"envKeys"`
 	CodexHome string   `json:"codexHome"`
 	TmpDir    string   `json:"tmpdir"`
+	Temp      string   `json:"temp"`
+	Tmp       string   `json:"tmp"`
 	Cwd       string   `json:"cwd"`
 	PID       int      `json:"pid"`
 }
@@ -211,10 +212,11 @@ func TestCodexCapabilitiesReportUsable(t *testing.T) {
 			t.Errorf("%s: capabilities %+v", name, caps)
 		}
 	}
-	if got := OwnerCodexHome([]string{"CODEX_HOME=relative"}, "/home/u"); got != "/home/u/.codex" {
+	if got := OwnerCodexHome([]string{"CODEX_HOME=relative"}, "/home/u"); got != filepath.Join("/home/u", ".codex") {
 		t.Errorf("relative CODEX_HOME: %s", got)
 	}
-	if got := OwnerCodexHome([]string{"CODEX_HOME=/srv/codex/"}, "/home/u"); got != "/srv/codex" {
+	abs := t.TempDir() // absolute on every platform
+	if got := OwnerCodexHome([]string{"CODEX_HOME=" + abs + string(filepath.Separator)}, "/home/u"); got != abs {
 		t.Errorf("absolute CODEX_HOME: %s", got)
 	}
 }
@@ -234,18 +236,21 @@ func TestCodexArgsAreFixed(t *testing.T) {
 		set[k] = v
 	}
 	want := map[string]string{
-		"forced_login_method":                    `"chatgpt"`,
-		"cli_auth_credentials_store":             `"file"`,
-		"model_provider":                         `"openai"`,
-		"features.apps":                          "false",
-		"features.plugins":                       "false",
-		"features.hooks":                         "false",
-		"features.memories":                      "false",
-		"notify":                                 "[]",
-		"web_search":                             `"disabled"`,
-		"history.persistence":                    `"none"`,
-		"shell_environment_policy.inherit":       `"core"`,
-		"shell_environment_policy.include_only":  `["PATH","HOME","USER","LOGNAME","SHELL","LANG","LC_*","TERM","TMPDIR","TZ","NODE_EXTRA_CA_CERTS","SSL_CERT_FILE","SSL_CERT_DIR","CURL_CA_BUNDLE","GIT_SSL_CAINFO","REQUESTS_CA_BUNDLE"]`,
+		"forced_login_method":              `"chatgpt"`,
+		"cli_auth_credentials_store":       `"file"`,
+		"model_provider":                   `"openai"`,
+		"features.apps":                    "false",
+		"features.plugins":                 "false",
+		"features.hooks":                   "false",
+		"features.memories":                "false",
+		"notify":                           "[]",
+		"web_search":                       `"disabled"`,
+		"history.persistence":              `"none"`,
+		"shell_environment_policy.inherit": `"core"`,
+		// Windows appends its core keys (Story 78.34); nothing elsewhere.
+		"shell_environment_policy.include_only": tomlValue(append([]string{"PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "LC_*",
+			"TERM", "TMPDIR", "TZ", "NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE", "SSL_CERT_DIR", "CURL_CA_BUNDLE", "GIT_SSL_CAINFO",
+			"REQUESTS_CA_BUNDLE"}, platformAllowKeys...)),
 		"sandbox_workspace_write.writable_roots": "[]",
 		"sandbox_workspace_write.network_access": "false",
 		"project_root_markers":                   "[]",
@@ -445,7 +450,11 @@ func TestCodexSessionLifecycle(t *testing.T) {
 	if run.TmpDir != filepath.Join(rec.Cwd, ".tmp") {
 		t.Fatalf("TMPDIR %q", run.TmpDir)
 	}
-	if st, err := os.Stat(run.TmpDir); err != nil || st.Mode().Perm() != 0o700 {
+	// Windows programs read TEMP and TMP: they point there too (78.34).
+	if runtime.GOOS == "windows" && (run.Temp != run.TmpDir || run.Tmp != run.TmpDir) {
+		t.Fatalf("TEMP %q TMP %q, want %q", run.Temp, run.Tmp, run.TmpDir)
+	}
+	if st, err := os.Stat(run.TmpDir); err != nil || !modeIs(st.Mode(), 0o700) {
 		t.Fatalf("session temp dir %v %v", st, err)
 	}
 	for _, kv := range []string{"sandbox_workspace_write.exclude_slash_tmp=true", "sandbox_workspace_write.exclude_tmpdir_env_var=true"} {
@@ -455,11 +464,11 @@ func TestCodexSessionLifecycle(t *testing.T) {
 	}
 	// Session home: 0700 with auth.json linked (never copied) to the owner's.
 	st, err := os.Stat(sessionHome)
-	if err != nil || st.Mode().Perm() != 0o700 {
+	if err != nil || !modeIs(st.Mode(), 0o700) {
 		t.Fatalf("session home %v %v", st, err)
 	}
-	if target, err := os.Readlink(filepath.Join(sessionHome, "auth.json")); err != nil || target != filepath.Join(h.codexOwner(), "auth.json") {
-		t.Fatalf("auth.json link %q %v", target, err)
+	if err := linkedToOwner(filepath.Join(sessionHome, "auth.json"), filepath.Join(h.codexOwner(), "auth.json")); err != nil {
+		t.Fatalf("auth.json link: %v", err)
 	}
 	// thread/start: default model passed explicitly, effort in config, untrusted policy.
 	var params map[string]any
@@ -497,7 +506,9 @@ func TestCodexSessionLifecycle(t *testing.T) {
 		t.Fatalf("usage turn reported inputTokens %v, want the last report (20)", got)
 	}
 
-	// Stop: completed, home, cwd and token gone, no process left.
+	// Stop: completed, home, cwd and token gone, no process left. The
+	// daemon removes the session's files before it reports completed, so
+	// the checks below follow from the status, not from timing.
 	h.command(sid, "stop_session")
 	h.relay.waitStatus(t, sid, "completed", 1)
 	waitFor(t, 15*time.Second, "codex stopped", func() bool { return gone(run.PID) })
@@ -1091,15 +1102,23 @@ func TestCodexResumeEdgeRows(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The auth link replaced by a regular file: fail closed.
+	// The auth link replaced by a regular file: fail closed (Unix); on
+	// Windows the hard link is replaced and the owner's login wins (78.34).
 	link := filepath.Join(home, "auth.json")
 	_ = os.Remove(link)
 	_ = os.WriteFile(link, []byte(`{"copy":true}`), 0o600)
 	h.start()
 	h.message(sid, "echo four")
-	h.relay.waitStatus(t, sid, "failed", 2)
-	if errs := h.errorTexts(sid); !strings.Contains(errs[len(errs)-1], "not a link to the owner's login") {
-		t.Fatalf("errors %v", errs)
+	if runtime.GOOS == "windows" {
+		waitFor(t, 20*time.Second, "resumed after relink", func() bool { return strings.Contains(h.relay.text(sid), "four") })
+		if err := linkedToOwner(link, ownerAuth); err != nil {
+			t.Fatalf("not relinked: %v", err)
+		}
+	} else {
+		h.relay.waitStatus(t, sid, "failed", 2)
+		if errs := h.errorTexts(sid); !strings.Contains(errs[len(errs)-1], "not a link to the owner's login") {
+			t.Fatalf("errors %v", errs)
+		}
 	}
 	if err := h.stop(); err != nil {
 		t.Fatal(err)

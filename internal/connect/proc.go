@@ -46,6 +46,10 @@ type Proc struct {
 
 	trackMu sync.Mutex
 	tracked map[procID]bool // every descendant seen (snapshots), for the stop sweep
+
+	// tree contains the child's process tree where the platform can (the
+	// Windows job, Story 78.34); on Unix the process group does that.
+	tree procTree
 }
 
 // procRegistry holds the live harness children. A child is registered under
@@ -68,6 +72,7 @@ func StartProc(spec ProcSpec) (*Proc, error) {
 	if err := setProcessGroup(cmd); err != nil {
 		return nil, err
 	}
+	hideWindow(cmd)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -85,8 +90,15 @@ func StartProc(spec ProcSpec) (*Proc, error) {
 		procRegistry.mu.Unlock()
 		return nil, err
 	}
+	tree, err := attachProc(cmd)
+	if err != nil {
+		// The child was killed before it ran; reap it and close the pipes.
+		procRegistry.mu.Unlock()
+		_ = cmd.Wait()
+		return nil, err
+	}
 	p := &Proc{cmd: cmd, stdin: stdin, log: spec.Log, lines: make(chan []byte, 64),
-		quit: make(chan struct{}), done: make(chan struct{}), tracked: map[procID]bool{}}
+		quit: make(chan struct{}), done: make(chan struct{}), tracked: map[procID]bool{}, tree: tree}
 	procRegistry.live[cmd.Process.Pid] = p
 	procRegistry.mu.Unlock()
 
@@ -133,7 +145,7 @@ func StartProc(spec ProcSpec) (*Proc, error) {
 			// Snapshot first: descendants in other groups could keep the pipe
 			// open (Done would never close) and are reparented after the kill.
 			tracked := descendants(p.PID())
-			signalGroup(p.PID(), sigKill)
+			p.tree.signal(p.PID(), sigKill)
 			for _, id := range tracked {
 				killPID(id)
 			}
@@ -143,6 +155,8 @@ func StartProc(spec ProcSpec) (*Proc, error) {
 	go func() {
 		drain.Wait()
 		err := cmd.Wait()
+		// Whatever is left of the tree ends with the child (Windows job).
+		p.tree.release()
 		procRegistry.mu.Lock()
 		delete(procRegistry.live, cmd.Process.Pid)
 		procRegistry.mu.Unlock()
@@ -221,34 +235,12 @@ func (p *Proc) prune() {
 	}
 }
 
-// ownsGroup reports whether pgid is p's group or the group of a process p
-// tracked (a detached command that made itself a group leader).
-func (p *Proc) ownsGroup(pgid int) bool {
-	if pgid == p.PID() {
-		return true
-	}
-	p.trackMu.Lock()
-	defer p.trackMu.Unlock()
-	for id := range p.tracked {
-		if id.pid == pgid {
-			return true
-		}
-	}
-	return false
-}
-
 func (p *Proc) track(ids []procID) {
 	p.trackMu.Lock()
 	defer p.trackMu.Unlock()
 	for _, id := range ids {
 		p.tracked[id] = true
 	}
-}
-
-func (p *Proc) isTracked(id procID) bool {
-	p.trackMu.Lock()
-	defer p.trackMu.Unlock()
-	return p.tracked[id]
 }
 
 func (p *Proc) trackedIDs() []procID {
@@ -295,15 +287,15 @@ func (p *Proc) killGroup(tracked []procID) {
 	p.track(tracked)
 	p.prune()
 	tracked = p.trackedIDs()
-	if groupAlive(pgid) {
-		signalGroup(pgid, sigTerm)
+	if p.tree.alive(pgid) {
+		p.tree.signal(pgid, sigTerm)
 		select {
 		case <-p.done:
 		case <-time.After(3 * time.Second):
 		}
 	}
-	if groupAlive(pgid) {
-		signalGroup(pgid, sigKill)
+	if p.tree.alive(pgid) {
+		p.tree.signal(pgid, sigKill)
 	}
 	for _, id := range tracked {
 		killPID(id)

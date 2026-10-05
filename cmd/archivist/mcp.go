@@ -14,7 +14,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -26,6 +25,7 @@ import (
 	"github.com/mosaicss/archivist/internal/auth"
 	"github.com/mosaicss/archivist/internal/client"
 	"github.com/mosaicss/archivist/internal/cmd"
+	"github.com/mosaicss/archivist/internal/fsutil"
 	"github.com/mosaicss/archivist/internal/guidance"
 	"github.com/mosaicss/archivist/internal/taskscope"
 	"github.com/spf13/cobra"
@@ -411,7 +411,7 @@ func staticToken(token string) tokenSource {
 // (surrounding whitespace ignored) in a valid format.
 func fileToken(path string) tokenSource {
 	return func() (string, error) {
-		data, err := os.ReadFile(path)
+		data, err := fsutil.ReadFile(path)
 		if err != nil {
 			return "", fmt.Errorf("read token file: %w", err)
 		}

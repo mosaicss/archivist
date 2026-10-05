@@ -16,7 +16,7 @@ import (
 func sandboxHome(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setHome(t, home)
 	return home
 }
 
@@ -212,14 +212,14 @@ func TestSaveTokenWritesFileWithModes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat: %v", err)
 	}
-	if fi.Mode().Perm() != 0o600 {
+	if runtimeHasUnixModes() && fi.Mode().Perm() != 0o600 {
 		t.Errorf("file mode: got %o, want 0600", fi.Mode().Perm())
 	}
 	di, err := os.Stat(filepath.Dir(path))
 	if err != nil {
 		t.Fatalf("stat dir: %v", err)
 	}
-	if di.Mode().Perm() != 0o700 {
+	if runtimeHasUnixModes() && di.Mode().Perm() != 0o700 {
 		t.Errorf("dir mode: got %o, want 0700", di.Mode().Perm())
 	}
 
@@ -313,7 +313,7 @@ func TestSaveTokenKeepsSymlink(t *testing.T) {
 	if string(b) != "ak_linkedtoken\n" {
 		t.Fatalf("target content %q", b)
 	}
-	if ti, _ := os.Stat(target); ti.Mode().Perm() != 0o600 {
+	if ti, _ := os.Stat(target); runtimeHasUnixModes() && ti.Mode().Perm() != 0o600 {
 		t.Fatalf("target mode %v", ti.Mode().Perm())
 	}
 	entries, _ := os.ReadDir(dotfiles)
@@ -531,7 +531,7 @@ func TestSaveTokenCreatesBrokenSymlinkTarget(t *testing.T) {
 		if err != nil || string(b) != "ak_brokenlinktoken\n" {
 			t.Fatalf("relative=%v target content %q %v", relative, b, err)
 		}
-		if ti, _ := os.Stat(target); ti.Mode().Perm() != 0o600 {
+		if ti, _ := os.Stat(target); runtimeHasUnixModes() && ti.Mode().Perm() != 0o600 {
 			t.Fatalf("relative=%v target mode %v", relative, ti.Mode().Perm())
 		}
 		if got, err := auth.SavedToken(); err != nil || got != "ak_brokenlinktoken" {
