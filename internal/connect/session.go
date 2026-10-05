@@ -118,6 +118,7 @@ type session struct {
 	idleSince, approvalSince int64
 	actIdle, actApproval     int64
 	actWritten, actFailed    bool
+	actLogin                 string // the login last written (Story 78.38)
 
 	// Resume of an earlier sandbox session (Story 78.37, resume.go):
 	// resuming arms the fresh start fallback until the first spawn's
@@ -129,13 +130,28 @@ type session struct {
 	resumeTexts []string
 	note        string
 
+	// Sandbox sign in methods (Story 78.38, signin.go): the Claude login
+	// this session runs on and, in API key mode only, the key from the sign
+	// in request file (never logged); signinSeen holds the request ids
+	// already acted on.
+	login      ClaudeLogin
+	apiKey     string
+	signinSeen map[string]bool
+	signinBad  time.Time // modification time of the last invalid request file
+	// statusKeySource is the apiKeySource the last spawn's claude auth
+	// status proof reported (the Console login's init must match it).
+	statusKeySource string
+	// loginProved is set once a Claude spawn's login proof passed: the
+	// activity file then names the login.
+	loginProved bool
+
 	linkErr chan error
 	done    chan struct{}
 }
 
 func newSession(d *Daemon, rec *SessionRecord) *session {
 	log := d.log.With("session " + rec.SessionID[:8])
-	s := &session{d: d, id: rec.SessionID, rec: rec, log: log,
+	s := &session{d: d, id: rec.SessionID, rec: rec, log: log, login: d.claude.Login,
 		cmds: make(chan sessionCmd, 64), pending: map[string]*pendingApproval{},
 		remember: map[string]bool{}, modeReqs: map[string]Mode{}, linkErr: make(chan error, 1), done: make(chan struct{}),
 		art: newArtifactTracker(d.chatAPIURL), parkReq: make(chan chan bool), lastActive: time.Now()}
@@ -383,15 +399,18 @@ func (s *session) spawn(ctx context.Context, resumeID string) (err error) {
 	if err != nil {
 		return err
 	}
-	env = ClaudeSessionEnv(env)
+	if env, err = s.claudeEnv(ClaudeSessionEnv(env)); err != nil {
+		return &proofError{err.Error()}
+	}
 	cfg := s.claudeLaunchConfig()
 	st, err := ClaudeAuthStatus(ctx, s.d.runner, env, s.rec.Cwd, cfg.Bin)
 	if err != nil {
 		return &proofError{"claude auth status failed: " + err.Error()}
 	}
-	if !st.Subscription() {
-		return &proofError{fmt.Sprintf("Claude Code is not logged in with a claude.ai subscription (loggedIn=%v, authMethod=%q)", st.LoggedIn, st.AuthMethod)}
+	if problem := st.LoginProblem(s.d.sandbox, s.claudeLogin()); problem != "" {
+		return &proofError{problem}
 	}
+	s.statusKeySource, s.loginProved = st.APIKeySource, true
 	guidanceFile, err := s.writeGuidance(g.Body)
 	if err != nil {
 		return fmt.Errorf("research guidance: %w", err)
@@ -722,8 +741,12 @@ func (s *session) handleLine(line []byte) {
 	}
 	switch {
 	case f.Type == "system" && f.Subtype == "init":
-		if problem := initProblem(f, s.claudeExpectedModes()); problem != "" {
-			s.failProof("Claude Code did not start on the subscription login: " + problem)
+		if problem := initLoginProblem(f, s.claudeExpectedModes(), s.claudeLogin(), s.statusKeySource); problem != "" {
+			what := "the subscription login"
+			if login := s.claudeLogin(); login != ClaudeLoginSubscription {
+				what = "the " + login.String() + " login"
+			}
+			s.failProof("Claude Code did not start on " + what + ": " + problem)
 			return
 		}
 		// Story 78.33: the tools Claude reports must match the launch.
@@ -746,8 +769,8 @@ func (s *session) handleLine(line []byte) {
 		if !s.running {
 			s.running = true
 			s.resumeProved()
-			s.log.Printf("init ok: claude %s, model %s, apiKeySource none, permissionMode %s, tools %v, mcp %s, plugins %s",
-				f.Version, f.Model, f.PermissionMode, f.Tools, string(f.MCPServers), string(f.Plugins))
+			s.log.Printf("init ok: claude %s, model %s, %s login, apiKeySource %s, permissionMode %s, tools %v, mcp %s, plugins %s",
+				f.Version, f.Model, s.claudeLogin(), Scrub(truncateString(f.APIKeySource, 100)), f.PermissionMode, f.Tools, string(f.MCPServers), string(f.Plugins))
 			s.emitStatus("running", "")
 			s.emitControls()
 			s.emit(s.held...)

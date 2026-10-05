@@ -60,13 +60,30 @@
 // "loginAuthMethod" (default claude.ai) and exits 0; any other code exits 1.
 // "loginNoURL" exits 1 without a link; "loginEnter" waits for Enter after
 // "Login successful". Each login records its environment keys in
-// $HOME/.fakeclaude/login.json.
+// $HOME/.fakeclaude/login.json (and appends it to logins.jsonl).
+// "loginLoggedOut" leaves the login logged out after a good code.
+//
+// `auth login --console` (Story 78.38) imitates Claude Code 2.1.289's
+// Console sign-in: the same terminal flow with a platform.claude.com link;
+// a good code records a login with "consoleAuthMethod" (default api_key)
+// and apiKeySource "/login managed key" (the init frame reports it).
+//
+// ANTHROPIC_API_KEY in the environment wins over any stored login, as in
+// Claude Code: auth status reports {loggedIn: true, authMethod: api_key,
+// apiKeySource: ANTHROPIC_API_KEY} and the init frame apiKeySource
+// ANTHROPIC_API_KEY. Neither run nor status ever prints the key: each -p run
+// records only "apiKeyFingerprint" (hex sha256 of the value), and each
+// status call appends {"apiKeyFingerprint"} to statuses.jsonl.
+// "statusIgnoresKey" makes auth status report the stored login even with
+// the key set (an API key proof that must fail). Each login records its pid.
 package main
 
 import (
 	"bufio"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -94,9 +111,13 @@ type config struct {
 	LoginAuthMethod string `json:"loginAuthMethod"`
 	LoginNoURL      bool   `json:"loginNoURL"`
 	LoginEnter      bool   `json:"loginEnter"`
-	SetModeError    bool   `json:"setModeError"`
-	SetModeHang     bool   `json:"setModeHang"`
-	SetModeSilent   bool   `json:"setModeSilent"`
+	LoginLoggedOut  bool   `json:"loginLoggedOut"`
+	// ConsoleAuthMethod is the authMethod a Console login records.
+	ConsoleAuthMethod string `json:"consoleAuthMethod"`
+	StatusIgnoresKey  bool   `json:"statusIgnoresKey"`
+	SetModeError      bool   `json:"setModeError"`
+	SetModeHang       bool   `json:"setModeHang"`
+	SetModeSilent     bool   `json:"setModeSilent"`
 	// ExtraInitTools and DropInitTools edit the init frame's tools (Story 78.33).
 	ExtraInitTools []string `json:"extraInitTools"`
 	DropInitTools  []string `json:"dropInitTools"`
@@ -199,9 +220,22 @@ func main() {
 		return
 	}
 	if len(args) >= 2 && args[0] == "auth" && args[1] == "status" {
-		b, _ := json.Marshal(map[string]any{"loggedIn": cfg.LoggedIn, "authMethod": cfg.AuthMethod,
-			"apiProvider": "firstParty", "subscriptionType": "max"})
+		st := map[string]any{"loggedIn": cfg.LoggedIn, "authMethod": cfg.AuthMethod,
+			"apiProvider": "firstParty", "subscriptionType": "max"}
+		if cfg.APIKeySource != "" && cfg.APIKeySource != "none" {
+			st["apiKeySource"] = cfg.APIKeySource
+		}
+		fp := apiKeyFingerprint()
+		if fp != "" && !cfg.StatusIgnoresKey {
+			st = map[string]any{"loggedIn": true, "authMethod": "api_key", "apiProvider": "firstParty",
+				"apiKeySource": "ANTHROPIC_API_KEY"}
+		}
+		appendJSON("statuses.jsonl", map[string]any{"apiKeyFingerprint": fp})
+		b, _ := json.Marshal(st)
 		fmt.Println(string(b))
+		if st["loggedIn"] != true {
+			os.Exit(1)
+		}
 		return
 	}
 	if len(args) >= 2 && args[0] == "auth" && args[1] == "login" {
@@ -376,7 +410,7 @@ func record(args []string, flags map[string]string) {
 	}
 	sort.Strings(keys)
 	cwd, _ := os.Getwd()
-	run := map[string]any{"args": args, "envKeys": keys, "cwd": cwd, "pid": os.Getpid()}
+	run := map[string]any{"args": args, "envKeys": keys, "cwd": cwd, "pid": os.Getpid(), "apiKeyFingerprint": apiKeyFingerprint()}
 	// Story 78.31: the appended system prompt file's content, as Claude reads it.
 	if path, ok := flags["--append-system-prompt-file"]; ok {
 		b, err := os.ReadFile(path)
@@ -435,8 +469,12 @@ func (r *runner) initFrame() {
 	if cfg.PermissionMode != "" {
 		reported = cfg.PermissionMode
 	}
+	keySource := cfg.APIKeySource
+	if apiKeyFingerprint() != "" {
+		keySource = "ANTHROPIC_API_KEY"
+	}
 	emit(map[string]any{"type": "system", "subtype": "init", "session_id": session, "cwd": mustCwd(),
-		"apiKeySource": cfg.APIKeySource, "permissionMode": reported, "tools": tools,
+		"apiKeySource": keySource, "permissionMode": reported, "tools": tools,
 		"mcp_servers": servers, "plugins": []any{}, "claude_code_version": "2.1.280", "model": "fake-model"})
 }
 
@@ -798,7 +836,31 @@ func (r *runner) callMCP() {
 const loginURL = "https://claude.com/cai/oauth/authorize?code=true&client_id=fake&response_type=code" +
 	"&redirect_uri=https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback&scope=user%3Ainference&state=fakestate"
 
-// login imitates `claude auth login --claudeai` on a terminal.
+const consoleLoginURL = "https://platform.claude.com/oauth/authorize?code=true&client_id=fake&response_type=code" +
+	"&redirect_uri=https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback&scope=org%3Acreate_api_key+user%3Ainference&state=fakestate"
+
+// apiKeyFingerprint is the hex sha256 of ANTHROPIC_API_KEY ("" when unset):
+// tests compare it, the key itself is never printed or stored.
+func apiKeyFingerprint() string {
+	v, ok := os.LookupEnv("ANTHROPIC_API_KEY")
+	if !ok {
+		return ""
+	}
+	h := sha256.Sum256([]byte(v))
+	return hex.EncodeToString(h[:])
+}
+
+// appendJSON appends one JSON line to a file under $HOME/.fakeclaude.
+func appendJSON(name string, v any) {
+	_ = os.MkdirAll(base, 0o700)
+	if fh, err := os.OpenFile(filepath.Join(base, name), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600); err == nil {
+		b, _ := json.Marshal(v)
+		_, _ = fh.Write(append(b, '\n'))
+		_ = fh.Close()
+	}
+}
+
+// login imitates `claude auth login --claudeai` (or --console) on a terminal.
 func login(args []string) {
 	var keys []string
 	for _, kv := range os.Environ() {
@@ -807,11 +869,18 @@ func login(args []string) {
 	}
 	sort.Strings(keys)
 	_ = os.MkdirAll(base, 0o700)
-	rec, _ := json.Marshal(map[string]any{"args": args, "envKeys": keys, "tty": term.IsTerminal(int(os.Stdin.Fd()))})
+	entry := map[string]any{"args": args, "envKeys": keys, "tty": term.IsTerminal(int(os.Stdin.Fd())), "pid": os.Getpid()}
+	rec, _ := json.Marshal(entry)
 	_ = os.WriteFile(filepath.Join(base, "login.json"), rec, 0o600)
-	if len(args) != 1 || args[0] != "--claudeai" {
-		fmt.Fprintln(os.Stderr, "fakeclaude: auth login needs exactly --claudeai")
+	appendJSON("logins.jsonl", entry)
+	if len(args) != 1 || (args[0] != "--claudeai" && args[0] != "--console") {
+		fmt.Fprintln(os.Stderr, "fakeclaude: auth login needs exactly --claudeai or --console")
 		os.Exit(2)
+	}
+	console := args[0] == "--console"
+	link := loginURL
+	if console {
+		link = consoleLoginURL
 	}
 	if !term.IsTerminal(int(os.Stdin.Fd())) || !term.IsTerminal(int(os.Stdout.Fd())) {
 		fmt.Fprintln(os.Stderr, "fakeclaude: auth login needs a terminal")
@@ -821,8 +890,8 @@ func login(args []string) {
 		fmt.Print("Something went wrong\r\n")
 		os.Exit(1)
 	}
-	fmt.Print("Opening browser to sign in\u2026\r\nIf the browser didn't open, visit: \x1b]8;;" + loginURL + "\x07\x1b[94m" +
-		loginURL + "\x1b[39m\x1b]8;;\x07\r\nPaste code here if prompted > ")
+	fmt.Print("Opening browser to sign in\u2026\r\nIf the browser didn't open, visit: \x1b]8;;" + link + "\x07\x1b[94m" +
+		link + "\x1b[39m\x1b]8;;\x07\r\nPaste code here if prompted > ")
 	in := bufio.NewReader(os.Stdin)
 	line, err := in.ReadString('\n')
 	if err != nil {
@@ -841,7 +910,14 @@ func login(args []string) {
 		method = "claude.ai"
 	}
 	c := loadConfig()
-	c.LoggedIn, c.AuthMethod = true, method
+	if console {
+		method = cfg.ConsoleAuthMethod
+		if method == "" {
+			method = "api_key"
+		}
+		c.APIKeySource = "/login managed key"
+	}
+	c.LoggedIn, c.AuthMethod = !cfg.LoginLoggedOut, method
 	b, _ := json.Marshal(c)
 	_ = os.WriteFile(filepath.Join(base, "config.json"), b, 0o600)
 	fmt.Print("\r\nLogin successful.\r\n")

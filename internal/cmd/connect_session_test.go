@@ -247,3 +247,70 @@ func TestConnectResumeAndActivityReachTheDaemon(t *testing.T) {
 		t.Fatalf("output lacks %q:\n%s", want, out)
 	}
 }
+
+// consoleClaude puts a shell `claude` logged in with a Console created key
+// (Claude Code 2.1.289's auth status shape) first on PATH.
+func consoleClaude(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	script := "#!/bin/sh\ncase \"$1\" in\n--version) echo '2.1.289 (Claude Code)';;\n" +
+		"auth) echo '{\"loggedIn\":true,\"authMethod\":\"api_key\",\"apiProvider\":\"firstParty\",\"apiKeySource\":\"/login managed key\"}';;\n" +
+		"*) exit 2;;\nesac\n"
+	if err := os.WriteFile(filepath.Join(dir, "claude"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+}
+
+// Story 78.38: in the session-bound sandbox mode Claude Code logged in with
+// a Console login (a remembered sign in) is used, not refused, and
+// ARCHIVIST_SIGNIN_FILE reaches the daemon; the session check then runs as
+// usual (here: an unknown session, exit 1).
+func TestConnectSessionModeAcceptsConsoleLogin(t *testing.T) {
+	skipShellStubs(t)
+	consoleClaude(t)
+	srv, calls := fakeSessionAPI(t, 404, `{"error":"Session not found.","code":"SESSION_NOT_FOUND"}`)
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("ARCHIVIST_TOKEN", "ak_00000000000000000000")
+	t.Setenv("ARCHIVIST_BASE_URL", srv.URL)
+	t.Setenv("ARCHIVIST_RELAY_URL", "ws://127.0.0.1:1")
+	signin := filepath.Join(t.TempDir(), "signin.json")
+	t.Setenv("ARCHIVIST_SIGNIN_FILE", signin)
+	out, err := runAuthCmd(t, "connect", "--session", testSessionID, "--agent", "claude", "--prompt-file", writePrompt(t, "hi"))
+	if code := exitCodeFrom(err); code != cmd.ExitGenericError {
+		t.Fatalf("exit %d, want 1 (unknown session)\n%s", code, out)
+	}
+	for _, want := range []string{"agent claude (logged in, console login)", "sign in request file " + signin + ".", "does not know this session"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output lacks %q:\n%s", want, out)
+		}
+	}
+	if got := calls(); len(got) != 1 || got[0] != "GET /agent-sessions/"+testSessionID {
+		t.Fatalf("chat-api calls %v", got)
+	}
+}
+
+// The local daemon keeps its claude.ai only gate: the same Console login
+// (or an API key login) is refused before any network call, and
+// ARCHIVIST_SIGNIN_FILE changes nothing.
+func TestConnectLocalModeRefusesConsoleLogin(t *testing.T) {
+	skipShellStubs(t)
+	consoleClaude(t)
+	srv, calls := fakeSessionAPI(t, 500, `{}`)
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("CODEX_HOME", t.TempDir())
+	t.Setenv("ARCHIVIST_TOKEN", "ak_00000000000000000000")
+	t.Setenv("ARCHIVIST_BASE_URL", srv.URL)
+	t.Setenv("ARCHIVIST_RELAY_URL", "ws://127.0.0.1:1")
+	t.Setenv("ARCHIVIST_SIGNIN_FILE", filepath.Join(t.TempDir(), "signin.json"))
+	out, err := runAuthCmd(t, "connect")
+	if code := exitCodeFrom(err); code != cmd.ExitAuthError {
+		t.Fatalf("exit %d, want %d\n%s", code, cmd.ExitAuthError, out)
+	}
+	if !strings.Contains(out, `logged in with "api_key"; archivist connect only drives a claude.ai subscription login`) {
+		t.Fatalf("output:\n%s", out)
+	}
+	if len(calls()) != 0 {
+		t.Fatalf("chat-api called: %v", calls())
+	}
+}

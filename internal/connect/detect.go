@@ -23,15 +23,91 @@ const ClaudeFloor = "2.1.280"
 const detectTimeout = 20 * time.Second
 
 // AuthStatus is the subset of `claude auth status --json` the daemon reads.
+// Claude Code 2.1.289 (probed 2026-10-05) reports authMethod one of none,
+// claude.ai, oauth_token, api_key, api_key_helper or third_party, and
+// apiKeySource only for a key ("ANTHROPIC_API_KEY" for the environment key).
 type AuthStatus struct {
 	LoggedIn         bool   `json:"loggedIn"`
 	AuthMethod       string `json:"authMethod"`
 	SubscriptionType string `json:"subscriptionType"`
+	APIKeySource     string `json:"apiKeySource"`
 }
 
 // Subscription reports whether the login is a claude.ai subscription.
 func (a *AuthStatus) Subscription() bool {
 	return a != nil && a.LoggedIn && a.AuthMethod == "claude.ai"
+}
+
+// ClaudeLogin is the kind of Claude Code login a session may run on (Story
+// 78.38). The local daemon only ever runs ClaudeLoginSubscription. In the
+// session-bound sandbox mode Anthropic's hosting condition forbids removing
+// a built-in sign in method, so a sandbox session also runs on a Console
+// login or on the user's own API key, each chosen through the sign in card.
+type ClaudeLogin int
+
+const (
+	// ClaudeLoginSubscription is a claude.ai login: init apiKeySource none.
+	ClaudeLoginSubscription ClaudeLogin = iota
+	// ClaudeLoginConsole is a Console login (claude auth login --console,
+	// or a remembered sandbox home holding one): any apiKeySource.
+	ClaudeLoginConsole
+	// ClaudeLoginAPIKey is ANTHROPIC_API_KEY from the sign in request file:
+	// apiKeySource must name that variable.
+	ClaudeLoginAPIKey
+)
+
+// ClaudeAPIKeySource is the apiKeySource Claude Code reports (auth status
+// and the init frame, verified on 2.1.289) for the environment key.
+const ClaudeAPIKeySource = "ANTHROPIC_API_KEY"
+
+// wire is the login's name in the sandbox activity file (Story 78.38).
+func (l ClaudeLogin) wire() string {
+	switch l {
+	case ClaudeLoginConsole:
+		return "console"
+	case ClaudeLoginAPIKey:
+		return "api_key"
+	}
+	return "claude.ai"
+}
+
+func (l ClaudeLogin) String() string {
+	switch l {
+	case ClaudeLoginConsole:
+		return "console"
+	case ClaudeLoginAPIKey:
+		return "api key"
+	}
+	return "claude.ai"
+}
+
+// LoginProblem returns why a claude auth status result fails the session's
+// login proof ("" when it passes). A claude.ai login (the local daemon's
+// only one, and the sandbox default) must be a claude.ai subscription. In
+// the sandbox a Console login passes with any login Claude Code reports as
+// logged in, and API key mode needs the environment key in use.
+func (a *AuthStatus) LoginProblem(sandbox bool, login ClaudeLogin) string {
+	if !sandbox || login == ClaudeLoginSubscription {
+		if a.Subscription() {
+			return ""
+		}
+		loggedIn, method := false, ""
+		if a != nil {
+			loggedIn, method = a.LoggedIn, a.AuthMethod
+		}
+		return fmt.Sprintf("Claude Code is not logged in with a claude.ai subscription (loggedIn=%v, authMethod=%q)", loggedIn, method)
+	}
+	switch {
+	case a == nil || !a.LoggedIn:
+		method := ""
+		if a != nil {
+			method = a.AuthMethod
+		}
+		return fmt.Sprintf("Claude Code is not logged in (authMethod=%q)", method)
+	case login == ClaudeLoginAPIKey && a.APIKeySource != ClaudeAPIKeySource:
+		return fmt.Sprintf("Claude Code is not using the API key from the sign in (authMethod=%q, apiKeySource=%q)", a.AuthMethod, a.APIKeySource)
+	}
+	return ""
 }
 
 // ClaudeInfo is what detection learned about the local Claude Code.

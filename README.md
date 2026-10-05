@@ -464,7 +464,9 @@ For each "My Claude Code" session the daemon:
   the daemon itself adds `CLAUDE_CODE_DISABLE_WEB_FETCH=1`)
   and without your user, project or local Claude settings;
 - refuses the session unless Claude reports a subscription login
-  (`apiKeySource: none`) and the permission mode of the session's mode;
+  (`apiKeySource: none`) and the permission mode of the session's mode (in
+  the session-bound sandbox mode any built in sign in method is accepted;
+  see "Sign in" below);
 - gives Claude the built-in tools Bash, Read, Edit, Write, Glob and Grep
   (plus `WebSearch`, pre-allowed, with web search on; never `WebFetch`) and
   the Mosaic search and read tools (`archivist mcp serve` in task mode, under
@@ -571,6 +573,45 @@ parks it.
 Stopping connect (Ctrl-C) answers every open approval deny before it stops
 the harness (Claude Code: "Denied: archivist connect stopped before an
 approval arrived.", Codex: decline).
+
+Sign in (session-bound mode, a Mosaic cloud sandbox):
+
+- A harness that is installed but logged out signs in before the first turn:
+  Codex with a ChatGPT device code, Claude Code with `claude auth login
+  --claudeai` on a terminal (the link goes out as a `data-auth-prompt`, the
+  user sends the code the page shows as the next message). The sign in has 5
+  minutes.
+- Anthropic's terms for hosting Claude Code forbid removing a built in sign
+  in method, so in this mode only Claude Code also runs on a Console login or
+  on the user's own API key. `ARCHIVIST_SIGNIN_FILE=<absolute path>` (read
+  only with `--session`; a relative path is ignored with a warning) names the
+  sign in request file the sandbox Worker writes atomically when the user
+  picks another method on the sign in card: `{"id":"<uuid>","method":"console"}`
+  or `{"id":"<uuid>","method":"api_key","key":"sk-ant-..."}`. While the Claude
+  sign in waits connect reads it about every second and acts once per new
+  `id`; an unreadable or invalid request, an unknown method, a malformed key
+  or an `id` already acted on is ignored. `console` stops the claude.ai login,
+  runs `claude auth login --console` the same way and sends a new prompt (a
+  new `promptId`, the Console link) with a fresh 5 minute window from the
+  switch, never past 10 minutes from the start of the sign in (the prompt
+  names that expiry). A login that already exited or reported success is
+  settled before any request. `api_key` stops the login and runs the session in API key mode:
+  every Claude Code child (the `claude auth status` proof and each `claude -p`
+  launch) gets `ANTHROPIC_API_KEY` set to the file's key, the one
+  `ANTHROPIC_*` variable connect ever passes, and only in this mode. The key
+  is never logged or put in an error (logs name environment keys only). In
+  the Mosaic sandbox the file carries a fixed placeholder that the sandbox's
+  egress replaces with the user's key on `api.anthropic.com` only, so the
+  real key never enters the container.
+- The login proof in this mode accepts each built in method: a claude.ai
+  login must still be a claude.ai subscription with init `apiKeySource:
+  none`; after a Console login any login `claude auth status` reports as
+  logged in passes, and the init frame must report a key source other than
+  `none` (the one `claude auth status` named, when it named one); in API key
+  mode `claude auth status` and the init frame must both report
+  `ANTHROPIC_API_KEY`. A sandbox home that already holds a logged in login other than
+  claude.ai (a remembered Console login) starts in Console login mode
+  without a sign in. The local daemon keeps its claude.ai only rules.
 
 Idle pause and resume (session-bound mode, a Mosaic cloud sandbox):
 

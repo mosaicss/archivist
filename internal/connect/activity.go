@@ -12,9 +12,13 @@ import (
 // sandbox Worker since when the session has been quiet and since when an
 // approval has waited, so the Worker's alarm can pause an idle sandbox:
 //
-//	{"v":1,"idleSince":<unix ms>|null,"approvalSince":<unix ms>|null}
+//	{"v":1,"idleSince":<unix ms>|null,"approvalSince":<unix ms>|null,
+//	 "login":"claude.ai"|"console"|"api_key"}
 //
-// The file is rewritten atomically (0600) only when a value changes. The
+// login (Story 78.38) is the login a Claude session runs on, present once
+// its spawn proof passed (after a sign in or on the login it started with);
+// it is absent for Codex and before that. The file is rewritten atomically
+// (0600) only when a value changes. The
 // Worker measures the windows on its own clock from when it first saw a
 // value, so this clock only names the period, never its length.
 
@@ -26,6 +30,7 @@ type activityRecord struct {
 	V             int    `json:"v"`
 	IdleSince     *int64 `json:"idleSince"`
 	ApprovalSince *int64 `json:"approvalSince"`
+	Login         string `json:"login,omitempty"`
 }
 
 // sandboxStopDeny answers every pending approval when the sandbox stops
@@ -76,10 +81,12 @@ func (s *session) writeActivity(now time.Time) {
 	} else {
 		s.approvalSince = 0
 	}
-	if s.actWritten && s.actIdle == s.idleSince && s.actApproval == s.approvalSince {
+	login := s.activityLogin()
+	if s.actWritten && s.actIdle == s.idleSince && s.actApproval == s.approvalSince && s.actLogin == login {
 		return
 	}
-	rec := activityRecord{V: activityVersion, IdleSince: msOrNil(s.idleSince), ApprovalSince: msOrNil(s.approvalSince)}
+	rec := activityRecord{V: activityVersion, IdleSince: msOrNil(s.idleSince), ApprovalSince: msOrNil(s.approvalSince),
+		Login: login}
 	data, _ := json.Marshal(rec)
 	if err := writeActivityFile(path, data); err != nil {
 		if !s.actFailed {
@@ -89,7 +96,16 @@ func (s *session) writeActivity(now time.Time) {
 		return
 	}
 	s.actFailed = false
-	s.actWritten, s.actIdle, s.actApproval = true, s.idleSince, s.approvalSince
+	s.actWritten, s.actIdle, s.actApproval, s.actLogin = true, s.idleSince, s.approvalSince, login
+}
+
+// activityLogin is the activity file's login: the Claude login the session
+// runs on once its spawn proof passed, "" for Codex or before that.
+func (s *session) activityLogin() string {
+	if !s.loginProved || s.isCodex() {
+		return ""
+	}
+	return s.claudeLogin().wire()
 }
 
 // writeActivityFile writes the activity file through writeFileAtomic,

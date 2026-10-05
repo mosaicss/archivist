@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -157,6 +158,48 @@ func ClaudeSessionEnv(env []string) []string {
 		return ki < kj
 	})
 	return out
+}
+
+// ClaudeAPIKeyEnvKey is the one ANTHROPIC_ key a harness child may see
+// (Story 78.38): only in the session-bound sandbox's API key mode, set by
+// the adapter from the sign in request file, never copied from the daemon
+// environment and never an override. In the Mosaic sandbox the value is a
+// fixed placeholder that the sandbox's egress swaps for the user's key on
+// api.anthropic.com only, so the real key never enters the container.
+const ClaudeAPIKeyEnvKey = "ANTHROPIC_API_KEY"
+
+// apiKeyRe is the key shape the sign in request file may carry, the same
+// rule in every Story 78.38 lane (the sandbox Worker's placeholder fits
+// it). Anthropic does not document the key format: the base64url body after
+// sk-ant- is an assumption from the keys seen so far, which the lab check
+// confirms.
+var apiKeyRe = regexp.MustCompile(`^sk-ant-[A-Za-z0-9_-]{16,500}$`)
+
+// ValidAPIKey reports whether key may be passed as ClaudeAPIKeyEnvKey.
+func ValidAPIKey(key string) bool { return apiKeyRe.MatchString(key) }
+
+// ClaudeAPIKeyEnv returns env (a ClaudeSessionEnv or BuildChildEnv result)
+// with ClaudeAPIKeyEnvKey set to key, sorted by key. It is the API key mode
+// adapter set exception to the ANTHROPIC_ deny prefix. The value is never
+// logged: log env with EnvKeys only. An invalid key is an error that never
+// carries the value.
+func ClaudeAPIKeyEnv(env []string, key string) ([]string, error) {
+	if !ValidAPIKey(key) {
+		return nil, fmt.Errorf("connect: the sign in API key is not an Anthropic API key")
+	}
+	out := make([]string, 0, len(env)+1)
+	for _, kv := range env {
+		if k, _, _ := strings.Cut(kv, "="); k != ClaudeAPIKeyEnvKey {
+			out = append(out, kv)
+		}
+	}
+	out = append(out, ClaudeAPIKeyEnvKey+"="+key)
+	sort.Slice(out, func(i, j int) bool {
+		ki, _, _ := strings.Cut(out[i], "=")
+		kj, _, _ := strings.Cut(out[j], "=")
+		return ki < kj
+	})
+	return out, nil
 }
 
 // EnvKeys returns the sorted key names of env (never values), for logs.
