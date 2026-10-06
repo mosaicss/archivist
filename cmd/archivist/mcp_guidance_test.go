@@ -237,7 +237,7 @@ func TestTaskModePinsJSONFormat(t *testing.T) {
 func TestNonTaskPinsCompactFormat(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"results":[{"id":"c1","filing_id":"f1","exchange":"NGS","formtype":"10-K","formdescription":"Annual report",` +
+		_, _ = w.Write([]byte(`{"results":[{"id":"c1","filing_id":"f1","symbol":"AAPL","exchange":"NGS","formtype":"10-K","formdescription":"Annual report",` +
 			`"chunk_index":4,"snippet":"Revenue & margin.","url":"https://mosaic-finance.com/filings/f1/p/c1/t/"}],` +
 			`"entity_resolution":null,"truncated":false,"next_cursor":null}`))
 	}))
@@ -260,7 +260,7 @@ func TestNonTaskPinsCompactFormat(t *testing.T) {
 		}
 	}
 	text, isErr := callToolText(t, cs, "search", map[string]any{"query": "margin"})
-	want := `{"results":[{"id":"c1","filing_id":"f1","formtype":"10-K","snippet":"Revenue & margin.","url":"https://mosaic-finance.com/filings/f1/p/c1/t/"}]}` + "\n"
+	want := `{"results":[{"id":"c1","filing_id":"f1","symbol":"AAPL","formtype":"10-K","snippet":"Revenue & margin.","url":"https://mosaic-finance.com/filings/f1/p/c1/t/"}]}` + "\n"
 	if isErr || text != want {
 		t.Fatalf("compact search output: isErr=%v\n%s", isErr, text)
 	}

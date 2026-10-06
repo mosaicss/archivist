@@ -145,6 +145,10 @@ func checkFormat(cmd *cobra.Command, format string) error {
 	return usageErr(cmd, "--format must be table, json or compact (got %q)", format)
 }
 
+// cursorUsage is the --cursor help every research verb shares (Story 81.4:
+// agents changed other arguments with a cursor, which the server refuses).
+const cursorUsage = "next_cursor from the previous call; keep the other arguments unchanged"
+
 // formatUsage is the --format help every research verb shares.
 const formatUsage = "Output format: table (default on TTY), json (default off a TTY) or compact (minified, fitted to about 6k tokens)"
 
@@ -386,7 +390,7 @@ listings, ending in :CA or :TR otherwise).`,
 	c.Flags().BoolVar(&f.latestOnly, "latest-only", false, "Search only the newest filing of the formtype; needs symbol, takes no dates, semantic mode only")
 	c.Flags().StringVar(&f.mode, "mode", "semantic", "Search mode: semantic (accepts filters) or broad (no filters)")
 	c.Flags().IntVar(&f.limit, "limit", defaultSearchLimit, "Passages to return (1-25)")
-	c.Flags().StringVar(&f.cursor, "cursor", "", "Continuation cursor from a truncated response")
+	c.Flags().StringVar(&f.cursor, "cursor", "", cursorUsage)
 	c.Flags().StringVar(&f.format, "format", "", formatUsage)
 	c.Flags().BoolVar(&f.dryRun, "dry-run", false, "Print the request without sending it")
 	c.Flags().BoolVar(&f.stdin, "stdin", false, "Read the query from stdin instead of the positional argument")
@@ -560,7 +564,7 @@ permalink url.`,
 		},
 	}
 	c.Flags().IntVar(&f.window, "window", defaultPassageWindow, "Neighbouring passages on each side (0-2)")
-	c.Flags().StringVar(&f.cursor, "cursor", "", "Continuation cursor from a truncated response")
+	c.Flags().StringVar(&f.cursor, "cursor", "", cursorUsage)
 	c.Flags().StringVar(&f.format, "format", "", formatUsage)
 	c.Flags().BoolVar(&f.dryRun, "dry-run", false, "Print the request without sending it")
 	return c
@@ -593,8 +597,8 @@ func runReadPassage(cmd *cobra.Command, chunkID, version string, f *readPassageF
 		return err
 	}
 	if format == formatCompact {
-		// A passage and its neighbours: a small fixed shape, projected, no fit.
-		return emitCompact(cmd, body, "", cur)
+		// The head passage stays on every page; the neighbours list is fitted.
+		return emitCompact(cmd, body, "neighbours", cur)
 	}
 	if format == "json" {
 		if err := emitJSON(cmd, body, format); err != nil {
@@ -645,7 +649,7 @@ permalink url.`,
 			return runReadSection(cmd, args[0], args[1], version, &f)
 		},
 	}
-	c.Flags().StringVar(&f.cursor, "cursor", "", "Continuation cursor from a truncated response")
+	c.Flags().StringVar(&f.cursor, "cursor", "", cursorUsage)
 	c.Flags().StringVar(&f.format, "format", "", formatUsage)
 	c.Flags().BoolVar(&f.dryRun, "dry-run", false, "Print the request without sending it")
 	return c
@@ -716,7 +720,7 @@ read that section.`,
 			return runToc(cmd, args[0], version, &f)
 		},
 	}
-	c.Flags().StringVar(&f.cursor, "cursor", "", "Continuation cursor from a truncated response")
+	c.Flags().StringVar(&f.cursor, "cursor", "", cursorUsage)
 	c.Flags().StringVar(&f.format, "format", "", formatUsage)
 	c.Flags().BoolVar(&f.dryRun, "dry-run", false, "Print the request without sending it")
 	return c
@@ -816,7 +820,7 @@ when no company has the symbol.`,
 	c.Flags().StringVar(&f.dateFrom, "date-from", "", "Earliest filing date, YYYY-MM-DD")
 	c.Flags().StringVar(&f.dateTo, "date-to", "", "Latest filing date, YYYY-MM-DD")
 	c.Flags().IntVar(&f.limit, "limit", defaultSearchLimit, "Filings to return (1 to 25)")
-	c.Flags().StringVar(&f.cursor, "cursor", "", "Continuation cursor from a previous page")
+	c.Flags().StringVar(&f.cursor, "cursor", "", cursorUsage)
 	c.Flags().StringVar(&f.format, "format", "", formatUsage)
 	c.Flags().BoolVar(&f.dryRun, "dry-run", false, "Print the request without sending it")
 	return c
@@ -948,7 +952,7 @@ is unknown.`,
 		},
 	}
 	c.Flags().IntVar(&f.limit, "limit", defaultFindLimit, "Matches to return (1 to 10)")
-	c.Flags().StringVar(&f.cursor, "cursor", "", "Continuation cursor from a previous page")
+	c.Flags().StringVar(&f.cursor, "cursor", "", cursorUsage)
 	c.Flags().StringVar(&f.format, "format", "", formatUsage)
 	c.Flags().BoolVar(&f.dryRun, "dry-run", false, "Print the request without sending it")
 	return c
@@ -996,24 +1000,28 @@ func runFind(cmd *cobra.Command, filingID, term, version string, f *findFlags) e
 			return err
 		}
 	default:
-		renderFindTable(cmd.OutOrStdout(), resp)
+		if err := renderFindTable(cmd.OutOrStdout(), resp); err != nil {
+			return err
+		}
 	}
 	cursorHint(cmd, resp.NextCursor)
 	return nil
 }
 
 // renderFindTable writes a found line, then CHUNK_ID SECTION SNIPPET URL.
-func renderFindTable(w io.Writer, resp findResponse) {
+func renderFindTable(w io.Writer, resp findResponse) error {
 	if !resp.Found {
-		_, _ = fmt.Fprintf(w, "Not found: no passage mentions %s\n", resp.Term)
-		return
+		_, err := fmt.Fprintf(w, "Not found: no passage mentions %s\n", resp.Term)
+		return err
 	}
-	_, _ = fmt.Fprintf(w, "Found: %d matching passages for %s\n", resp.TotalMatches, resp.Term)
+	if _, err := fmt.Fprintf(w, "Found: %d matching passages for %s\n", resp.TotalMatches, resp.Term); err != nil {
+		return err
+	}
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	_, _ = fmt.Fprintln(tw, "CHUNK_ID\tSECTION\tSNIPPET\tURL")
 	for _, m := range resp.Matches {
 		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n",
 			cell(m.ChunkID), clipCell(m.SectionHeader, sectionColumnRunes), clipCell(m.Snippet, snippetColumnRunes), cell(m.URL))
 	}
-	_ = tw.Flush()
+	return tw.Flush()
 }

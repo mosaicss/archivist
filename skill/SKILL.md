@@ -152,16 +152,17 @@ Bad input fails with exit 2 before any request is sent.
 ## Output
 
 Pass `--format compact` from an agent: one line of minified JSON without
-nulls and internal fields (`chunk_index`, `exchange`, a form code's
+nulls and internal fields (`chunk_index`, `exchange`, a US listing's form code
 `formdescription`, a plainly resolved `entity_resolution`), each page fitted
-to about 6k tokens. Every id, `url`, `cite_as` and exchange document id stays.
+to about 6k tokens (for `read passage`, its neighbours; the passage stays). Every id, `url`, `cite_as` and exchange document id stays.
 `--format json` is the server response unchanged (off a terminal it is the
 default). On a terminal the default is a table with a `URL` column.
 Diagnostics (warnings, the truncation hint, error text) go to stderr; stdout
 carries only content.
 
 When a response is truncated, stderr says `More results: rerun with --cursor
-<token>`. Rerun the same command with that `--cursor` to get the rest. A
+<token>`. Rerun the same command with that `--cursor` and every other
+argument unchanged to get the rest. A
 compact page cut to fit carries `truncated: true` and a `c1.` cursor: rerun
 with the same arguments and `--format compact`; other arguments or another
 format exit 2.

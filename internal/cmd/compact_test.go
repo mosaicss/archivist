@@ -71,9 +71,13 @@ func ordered(t *testing.T, kv ...any) string {
 }
 
 // passageOrdered is a PassageRecord in chat-api's member order.
-func passageOrdered(t *testing.T, id, formtype, formdescription, snippet string, url any, extra ...any) json.RawMessage {
+func passageOrdered(t *testing.T, id, symbol, formtype, formdescription, snippet string, url any, extra ...any) json.RawMessage {
 	t.Helper()
-	kv := []any{"id", id, "filing_id", testFilingID, "company_name", "Apple Inc.", "symbol", "AAPL:US", "exchange", "NGS",
+	var sym any = symbol
+	if symbol == "" {
+		sym = nil
+	}
+	kv := []any{"id", id, "filing_id", testFilingID, "company_name", "Apple Inc.", "symbol", sym, "exchange", "NGS",
 		"formtype", formtype, "formdescription", formdescription, "datefiled", "2025-11-01", "section_header", "Risk Factors",
 		"chunk_index", 3, "snippet", snippet, "url", url}
 	return json.RawMessage(ordered(t, append(kv, extra...)...))
@@ -90,6 +94,7 @@ func rawList(items ...json.RawMessage) json.RawMessage {
 func bigPassage(i, snippetChars int) map[string]any {
 	p := passageJSON(fmt.Sprintf("11111111-2222-4333-8444-%012d", i), i, testPermalink)
 	p["snippet"] = fmt.Sprintf("passage %d ", i) + strings.Repeat("x", snippetChars)
+	p["symbol"] = "AAPL"
 	p["exchange_document_id"] = "0000320193-25-000079"
 	p["exchange_document_kind"] = "sec_accession_number"
 	return p
@@ -137,10 +142,10 @@ func cursorPayload(t *testing.T, c string) cliCursorJSON {
 
 func TestCompactProjection(t *testing.T) {
 	const id2, id3 = "11111111-2222-4333-8444-000000000002", "11111111-2222-4333-8444-000000000003"
-	sec := passageOrdered(t, testChunkID, "10-K", "Annual report", "Revenue & margin <rose>.", testPermalink,
+	sec := passageOrdered(t, testChunkID, "AAPL", "10-K", "Annual report", "Revenue & margin <rose>.", testPermalink,
 		"exchange_document_id", "0000320193-25-000079", "exchange_document_kind", "sec_accession_number")
-	sedar := passageOrdered(t, id2, "002-002-001119-001014", "Technical report (NI 43-101)", "Water.", nil)
-	kap := passageOrdered(t, id3, "FR:8aca490d502dd03b01502deede79010a", "Finansal Rapor", "Kur riski.", testPermalink)
+	sedar := passageOrdered(t, id2, "ABX:CA", "002-002-001119-001014", "Technical report (NI 43-101)", "Water.", nil)
+	kap := passageOrdered(t, id3, "AKBNK:TR", "FR:8aca490d502dd03b01502deede79010a", "Finansal Rapor", "Kur riski.", testPermalink)
 	er := ordered(t, "input", "AAPL", "symbol", "AAPL", "issuer_key", "cik:320193", "company_name", "Apple Inc.", "confidence", 1,
 		"alternatives", []any{}, "state", "resolved_canonical", "warning", nil, "suggestion", nil, "candidates", []any{})
 	latest := ordered(t, "applied", true, "filing_id", testFilingID, "datefiled", "2025-10-31", "form", "10-K")
@@ -155,13 +160,13 @@ func TestCompactProjection(t *testing.T) {
 	// 10-K formdescription and the plain canonical resolution dropped; no
 	// HTML escaping; SEDAR and KAP keep formtype and formdescription.
 	want := `{"results":[` +
-		`{"id":"` + testChunkID + `","filing_id":"` + testFilingID + `","company_name":"Apple Inc.","symbol":"AAPL:US",` +
+		`{"id":"` + testChunkID + `","filing_id":"` + testFilingID + `","company_name":"Apple Inc.","symbol":"AAPL",` +
 		`"formtype":"10-K","datefiled":"2025-11-01","section_header":"Risk Factors","snippet":"Revenue & margin <rose>.",` +
 		`"url":"` + testPermalink + `","exchange_document_id":"0000320193-25-000079","exchange_document_kind":"sec_accession_number"},` +
-		`{"id":"` + id2 + `","filing_id":"` + testFilingID + `","company_name":"Apple Inc.","symbol":"AAPL:US",` +
+		`{"id":"` + id2 + `","filing_id":"` + testFilingID + `","company_name":"Apple Inc.","symbol":"ABX:CA",` +
 		`"formtype":"002-002-001119-001014","formdescription":"Technical report (NI 43-101)","datefiled":"2025-11-01",` +
 		`"section_header":"Risk Factors","snippet":"Water."},` +
-		`{"id":"` + id3 + `","filing_id":"` + testFilingID + `","company_name":"Apple Inc.","symbol":"AAPL:US",` +
+		`{"id":"` + id3 + `","filing_id":"` + testFilingID + `","company_name":"Apple Inc.","symbol":"AKBNK:TR",` +
 		`"formtype":"FR:8aca490d502dd03b01502deede79010a","formdescription":"Finansal Rapor","datefiled":"2025-11-01",` +
 		`"section_header":"Risk Factors","snippet":"Kur riski.","url":"` + testPermalink + `"}],` +
 		`"latest_filing":{"applied":true,"filing_id":"` + testFilingID + `","datefiled":"2025-10-31","form":"10-K"}}` + "\n"
@@ -177,6 +182,38 @@ func TestCompactProjection(t *testing.T) {
 	_ = writeIndentedJSON(&buf, []byte(body))
 	if stdout != buf.String() {
 		t.Errorf("json output changed:\n%s", stdout)
+	}
+}
+
+// Only a US listing's short form code drops formdescription: KAP rows carry
+// bare short formtypes (FR, ODA, DG) whose formdescription is the only form
+// name, and a row without a symbol keeps both.
+func TestCompactFormDescriptionOnlyDroppedForUSListings(t *testing.T) {
+	cases := []struct {
+		symbol, formtype, formdescription string
+		keep                              bool
+	}{
+		{"AKBNK:TR", "FR", "Faaliyet Raporu (Konsolide)", true},
+		{"AKBNK:TR", "ODA", "Genel Kurul İşlemlerine İlişkin Bildirim", true},
+		{"AKBNK:TR", "DG", "Finansal Takvim", true},
+		{"ABX:CA", "6-K", "Report of foreign private issuer", true},
+		{"B", "40-F", "Annual report", false},
+		{"AAPL", "10-K", "Annual report", false},
+		{"", "10-K", "Annual report", true},
+	}
+	for _, c := range cases {
+		body := ordered(t, "results", rawList(passageOrdered(t, testChunkID, c.symbol, c.formtype, c.formdescription, "s", nil)),
+			"truncated", false, "next_cursor", nil)
+		text, _, err := compactPage([]byte(body), "results", pageCursor{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.Contains(text, `"formdescription":`+mustJSON(t, c.formdescription)); got != c.keep {
+			t.Errorf("symbol %q formtype %q: formdescription kept %v, want %v\n%s", c.symbol, c.formtype, got, c.keep, text)
+		}
+		if !strings.Contains(text, `"formtype":`+mustJSON(t, c.formtype)) {
+			t.Errorf("formtype dropped: %s", text)
+		}
 	}
 }
 
@@ -448,24 +485,194 @@ func TestCompactCursorRefusals(t *testing.T) {
 	}
 }
 
-func TestCompactReadPassageProjectsWithoutFit(t *testing.T) {
-	head := bigPassage(1, 20000)
-	n1, n2 := bigPassage(2, 20000), bigPassage(3, 100)
-	body := mustJSON(t, map[string]any{"passage": head, "neighbours": []any{n1, n2}, "truncated": false, "next_cursor": nil})
+// The neighbours list is fitted like the other lists; the head passage
+// stays on every page.
+func TestCompactReadPassageFitsNeighbours(t *testing.T) {
+	head := bigPassage(1, 9000)
+	var neighbours []any
+	for i := 2; i <= 5; i++ {
+		neighbours = append(neighbours, bigPassage(i, 6000))
+	}
+	body := ordered(t, "passage", head, "neighbours", neighbours, "truncated", false, "next_cursor", nil)
 	srv := newStub(t, 200, nil, body)
-	stdout, _, code := runVerb(t, srv.URL, "read", "passage", testChunkID, "--format", "compact")
-	if code != 0 {
-		t.Fatal(code)
-	}
-	m := decodeCompact(t, stdout)
-	if len(m["neighbours"].([]any)) != 2 || m["truncated"] != nil || m["next_cursor"] != nil {
-		t.Fatalf("read passage was fitted: %v", m)
-	}
-	p := m["passage"].(map[string]any)
-	for _, dropped := range []string{"chunk_index", "exchange", "formdescription"} {
-		if _, ok := p[dropped]; ok {
-			t.Errorf("passage kept %s", dropped)
+	var seen []string
+	cursor := ""
+	for call := 0; call < 6; call++ {
+		args := []string{"read", "passage", testChunkID, "--window", "2", "--format", "compact"}
+		if cursor != "" {
+			args = append(args, "--cursor", cursor)
 		}
+		stdout, stderr, code := runVerb(t, srv.URL, args...)
+		if code != 0 {
+			t.Fatalf("call %d exit %d: %s", call, code, stderr)
+		}
+		if printedSize(stdout) > compactFitBytes {
+			t.Fatalf("call %d printed %d bytes", call, printedSize(stdout))
+		}
+		m := decodeCompact(t, stdout)
+		p := m["passage"].(map[string]any)
+		if p["id"] != head["id"] {
+			t.Fatalf("call %d lost the head passage", call)
+		}
+		for _, dropped := range []string{"chunk_index", "exchange", "formdescription"} {
+			if _, ok := p[dropped]; ok {
+				t.Errorf("passage kept %s", dropped)
+			}
+		}
+		seen = append(seen, resultIDs(t, m, "neighbours")...)
+		next, _ := m["next_cursor"].(string)
+		if next == "" {
+			break
+		}
+		if call == 0 && m["truncated"] != true {
+			t.Fatal("a cut page must say truncated:true")
+		}
+		cursorPayload(t, next)
+		cursor = next
+	}
+	var want []string
+	for _, n := range neighbours {
+		want = append(want, n.(map[string]any)["id"].(string))
+	}
+	if cursor == "" || strings.Join(seen, ",") != strings.Join(want, ",") {
+		t.Fatalf("neighbours %v, want each of %v once over several pages", seen, want)
+	}
+}
+
+// Following every c1 cursor of read section and toc shows each passage and
+// section exactly once.
+func TestCompactSectionAndTocContinuation(t *testing.T) {
+	var passages []any
+	var wantP []string
+	for i := 1; i <= 8; i++ {
+		p := bigPassage(i, 6000)
+		passages = append(passages, p)
+		wantP = append(wantP, p["id"].(string))
+	}
+	section := ordered(t, "filing_id", testFilingID, "section_header", "Risk Factors", "chunk_count", 8,
+		"passages", passages, "truncated", false, "next_cursor", nil)
+	var sections []string
+	for i := 0; i < 400; i++ {
+		sections = append(sections, fmt.Sprintf("Section %d %s", i, strings.Repeat("h", 100)))
+	}
+	toc := ordered(t, "filing_id", testFilingID, "sections", sections, "truncated", false, "next_cursor", nil)
+	cases := []struct {
+		name, body, key string
+		argv            []string
+		want            []string
+	}{
+		{"read section", section, "passages", []string{"read", "section", testFilingID, "Risk Factors"}, wantP},
+		{"toc", toc, "sections", []string{"toc", testFilingID}, sections},
+	}
+	for _, c := range cases {
+		srv := newStub(t, 200, nil, c.body)
+		var seen []string
+		cursor, pages := "", 0
+		for ; pages < 50; pages++ {
+			args := append(append([]string{}, c.argv...), "--format", "compact")
+			if cursor != "" {
+				args = append(args, "--cursor", cursor)
+			}
+			stdout, stderr, code := runVerb(t, srv.URL, args...)
+			if code != 0 {
+				t.Fatalf("%s page %d exit %d: %s", c.name, pages, code, stderr)
+			}
+			if printedSize(stdout) > compactFitBytes {
+				t.Fatalf("%s page %d printed %d bytes", c.name, pages, printedSize(stdout))
+			}
+			m := decodeCompact(t, stdout)
+			for _, row := range m[c.key].([]any) {
+				if r, ok := row.(map[string]any); ok {
+					seen = append(seen, r["id"].(string))
+				} else {
+					seen = append(seen, row.(string))
+				}
+			}
+			next, _ := m["next_cursor"].(string)
+			if next == "" {
+				break
+			}
+			cursor = next
+		}
+		if pages < 1 || strings.Join(seen, "\n") != strings.Join(c.want, "\n") {
+			t.Fatalf("%s: %d pages, %d rows, want each of %d once", c.name, pages+1, len(seen), len(c.want))
+		}
+	}
+}
+
+// filings and find pass the server's own next_cursor back unchanged: the
+// next request carries it and returns the next rows (compact and json).
+func TestFilingsAndFindForwardServerCursor(t *testing.T) {
+	filings := map[string]string{
+		"":   filingsBody(t, []map[string]any{filingRowJSON("aaaaaaaa-0000-4000-8000-000000000002", "2025-10-31", nil)}, "F2"),
+		"F2": filingsBody(t, []map[string]any{filingRowJSON("aaaaaaaa-0000-4000-8000-000000000001", "2024-11-01", nil)}, nil),
+	}
+	match := func(id string) map[string]any {
+		return map[string]any{"chunk_id": id, "section_header": "Item 1", "snippet": "TSMC", "url": testPermalink}
+	}
+	findPage := func(id string, next any) string {
+		return ordered(t, "filing_id", testFilingID, "term", "TSMC", "found", true, "total_matches", 2,
+			"matches", []any{match(id)}, "next_cursor", next)
+	}
+	finds := map[string]string{"": findPage("11111111-2222-4333-8444-000000000001", "M2"), "M2": findPage("11111111-2222-4333-8444-000000000002", nil)}
+	for _, format := range []string{"compact", "json"} {
+		fsrv := newPagedStub(t, filings)
+		var got []string
+		for _, cursor := range []string{"", "F2"} {
+			args := []string{"filings", "AAPL", "--limit", "1", "--format", format}
+			if cursor != "" {
+				args = append(args, "--cursor", cursor)
+			}
+			stdout, stderr, code := runVerb(t, fsrv.URL, args...)
+			if code != 0 {
+				t.Fatalf("%s filings exit %d: %s", format, code, stderr)
+			}
+			var m map[string]any
+			_ = json.Unmarshal([]byte(stdout), &m)
+			for _, r := range m["filings"].([]any) {
+				got = append(got, r.(map[string]any)["filing_id"].(string))
+			}
+			if cursor == "" && (m["next_cursor"] != "F2" || !strings.Contains(stderr, "--cursor F2")) {
+				t.Fatalf("%s filings next_cursor %v, stderr %q", format, m["next_cursor"], stderr)
+			}
+		}
+		if strings.Join(got, ",") != "aaaaaaaa-0000-4000-8000-000000000002,aaaaaaaa-0000-4000-8000-000000000001" {
+			t.Errorf("%s filings rows %v", format, got)
+		}
+		fsrv.mu.Lock()
+		if q, _ := url.ParseQuery(fsrv.queries[1]); q.Get("cursor") != "F2" || q.Get("limit") != "1" || q.Get("symbol") != "AAPL" {
+			t.Errorf("%s filings second request %q", format, fsrv.queries[1])
+		}
+		fsrv.mu.Unlock()
+
+		msrv := newPagedStub(t, finds)
+		got = nil
+		for _, cursor := range []string{"", "M2"} {
+			args := []string{"find", testFilingID, "TSMC", "--limit", "1", "--format", format}
+			if cursor != "" {
+				args = append(args, "--cursor", cursor)
+			}
+			stdout, stderr, code := runVerb(t, msrv.URL, args...)
+			if code != 0 {
+				t.Fatalf("%s find exit %d: %s", format, code, stderr)
+			}
+			var m map[string]any
+			_ = json.Unmarshal([]byte(stdout), &m)
+			for _, r := range m["matches"].([]any) {
+				got = append(got, r.(map[string]any)["chunk_id"].(string))
+			}
+			if cursor == "" && m["next_cursor"] != "M2" {
+				t.Fatalf("%s find next_cursor %v", format, m["next_cursor"])
+			}
+		}
+		if strings.Join(got, ",") != "11111111-2222-4333-8444-000000000001,11111111-2222-4333-8444-000000000002" {
+			t.Errorf("%s find rows %v", format, got)
+		}
+		msrv.mu.Lock()
+		if q, _ := url.ParseQuery(msrv.queries[1]); q.Get("cursor") != "M2" || q.Get("term") != "TSMC" || q.Get("limit") != "1" {
+			t.Errorf("%s find second request %q", format, msrv.queries[1])
+		}
+		msrv.mu.Unlock()
 	}
 }
 
@@ -728,5 +935,38 @@ func TestCompaniesCompact(t *testing.T) {
 	}
 	if stdout != `[{"company_name":"Apple & Co","symbol":"AAPL","exchange":"NGS","country":"US","filing_count":4127}]`+"\n" {
 		t.Fatalf("companies search compact %q", stdout)
+	}
+}
+
+func TestCompaniesGetCompact(t *testing.T) {
+	earliest := "1994-01-01"
+	results := []mockCompanyResult{
+		{CompanyName: "Apple & Co", Symbol: "AAPL", Exchange: "NGS", FilingCount: 4127, EarliestFiling: &earliest, IssuerKey: strPtrCmd("cik:320193")},
+	}
+	// Pass 1: a direct issuer_key match from /research/companies.
+	srv := serveCompanies(results)
+	defer srv.Close()
+	stdout, stderr, err := runCompaniesCmd([]string{"companies", "get", "cik:320193", "--format", "compact"}, srv)
+	want := `{"company_name":"Apple & Co","symbol":"AAPL","exchange":"NGS","country":"US","filing_count":4127,` +
+		`"earliest_filing":"1994-01-01","issuer_key":"cik:320193"}` + "\n"
+	if err != nil || stdout != want {
+		t.Fatalf("pass 1: %v %q %s", err, stdout, stderr)
+	}
+	// Pass 2: no match in the typeahead, found in the GET /companies catalog.
+	catalog := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/research/companies" {
+			_ = json.NewEncoder(w).Encode(researchCompaniesBody(nil))
+			return
+		}
+		_ = json.NewEncoder(w).Encode(results)
+	}))
+	defer catalog.Close()
+	stdout, stderr, err = runCompaniesCmd([]string{"companies", "get", "cik:320193", "--format", "compact"}, catalog)
+	if err != nil || stdout != want {
+		t.Fatalf("pass 2: %v %q %s", err, stdout, stderr)
+	}
+	if strings.Count(stdout, "\n") != 1 || strings.Contains(stdout, "null") || strings.Contains(stdout, "latest_filing") {
+		t.Errorf("not one line without nulls: %q", stdout)
 	}
 }

@@ -111,9 +111,11 @@ to choose. Diagnostics go to stderr, so stdout stays clean for `jq`.
 
 `--format compact` (research verbs and `companies`) prints one line of
 minified JSON for an agent: no nulls, no `truncated: false`, no `chunk_index`
-or `exchange` on passages, no `formdescription` beside a form code such as
-10-K, and no `entity_resolution` when the symbol resolved plainly. Ids, `url`,
-`cite_as` and exchange document ids stay, in the server's order. `search`,
+or `exchange` on passages, no `formdescription` beside a US listing's form
+code such as 10-K (Canadian and Turkish rows keep it), and no
+`entity_resolution` when the symbol resolved plainly. Ids, `url`, `cite_as`
+and exchange document ids stay, in the server's order. `search`,
+`read passage` (its neighbours; the passage itself stays on every page),
 `read section`, `toc`, `filings` and `find` also fit each page to 24,000 bytes
 as a host prints it (about 6k tokens): a cut page says `truncated: true` and
 carries a `c1.` cursor that continues the same request with `--format

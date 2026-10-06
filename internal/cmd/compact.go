@@ -7,7 +7,7 @@ package cmd
 //
 // The projection keeps the server's member order (an ordered JSON decode)
 // and drops what an agent never needs: null members, truncated:false,
-// chunk_index and exchange on passage records, a form code's redundant
+// chunk_index and exchange on passage records, a US form code's redundant
 // formdescription, and a plain resolved entity_resolution. The fit keeps the
 // longest whole prefix of the response's list whose printed size fits
 // compactFitBytes. A dropped tail sets truncated:true and a CLI cursor
@@ -43,7 +43,7 @@ const (
 )
 
 // compactListKeys are the top level lists the fit pages through.
-var compactListKeys = map[string]bool{"results": true, "passages": true, "sections": true, "filings": true, "matches": true}
+var compactListKeys = map[string]bool{"results": true, "passages": true, "sections": true, "filings": true, "matches": true, "neighbours": true}
 
 // entityResolutionKeys are the entity_resolution members compact keeps.
 var entityResolutionKeys = map[string]bool{
@@ -219,7 +219,8 @@ func projectCompact(v any) any {
 		dropFormDescription := false
 		if passage {
 			ft, _ := x.get("formtype")
-			dropFormDescription = isFormCode(ft)
+			sym, _ := x.get("symbol")
+			dropFormDescription = isUSListing(sym) && isFormCode(ft)
 		}
 		out := make(jsonObject, 0, len(x))
 		for _, m := range x {
@@ -257,6 +258,14 @@ func projectCompact(v any) any {
 func isFormCode(v any) bool {
 	s, ok := v.(string)
 	return ok && s != "" && jsLen(s) <= formCodeMaxChars && !strings.Contains(s, ":")
+}
+
+// isUSListing reports a non-empty bare symbol (a US listing). KAP rows can
+// carry bare short formtypes too (FR, ODA, DG) whose formdescription is the
+// only form name, so only a US listing's form code drops it.
+func isUSListing(v any) bool {
+	s, ok := v.(string)
+	return ok && strings.TrimSpace(s) != "" && !strings.Contains(s, ":")
 }
 
 // projectEntityResolution omits a plain resolved_canonical resolution and
@@ -377,7 +386,7 @@ func renderCompact(root any) string {
 }
 
 // compactPage builds the compact text for a server body. listKey names the
-// list to fit ("" for no fit, as for read passage). It returns the text and
+// list to fit ("" for no fit). It returns the text and
 // the next cursor it carries ("" for none).
 func compactPage(body []byte, listKey string, cur pageCursor) (string, string, error) {
 	root, err := decodeOrdered(bytes.TrimSpace(body))
