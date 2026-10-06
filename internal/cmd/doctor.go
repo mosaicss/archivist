@@ -33,6 +33,9 @@ Exit codes:
 			"pp:typed-exit-codes": "0,1,4,5",
 			"mcp:read-only":       "true",
 			"mcp:title":           "Health check",
+			// Story 81.4: an admin verb, a shell verb only; hidden from MCP so agents
+			// do not pay for its tool description.
+			"mcp:hidden": "true",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runDoctor(cmd, version, commit, date, formatFlag, quietFlag, noNetworkFlag)

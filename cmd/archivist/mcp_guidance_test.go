@@ -23,7 +23,7 @@ import (
 // output to JSON so each passage's cite_as survives.
 
 func wantInstructions(surface string) string {
-	return strings.TrimRight(guidance.Embedded(surface, guidance.FormCompact).Body, "\n") + "\n" + mcpExitNotes
+	return strings.TrimRight(guidance.Embedded(surface, guidance.FormCompact).Body, "\n") + "\n" + mcpLocalSuffix + "\n" + mcpExitNotes
 }
 
 func checkInstructionBounds(t *testing.T, got string) {
@@ -80,12 +80,37 @@ func TestMCPExitNotesBounds(t *testing.T) {
 
 func TestMCPInstructionsFromLiveAndOversize(t *testing.T) {
 	live := guidance.Text{Body: "Live compact guidance.\n", Source: guidance.SourceLive}
-	if got := mcpInstructionsFrom(live, guidance.SurfaceAgentUI); got != "Live compact guidance.\n"+mcpExitNotes {
+	if got := mcpInstructionsFrom(live, guidance.SurfaceAgentUI); got != "Live compact guidance.\n"+mcpLocalSuffix+"\n"+mcpExitNotes {
 		t.Fatalf("live %q", got)
+	}
+	// Too long with the suffix but not without it: the suffix goes first.
+	room := mcpInstructionsMax - jsLen(mcpExitNotes) - 1
+	tight := guidance.Text{Body: strings.Repeat("a", room-10) + "\n", Source: guidance.SourceLive}
+	if got := mcpInstructionsFrom(tight, guidance.SurfaceAgentUI); got != strings.Repeat("a", room-10)+"\n"+mcpExitNotes {
+		t.Fatalf("tight live text kept the suffix or lost its body: %d characters", jsLen(got))
 	}
 	huge := guidance.Text{Body: strings.Repeat("a", mcpInstructionsMax), Source: guidance.SourceLive}
 	if got := mcpInstructionsFrom(huge, guidance.SurfaceMosaicUI); got != wantInstructions(guidance.SurfaceMosaicUI) {
-		t.Fatal("an oversize live text must fall back to the embedded compact form")
+		t.Fatal("an oversize live text must fall back to the embedded compact form with the suffix")
+	}
+}
+
+// Story 81.4: the local suffix maps the hosted flow onto this server's tool
+// names, has no hyphen or dash, and fits with both embedded forms.
+func TestMCPLocalSuffix(t *testing.T) {
+	const want = "This server's tools: search (latest_only for the newest filing of a form), read_passage, toc and " +
+		"read_section; filing_id feeds the last two. filings lists a company's filings newest first; " +
+		"find says whether one filing mentions a term."
+	if mcpLocalSuffix != want {
+		t.Fatalf("suffix %q", mcpLocalSuffix)
+	}
+	if strings.ContainsAny(mcpLocalSuffix, "-–—\n") {
+		t.Fatal("suffix carries a hyphen, dash or newline")
+	}
+	for _, surface := range []string{guidance.SurfaceAgentUI, guidance.SurfaceMosaicUI} {
+		if got := embeddedMCPInstructions(surface == guidance.SurfaceMosaicUI); !strings.Contains(got, mcpLocalSuffix) || jsLen(got) > mcpInstructionsMax {
+			t.Errorf("%s: %d characters, suffix present %v", surface, jsLen(got), strings.Contains(got, mcpLocalSuffix))
+		}
 	}
 }
 
@@ -125,7 +150,7 @@ func TestMCPServeTaskModeFetchesLiveMosaicUIGuidance(t *testing.T) {
 		t.Fatalf("initialize over stdio: %v", err)
 	}
 	defer func() { _ = cs.Close() }()
-	if got := cs.InitializeResult().Instructions; got != strings.TrimRight(live, "\n")+"\n"+mcpExitNotes {
+	if got := cs.InitializeResult().Instructions; got != strings.TrimRight(live, "\n")+"\n"+mcpLocalSuffix+"\n"+mcpExitNotes {
 		t.Fatalf("task mode instructions %q", got)
 	}
 	mu.Lock()
@@ -206,28 +231,55 @@ func TestTaskModePinsJSONFormat(t *testing.T) {
 	}
 }
 
-func TestNonTaskKeepsFormatArgument(t *testing.T) {
-	cs := newMCPSession(t, "")
+// Story 81.4: without a task token every tool pins --format=compact: no
+// format (or dry_run) argument in any schema, a passed format is refused, and
+// the output is the minified projection.
+func TestNonTaskPinsCompactFormat(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"results":[{"id":"c1","filing_id":"f1","exchange":"NGS","formtype":"10-K","formdescription":"Annual report",` +
+			`"chunk_index":4,"snippet":"Revenue & margin.","url":"https://mosaic-finance.com/filings/f1/p/c1/t/"}],` +
+			`"entity_resolution":null,"truncated":false,"next_cursor":null}`))
+	}))
+	t.Cleanup(srv.Close)
+	cs := newMCPSession(t, srv.URL)
 	res, err := cs.ListTools(context.Background(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, tool := range res.Tools {
-		if tool.Name != "search" {
-			continue
-		}
 		raw, _ := tool.InputSchema.(map[string]any)
-		props, _ := raw["properties"].(map[string]any)
-		if _, ok := props["format"]; !ok {
-			t.Fatal("non task search lost its format argument")
+		props, ok := raw["properties"].(map[string]any)
+		if !ok {
+			t.Fatalf("tool %s schema %T", tool.Name, tool.InputSchema)
+		}
+		for _, banned := range []string{"format", "dry_run"} {
+			if _, ok := props[banned]; ok {
+				t.Errorf("tool %s still offers %s", tool.Name, banned)
+			}
+		}
+	}
+	text, isErr := callToolText(t, cs, "search", map[string]any{"query": "margin"})
+	want := `{"results":[{"id":"c1","filing_id":"f1","formtype":"10-K","snippet":"Revenue & margin.","url":"https://mosaic-finance.com/filings/f1/p/c1/t/"}]}` + "\n"
+	if isErr || text != want {
+		t.Fatalf("compact search output: isErr=%v\n%s", isErr, text)
+	}
+	for _, args := range []map[string]any{{"query": "x", "format": "json"}, {"query": "x", "dry_run": true}} {
+		if text, isErr := callToolText(t, cs, "search", args); !isErr || !strings.Contains(text, "exit code 2") {
+			t.Errorf("args %v: isErr=%v %s", args, isErr, text)
 		}
 	}
 }
 
-func TestBuildArgvPinJSON(t *testing.T) {
-	spec := toolSpec{Name: "search", Path: []string{"search"}, Positionals: []string{"query"}, FlagFor: map[string]string{}, PinJSON: true}
-	argv, usage := buildArgv(spec, []byte(`{"query":"x"}`), "mst_tok")
-	if usage != "" || strings.Join(argv, " ") != "search --format=json --token mst_tok -- x" {
-		t.Fatalf("argv %v usage %q", argv, usage)
+func TestBuildArgvPinFormat(t *testing.T) {
+	for format, want := range map[string]string{
+		"json":    "search --format=json --token mst_tok -- x",
+		"compact": "search --format=compact --token mst_tok -- x",
+	} {
+		spec := toolSpec{Name: "search", Path: []string{"search"}, Positionals: []string{"query"}, FlagFor: map[string]string{}, PinFormat: format}
+		argv, usage := buildArgv(spec, []byte(`{"query":"x"}`), "mst_tok")
+		if usage != "" || strings.Join(argv, " ") != want {
+			t.Fatalf("argv %v usage %q", argv, usage)
+		}
 	}
 }

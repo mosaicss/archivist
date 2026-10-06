@@ -34,13 +34,15 @@ import (
 
 // mcpFlagDenylist names flags that never appear in any tool schema (AC8):
 // token (credential injection), stdin (protocol-stdin collision under MCP),
-// stream/quiet/no-color (TTY-presentation; meaningless for agents).
+// stream/quiet/no-color (TTY-presentation; meaningless for agents), dry-run
+// (a shell check that prints the request; Story 81.4).
 var mcpFlagDenylist = map[string]bool{
 	"token":    true,
 	"stdin":    true,
 	"stream":   true,
 	"quiet":    true,
 	"no-color": true,
+	"dry-run":  true,
 }
 
 // mcpSkipCommands names auto-generated Cobra commands the walker never maps.
@@ -64,10 +66,12 @@ type toolSpec struct {
 	// FlagFor maps schema property names to pflag names (date_from -> date-from).
 	FlagFor map[string]string
 	Schema  *jsonschema.Schema
-	// PinJSON (task mode, Story 78.31) drops the format argument and always
-	// dispatches --format=json, the server body unchanged, so each passage's
-	// cite_as reaches the agent (the table format keeps only url).
-	PinJSON bool
+	// PinFormat drops the format argument and always dispatches
+	// --format=<PinFormat>. Task mode (Story 78.31) pins json, the server
+	// body unchanged, so each passage's cite_as reaches the agent and the
+	// workspace parses the records; any other token pins compact (Story
+	// 81.4), the minified projection fitted to a page budget.
+	PinFormat string
 }
 
 // collectTools walks the Cobra tree depth-first and returns one toolSpec per
@@ -221,6 +225,12 @@ func sanitizeIdent(s string) string {
 const mcpExitNotes = "Tool errors name an archivist exit code: 2 bad arguments, 3 nothing found, " +
 	"4 no credential or no Mosaic Pro account, 6 ambiguous symbol, 7 monthly fair use limit reached."
 
+// mcpLocalSuffix (Story 81.4) maps the guidance's hosted flow onto this
+// server's tool names, between the guidance and the exit code notes.
+const mcpLocalSuffix = "This server's tools: search (latest_only for the newest filing of a form), " +
+	"read_passage, toc and read_section; filing_id feeds the last two. filings lists a company's " +
+	"filings newest first; find says whether one filing mentions a term."
+
 // Hosts cut MCP instructions at 2048 characters (Claude Code); the exit code
 // notes get at most 200 of them.
 const (
@@ -239,15 +249,25 @@ func guidanceSurface(taskMode bool) string {
 // jsLen is a string's length in UTF-16 code units, the unit hosts count.
 func jsLen(s string) int { return len(utf16.Encode([]rune(s))) }
 
-// mcpInstructionsFrom joins the compact guidance and the exit code notes. A
-// live text too long to fit is replaced by the embedded one, which always fits.
+// mcpInstructionsFrom joins the compact guidance, the local suffix and the
+// exit code notes. When that is too long the suffix goes first, then a live
+// text is replaced by the embedded one (with the suffix when it fits), which
+// always fits.
 func mcpInstructionsFrom(g guidance.Text, surface string) string {
-	join := func(body string) string { return strings.TrimRight(body, "\n") + "\n" + mcpExitNotes }
-	text := join(g.Body)
-	if jsLen(text) > mcpInstructionsMax {
-		text = join(guidance.Embedded(surface, guidance.FormCompact).Body)
+	join := func(body string, suffix bool) string {
+		text := strings.TrimRight(body, "\n") + "\n"
+		if suffix {
+			text += mcpLocalSuffix + "\n"
+		}
+		return text + mcpExitNotes
 	}
-	return text
+	embedded := guidance.Embedded(surface, guidance.FormCompact).Body
+	for _, text := range []string{join(g.Body, true), join(g.Body, false), join(embedded, true)} {
+		if jsLen(text) <= mcpInstructionsMax {
+			return text
+		}
+	}
+	return join(embedded, false)
 }
 
 // embeddedMCPInstructions is the instructions with no fetch (the builders
@@ -457,7 +477,9 @@ func buildMCPServerFull(newRoot func() *cobra.Command, version string, src token
 			continue
 		}
 		if taskMode {
-			spec = pinJSONFormat(spec)
+			spec = pinFormat(spec, "json")
+		} else {
+			spec = pinFormat(spec, "compact")
 		}
 		count++
 		// Untyped AddTool on purpose: schemas are walker-built at runtime;
@@ -484,9 +506,10 @@ func buildMCPServerFull(newRoot func() *cobra.Command, version string, src token
 
 func boolPtr(b bool) *bool { return &b }
 
-// pinJSONFormat removes a tool's format argument and marks it to dispatch
-// --format=json (task mode). A tool without a format flag is unchanged.
-func pinJSONFormat(spec toolSpec) toolSpec {
+// pinFormat removes a tool's format argument and marks it to dispatch
+// --format=<format>: json in task mode, compact otherwise. A tool without a
+// format flag is unchanged.
+func pinFormat(spec toolSpec, format string) toolSpec {
 	if _, ok := spec.FlagFor["format"]; !ok {
 		return spec
 	}
@@ -504,7 +527,7 @@ func pinJSONFormat(spec toolSpec) toolSpec {
 		}
 	}
 	schema.Properties = props
-	spec.FlagFor, spec.Schema, spec.PinJSON = flagFor, &schema, true
+	spec.FlagFor, spec.Schema, spec.PinFormat = flagFor, &schema, format
 	return spec
 }
 
@@ -618,8 +641,8 @@ func buildArgv(spec toolSpec, rawArgs json.RawMessage, tokenOverride string) (ar
 		}
 	}
 
-	if spec.PinJSON {
-		argv = append(argv, "--format=json")
+	if spec.PinFormat != "" {
+		argv = append(argv, "--format="+spec.PinFormat)
 	}
 	if tokenOverride != "" {
 		argv = append(argv, "--token", tokenOverride)

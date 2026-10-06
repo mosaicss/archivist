@@ -19,8 +19,8 @@ import (
 )
 
 func init() {
-	// Keep registration order (auth, search, read, toc, companies, doctor,
-	// usage, update, connect, version) in --help: research verbs first, in the order
+	// Keep registration order (auth, search, read, toc, filings, find,
+	// companies, doctor, usage, update, connect, version) in --help: research verbs first, in the order
 	// an agent uses them. Cobra would otherwise sort alphabetically.
 	cobra.EnableCommandSorting = false
 }
@@ -28,12 +28,14 @@ func init() {
 const longDescription = `Archivist is the Mosaic command line surface for filings research.
 
 It lets any AI agent (Claude Code, Cursor, custom orchestrators) or shell
-context (bash, cron, CI) search and read SEC and SEDAR filings. 'search' finds
-passages; 'read passage', 'read section' and 'toc' read around them. Every
-passage carries a permalink url that opens it in Mosaic's filing viewer, so
-an answer can cite its source.
+context (bash, cron, CI) search and read global filings (SEC, SEDAR+, KAP and
+expanding). 'search' finds passages; 'read passage', 'read section' and 'toc'
+read around them. 'filings' lists a company's filings newest first; 'find'
+says whether one filing mentions a term. Every passage carries a permalink
+url that opens it in Mosaic's filing viewer, so an answer can cite its source.
 
-Output is a table on a terminal and JSON when piped. Run 'archivist version'
+Output is a table on a terminal and JSON when piped; --format compact prints
+minified JSON fitted to about 6k tokens. Run 'archivist version'
 for build info and 'archivist <verb> --help' for each verb.`
 
 // NewRootCmd returns the root archivist command with all verbs registered.
@@ -58,6 +60,8 @@ func NewRootCmd(version, commit, date string) *cobra.Command {
 	root.AddCommand(newSearchCmd(version))
 	root.AddCommand(newReadCmd(version))
 	root.AddCommand(newTocCmd(version))
+	root.AddCommand(newFilingsCmd(version))
+	root.AddCommand(newFindCmd(version))
 	root.AddCommand(newCompaniesCmd(version))
 	root.AddCommand(newDoctorCmd(version, commit, date))
 	root.AddCommand(NewUsageCmd(version))

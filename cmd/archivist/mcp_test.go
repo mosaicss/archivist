@@ -28,18 +28,17 @@ import (
 
 // expectedToolNames is the exact tools/list contract (Story 39.7 AC2). Any
 // drift — a new verb, a hidden verb leaking, a rename — must fail loudly.
+// Story 81.4: the admin verbs (auth status, auth whoami, doctor, usage,
+// version) are shell verbs only; filings and find joined.
 var expectedToolNames = []string{
-	"auth_status",
-	"auth_whoami",
 	"companies_get",
 	"companies_search",
-	"doctor",
+	"filings",
+	"find",
 	"read_passage",
 	"read_section",
 	"search",
 	"toc",
-	"usage",
-	"version",
 }
 
 // buildRootForTest mirrors main() setup for use in tests.
@@ -52,7 +51,7 @@ func collectToolsForTest(t *testing.T) []toolSpec {
 	return collectTools(buildRootForTest("dev"))
 }
 
-// TestCollectTools_ExactSet asserts the 11-tool set as an exact match (AC2),
+// TestCollectTools_ExactSet asserts the 8-tool set as an exact match (AC2),
 // which doubles as the hidden-verb assertion (AC3): auth_login, auth_logout,
 // update, and any mcp* self-entry would break set equality.
 func TestCollectTools_ExactSet(t *testing.T) {
@@ -90,7 +89,7 @@ func TestCollectTools_NamingContract(t *testing.T) {
 // TestCollectTools_DenylistAbsent asserts token/stdin/stream/quiet/no-color
 // appear in NO tool schema (AC8), under both flag and property spelling.
 func TestCollectTools_DenylistAbsent(t *testing.T) {
-	denied := []string{"token", "stdin", "stream", "quiet", "no-color", "no_color"}
+	denied := []string{"token", "stdin", "stream", "quiet", "no-color", "no_color", "dry-run", "dry_run"}
 	for _, s := range collectToolsForTest(t) {
 		for prop := range s.Schema.Properties {
 			for _, d := range denied {
@@ -122,7 +121,7 @@ func TestCollectTools_SearchSchema(t *testing.T) {
 	if len(s.Positionals) != 1 || s.Positionals[0] != "query" {
 		t.Fatalf("search positionals: want [query], got %v", s.Positionals)
 	}
-	for _, want := range []string{"symbol", "formtype", "date_from", "date_to", "mode", "limit", "cursor", "format", "dry_run"} {
+	for _, want := range []string{"symbol", "formtype", "date_from", "date_to", "latest_only", "mode", "limit", "cursor", "format"} {
 		if _, ok := s.Schema.Properties[want]; !ok {
 			t.Errorf("search schema: property %q missing; props: %v", want, propNames(s))
 		}
@@ -133,6 +132,44 @@ func TestCollectTools_SearchSchema(t *testing.T) {
 	if s.FlagFor["date_from"] != "date-from" {
 		t.Errorf("date_from must map to --date-from, got %q", s.FlagFor["date_from"])
 	}
+	if s.Schema.Properties["latest_only"].Type != "boolean" || s.FlagFor["latest_only"] != "latest-only" {
+		t.Errorf("latest_only: %+v -> %q", s.Schema.Properties["latest_only"], s.FlagFor["latest_only"])
+	}
+}
+
+// TestCollectTools_FilingsAndFindSchemas (Story 81.4): the two new tools with
+// their positionals, flags and integer limits; dry_run never reaches a schema.
+func TestCollectTools_FilingsAndFindSchemas(t *testing.T) {
+	cases := map[string][]string{
+		"filings": {"symbol", "formtype", "date_from", "date_to", "limit", "cursor", "format"},
+		"find":    {"filing_id", "term", "limit", "cursor", "format"},
+	}
+	for name, want := range cases {
+		s := findSpec(t, name)
+		if got := propNames(s); strings.Join(got, ",") != strings.Join(sortedCopy(want), ",") {
+			t.Errorf("%s properties %v, want %v", name, got, sortedCopy(want))
+		}
+		if s.Schema.Properties["limit"].Type != "integer" {
+			t.Errorf("%s limit type %q", name, s.Schema.Properties["limit"].Type)
+		}
+		for _, banned := range []string{"-", "\u2013", "\u2014"} {
+			if strings.Contains(strings.SplitN(s.Description, "\n\nExit codes:", 2)[0], banned) {
+				t.Errorf("%s description carries %q: %s", name, banned, s.Description)
+			}
+		}
+	}
+	if s := findSpec(t, "filings"); s.Title != "List filings" || !strings.HasSuffix(s.Description, "Exit codes: 0,2,3,4,5,7") {
+		t.Errorf("filings title %q description %q", s.Title, s.Description)
+	}
+	if s := findSpec(t, "find"); s.Title != "Find in filing" || !strings.HasSuffix(s.Description, "Exit codes: 0,2,3,4,5,7") {
+		t.Errorf("find title %q description %q", s.Title, s.Description)
+	}
+}
+
+func sortedCopy(in []string) []string {
+	out := append([]string{}, in...)
+	sort.Strings(out)
+	return out
 }
 
 // TestCollectTools_SchemaMarshalsAdditionalPropertiesFalse asserts the wire
@@ -180,6 +217,8 @@ func TestCollectTools_PositionalSanitization(t *testing.T) {
 		"toc":              {"filing_id"},
 		"companies_search": {"query"},
 		"companies_get":    {"issuer_key"},
+		"filings":          {"symbol"},
+		"find":             {"filing_id", "term"},
 	}
 	for name, want := range cases {
 		s := findSpec(t, name)
@@ -286,7 +325,7 @@ func callToolText(t *testing.T, cs *mcp.ClientSession, name string, args map[str
 	return text, res.IsError
 }
 
-// TestMCPServer_ToolsList covers AC2 + AC3 over the wire: exact 11-tool set,
+// TestMCPServer_ToolsList covers AC2 + AC3 over the wire: exact 8-tool set,
 // hidden verbs absent, title and all three hints surface on every tool.
 func TestMCPServer_ToolsList(t *testing.T) {
 	cs := newMCPSession(t, "")
@@ -307,7 +346,8 @@ func TestMCPServer_ToolsList(t *testing.T) {
 	if strings.Join(names, ",") != strings.Join(want, ",") {
 		t.Fatalf("tools/list mismatch\nwant: %v\ngot:  %v", want, names)
 	}
-	for _, hidden := range []string{"auth_login", "auth_logout", "update", "mcp", "mcp_serve"} {
+	for _, hidden := range []string{"auth_login", "auth_logout", "update", "mcp", "mcp_serve",
+		"auth_status", "auth_whoami", "doctor", "usage", "version", "connect"} {
 		if _, ok := got[hidden]; ok {
 			t.Errorf("hidden verb %q leaked into tools/list", hidden)
 		}
@@ -324,8 +364,8 @@ func TestMCPServer_ToolsList(t *testing.T) {
 }
 
 // TestMCPServer_CompaniesSearchRoundTrip covers AC5: the tool result text
-// equals the JSON envelope the CLI emits for the same invocation when piped
-// (non-TTY auto-JSON), byte for byte.
+// equals what the CLI prints for the same invocation with --format compact
+// (the format mcp serve pins without a task token, Story 81.4), byte for byte.
 func TestMCPServer_CompaniesSearchRoundTrip(t *testing.T) {
 	results := []mockMCPCompanyResult{
 		{CompanyName: "Apple Inc.", Symbol: "AAPL:US", Exchange: "NGS", FilingCount: 4127, IssuerKey: strPtr("aapl_us")},
@@ -341,13 +381,12 @@ func TestMCPServer_CompaniesSearchRoundTrip(t *testing.T) {
 		t.Fatalf("companies_search returned IsError, text:\n%s", toolText)
 	}
 
-	// Same invocation through the CLI path: buffered stdout is non-TTY, so
-	// format auto-resolves to JSON exactly like the dispatch buffer does.
+	// Same invocation through the CLI path with the pinned compact format.
 	root := buildRootForTest("dev")
 	var stdout, stderr bytes.Buffer
 	root.SetOut(&stdout)
 	root.SetErr(&stderr)
-	root.SetArgs([]string{"companies", "search", "Apple", "--limit=7"})
+	root.SetArgs([]string{"companies", "search", "Apple", "--limit=7", "--format=compact"})
 	if err := root.Execute(); err != nil {
 		t.Fatalf("CLI invocation: %v\nstderr: %s", err, stderr.String())
 	}
@@ -387,8 +426,8 @@ func TestMCPServer_ServerErrorSurfacesExitCode5(t *testing.T) {
 }
 
 // TestMCPServer_SearchRoundTrip: the search tool result text equals what the
-// CLI prints for the same invocation when piped (the server body
-// re-indented), byte for byte, and carries the permalink.
+// CLI prints for the same invocation with --format compact, byte for byte,
+// and carries the permalink and the exchange document id.
 func TestMCPServer_SearchRoundTrip(t *testing.T) {
 	const permalink = "https://mosaic-finance.com/filings/aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee/?c=11111111-2222-4333-8444-555555555555&t=k1.mac"
 	body := `{"results":[{"id":"11111111-2222-4333-8444-555555555555","filing_id":"aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",` +
@@ -428,7 +467,7 @@ func TestMCPServer_SearchRoundTrip(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	root.SetOut(&stdout)
 	root.SetErr(&stderr)
-	root.SetArgs([]string{"search", "supply chain", "--symbol=AAPL:US", "--date-from=2024-01-01", "--limit=5"})
+	root.SetArgs([]string{"search", "supply chain", "--symbol=AAPL:US", "--date-from=2024-01-01", "--limit=5", "--format=compact"})
 	if err := root.Execute(); err != nil {
 		t.Fatalf("CLI invocation: %v\nstderr: %s", err, stderr.String())
 	}
@@ -438,8 +477,8 @@ func TestMCPServer_SearchRoundTrip(t *testing.T) {
 	if !strings.Contains(toolText, permalink) {
 		t.Errorf("tool text lost the permalink:\n%s", toolText)
 	}
-	if !strings.Contains(toolText, `"exchange_document_id": "0000320193-25-000079"`) ||
-		strings.Contains(toolText, "source_url") {
+	if !strings.Contains(toolText, `"exchange_document_id":"0000320193-25-000079"`) ||
+		strings.Contains(toolText, "source_url") || strings.Contains(toolText, "chunk_index") {
 		t.Errorf("tool text must carry the id keys unchanged and no source_url:\n%s", toolText)
 	}
 }
@@ -513,7 +552,7 @@ func TestMCPServer_DashPositionalIsNotAFlag(t *testing.T) {
 }
 
 // TestMCPServer_FairUseSurfacesExitCode7: a CLI_QUOTA refusal is an IsError
-// result naming exit code 7 with the JSON envelope in its stdout section.
+// result naming exit code 7 with the error, its code and reset date.
 func TestMCPServer_FairUseSurfacesExitCode7(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Queries-Remaining", "0")
@@ -528,10 +567,15 @@ func TestMCPServer_FairUseSurfacesExitCode7(t *testing.T) {
 	if !isError {
 		t.Fatalf("want IsError, got success:\n%s", text)
 	}
-	for _, want := range []string{"exit code 7 (rate limit)", "--- stdout ---", `"CLI_QUOTA"`, "2026-11-01"} {
+	// Compact (Story 81.4) reports the failure once, on stderr: the code, the
+	// reset date and any suggestion; no duplicate JSON envelope on stdout.
+	for _, want := range []string{"exit code 7 (rate limit)", "--- stderr ---", "[CLI_QUOTA]", "Resets on 2026-11-01."} {
 		if !strings.Contains(text, want) {
 			t.Errorf("error text missing %q:\n%s", want, text)
 		}
+	}
+	if strings.Contains(text, "--- stdout ---") {
+		t.Errorf("compact error printed a stdout envelope:\n%s", text)
 	}
 }
 
@@ -632,7 +676,7 @@ func TestMCPServe_StdioSubprocess(t *testing.T) {
 		t.Fatalf("initialize over stdio failed: %v", err)
 	}
 	defer func() { _ = cs.Close() }()
-	if got := cs.InitializeResult().Instructions; got != strings.TrimRight(live, "\n")+"\n"+mcpExitNotes {
+	if got := cs.InitializeResult().Instructions; got != strings.TrimRight(live, "\n")+"\n"+mcpLocalSuffix+"\n"+mcpExitNotes {
 		t.Errorf("initialize instructions over stdio: %q", got)
 	}
 	if got, _ := guidanceAuth.Load().(string); got != "|form=compact&surface=agent-ui" {

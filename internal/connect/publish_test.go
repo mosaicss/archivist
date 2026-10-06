@@ -221,7 +221,7 @@ func TestClaudePublishWithoutScope(t *testing.T) {
 	h.start()
 	sid := h.startSession("mcp")
 	h.waitFinishes(sid, 1)
-	if !strings.Contains(h.relay.text(sid), "tools: companies_search,read_passage,read_section,search,toc") {
+	if !strings.Contains(h.relay.text(sid), "tools: companies_search,filings,find,read_passage,read_section,search,toc") {
 		t.Fatalf("tools without publish scope: %q", h.relay.text(sid))
 	}
 	h.writeCwd(sid, "a.txt", []byte("a"))

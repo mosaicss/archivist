@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -27,7 +28,7 @@ var (
 
 // expectedTaskToolNames is the task mode tools/list contract: exactly the
 // verbs whose every chat-api route is in the 78.15 task allowlist.
-var expectedTaskToolNames = []string{"companies_search", "read_passage", "read_section", "search", "toc"}
+var expectedTaskToolNames = []string{"companies_search", "filings", "find", "read_passage", "read_section", "search", "toc"}
 
 func TestTaskModeToolSet(t *testing.T) {
 	var got []string
@@ -41,7 +42,7 @@ func TestTaskModeToolSet(t *testing.T) {
 		t.Fatalf("task tools = %v, want %v", got, expectedTaskToolNames)
 	}
 	// Tools() adds publish_artifact (Story 78.18), which is not a verb.
-	if strings.Join(taskscope.Tools(), ",") != "companies_search,publish_artifact,read_passage,read_section,search,toc" {
+	if strings.Join(taskscope.Tools(), ",") != "companies_search,filings,find,publish_artifact,read_passage,read_section,search,toc" {
 		t.Fatalf("taskscope.Tools() = %v", taskscope.Tools())
 	}
 	if strings.Join(taskscope.AutoAllowedTools(), ",") != strings.Join(expectedTaskToolNames, ",") {
@@ -60,6 +61,22 @@ func TestTaskModeToolSet(t *testing.T) {
 	if taskscope.ToolAllowed("version") || taskscope.ToolAllowed("unknown_tool") {
 		t.Fatal("tools without known routes must fail closed")
 	}
+	// Story 81.4: the admin verbs left ToolRoutes; filings and find are read
+	// tools, so Claude and Codex task sessions auto allow them.
+	for _, admin := range []string{"auth_status", "auth_whoami", "doctor", "usage", "version"} {
+		if _, ok := taskscope.ToolRoutes[admin]; ok {
+			t.Errorf("admin verb %s still has task routes", admin)
+		}
+	}
+	for _, tool := range []string{"filings", "find"} {
+		if !taskscope.IsReadTool(tool) || !slices.Contains(taskscope.AutoAllowedTools(), tool) {
+			t.Errorf("%s is not an auto allowed read tool", tool)
+		}
+	}
+	if taskscope.ToolAllowedFor("filings", []string{"read"}) || !taskscope.ToolAllowedFor("filings", []string{"search"}) ||
+		taskscope.ToolAllowedFor("find", []string{"search"}) || !taskscope.ToolAllowedFor("find", []string{"read"}) {
+		t.Fatal("filings needs search scope, find needs read scope")
+	}
 }
 
 func TestTaskRouteScopeMirrorsChatAPI(t *testing.T) {
@@ -70,6 +87,12 @@ func TestTaskRouteScopeMirrorsChatAPI(t *testing.T) {
 		"GET /research/passages/abc":             "read",
 		"GET /research/filings/f1/toc":           "read",
 		"GET /research/filings/f1/sections":      "read",
+		"GET /research/filings":                  "search",
+		"GET /research/filings/f1/find":          "read",
+		"GET /research/filings/":                 "",
+		"GET /research/filings/f1":               "",
+		"GET /research/filings/f1/find/x":        "",
+		"POST /research/filings":                 "",
 		"GET /uploads/u1/chunks/3":               "read",
 		"GET /uploads/u1/chunks/x":               "",
 		"GET /research/search/":                  "",
@@ -100,6 +123,11 @@ func TestToolRoutesMatchDryRun(t *testing.T) {
 		"read_passage":     {"read", "passage", "--dry-run", "11111111-2222-4333-8444-555555555555"},
 		"read_section":     {"read", "section", "--dry-run", "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", "Risk Factors"},
 		"toc":              {"toc", "--dry-run", "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"},
+		"filings":          {"filings", "--dry-run", "AAPL"},
+		"find":             {"find", "--dry-run", "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", "TSMC"},
+	}
+	if len(cases) != len(expectedTaskToolNames) {
+		t.Fatalf("dry run cases %d, task tools %d", len(cases), len(expectedTaskToolNames))
 	}
 	for tool, argv := range cases {
 		root := buildRootForTest("dev")
@@ -235,7 +263,7 @@ func TestMCPServe_TokenFlagsExclusiveAndFileValidated(t *testing.T) {
 	if err := os.WriteFile(tokenPath, []byte(testTaskToken), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if code, out := run("mcp", "serve", "--token-file", tokenPath); code != 0 || !strings.Contains(out, "5 tools registered") || !strings.Contains(out, "task mode") {
+	if code, out := run("mcp", "serve", "--token-file", tokenPath); code != 0 || !strings.Contains(out, "7 tools registered") || !strings.Contains(out, "task mode") {
 		t.Fatalf("task token file: exit %d %s", code, out)
 	}
 }

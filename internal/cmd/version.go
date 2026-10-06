@@ -28,6 +28,9 @@ func NewVersionCmd(version, commit, date string) *cobra.Command {
 			"pp:typed-exit-codes": "0",
 			"mcp:read-only":       "true",
 			"mcp:title":           "Version",
+			// Story 81.4: an admin verb, a shell verb only; hidden from MCP so agents
+			// do not pay for its tool description.
+			"mcp:hidden": "true",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(),

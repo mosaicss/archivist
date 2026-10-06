@@ -70,7 +70,7 @@ to 'archivist search --symbol', the exchange and country, and the filing count.`
 
 	cmd.Flags().IntVar(&f.limit, "limit", 5, "Maximum results to return (1-20). Clamped to 20.")
 	cmd.Flags().StringVar(&f.country, "country", "", "Filter results client-side by country: CA or US. Requests limit=20 from server for headroom.")
-	cmd.Flags().StringVar(&f.format, "format", "", "Output format: table (default on TTY) or json")
+	cmd.Flags().StringVar(&f.format, "format", "", "Output format: table (default on TTY), json or compact (minified)")
 	cmd.Flags().BoolVar(&f.compact, "compact", false, "Omit earliest/latest filing fields; reduce table columns")
 	cmd.Flags().BoolVar(&f.dryRun, "dry-run", false, "Print the request URL without making a network call. Exit 0 on valid flags.")
 	cmd.Flags().BoolVar(&f.quiet, "quiet", false, "Suppress stderr progress messages")
@@ -152,8 +152,11 @@ func runCompaniesSearch(cmd *cobra.Command, args []string, version string, f *co
 	}
 
 	// Render output.
-	if format == "json" {
+	switch format {
+	case "json":
 		return renderSearchJSON(cmd, results, f.compact)
+	case formatCompact:
+		return writeCompactJSON(cmd.OutOrStdout(), searchJSONResults(results, f.compact))
 	}
 	return renderSearchTable(cmd, results, f.compact)
 }
@@ -206,14 +209,18 @@ func toJSONResult(r resolver.CompanyResult, compact bool) companyResultJSON {
 	return out
 }
 
-func renderSearchJSON(cmd *cobra.Command, results []resolver.CompanyResult, compact bool) error {
+func searchJSONResults(results []resolver.CompanyResult, compact bool) []companyResultJSON {
 	out := make([]companyResultJSON, len(results))
 	for i, r := range results {
 		out[i] = toJSONResult(r, compact)
 	}
+	return out
+}
+
+func renderSearchJSON(cmd *cobra.Command, results []resolver.CompanyResult, compact bool) error {
 	enc := json.NewEncoder(cmd.OutOrStdout())
 	enc.SetIndent("", "  ")
-	return enc.Encode(out)
+	return enc.Encode(searchJSONResults(results, compact))
 }
 
 // companiesGetFlags holds the parsed flags for the get subcommand.
@@ -242,7 +249,7 @@ func newCompaniesGetCmd(version string) *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&f.format, "format", "", "Output format: table (default on TTY) or json")
+	cmd.Flags().StringVar(&f.format, "format", "", "Output format: table (default on TTY), json or compact (minified)")
 	cmd.Flags().BoolVar(&f.compact, "compact", false, "Omit earliest/latest filing fields")
 	cmd.Flags().BoolVar(&f.dryRun, "dry-run", false, "Print the request URL without making a network call. Exit 0 on valid flags.")
 	cmd.Flags().BoolVar(&f.quiet, "quiet", false, "Suppress stderr progress messages")
@@ -289,10 +296,13 @@ func runCompaniesGet(cmd *cobra.Command, issuerKey, version string, f *companies
 		return &ExitError{Code: ExitNotFound}
 	}
 
-	if format == "json" {
+	switch format {
+	case "json":
 		enc := json.NewEncoder(cmd.OutOrStdout())
 		enc.SetIndent("", "  ")
 		return enc.Encode(toJSONResult(*match, f.compact))
+	case formatCompact:
+		return writeCompactJSON(cmd.OutOrStdout(), toJSONResult(*match, f.compact))
 	}
 	return renderGetTable(cmd, *match)
 }
