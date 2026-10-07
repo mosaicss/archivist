@@ -114,6 +114,9 @@ func NewUsageCmd(version string) *cobra.Command {
 			"pp:typed-exit-codes": "0,1,4,5,7",
 			"mcp:read-only":       "true",
 			"mcp:title":           "Usage and fair use",
+			// Story 81.4: an admin verb, a shell verb only; hidden from MCP so agents
+			// do not pay for its tool description.
+			"mcp:hidden": "true",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Auto-JSON when not a TTY.

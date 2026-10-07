@@ -528,7 +528,7 @@ func TestE2EFakeClaude(t *testing.T) {
 	// MCP row.
 	s.send(map[string]any{"kind": "user_message", "correlationId": cmdID("msg"), "sessionId": sid, "text": "mcp"})
 	s.waitTurns(7, 30*time.Second)
-	if !strings.Contains(s.text(), "tools: companies_search,publish_artifact,read_passage,read_section,search,toc") {
+	if !strings.Contains(s.text(), "tools: companies_search,filings,find,publish_artifact,read_passage,read_section,search,toc") {
 		t.Fatalf("mcp text %q", s.text())
 	}
 	if b := api.researchBearers(); len(b) != 1 || !strings.HasPrefix(b[0], "Bearer mst_") {

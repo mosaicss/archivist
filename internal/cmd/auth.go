@@ -156,6 +156,9 @@ func newAuthStatusCmd(version string) *cobra.Command {
 			"pp:typed-exit-codes": "0,4,5",
 			"mcp:read-only":       "true",
 			"mcp:title":           "Credential status",
+			// Story 81.4: an admin verb, a shell verb only; hidden from MCP so agents
+			// do not pay for its tool description.
+			"mcp:hidden": "true",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runAuthStatus(cmd, version, formatJSON)
@@ -179,6 +182,9 @@ func newAuthWhoamiCmd(version string) *cobra.Command {
 			"pp:typed-exit-codes": "0,4,5",
 			"mcp:read-only":       "true",
 			"mcp:title":           "Who am I",
+			// Story 81.4: an admin verb, a shell verb only; hidden from MCP so agents
+			// do not pay for its tool description.
+			"mcp:hidden": "true",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runAuthStatus(cmd, version, false)

@@ -116,6 +116,7 @@ func TestBackstopTable(t *testing.T) {
 	for name, read := range map[string]bool{
 		"mcp__archivist__search": true, "mcp__archivist__companies_search": true, "mcp__archivist__companies_get": true,
 		"mcp__archivist__read_passage": true, "mcp__archivist__read_section": true, "mcp__archivist__toc": true,
+		"mcp__archivist__filings": true, "mcp__archivist__find": true, "mcp__archivist__doctor": false, "mcp__archivist__version": false,
 		"mcp__archivist__publish_artifact": false, "mcp__archivist__usage": false, "mcp__other__search": false,
 		"search": false, "Read": false, "mcp__archivist__": false,
 	} {

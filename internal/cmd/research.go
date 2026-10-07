@@ -7,9 +7,12 @@ package cmd
 //	archivist read passage <chunk_id>                GET /research/passages/:chunkId
 //	archivist read section <filing_id> <section>     GET /research/filings/:id/sections
 //	archivist toc <filing_id>                        GET /research/filings/:id/toc
+//	archivist filings <symbol>                       GET /research/filings (Story 81.4)
+//	archivist find <filing_id> <term>                GET /research/filings/:id/find (Story 81.4)
 //
 // JSON output (the default off a TTY) is the server body re-indented, keys
-// and values unchanged. Table output lists PassageRecords with their
+// and values unchanged. Compact output (compact.go) is a minified projection
+// fitted to a byte budget. Table output lists PassageRecords with their
 // permalink. Inputs are checked against the server's bounds before any
 // request (exit 2), and every HTTP failure goes through apierror.go.
 
@@ -39,6 +42,11 @@ const (
 	maxQueryChars         = 2000
 	maxSymbolChars        = 20
 	maxFormtypeChars      = 50
+	maxListFormtypeChars  = 200
+	maxFindTermChars      = 200
+	minFindLimit          = 1
+	maxFindLimit          = 10
+	defaultFindLimit      = 5
 	maxSectionHeaderChars = 255
 	minSearchLimit        = 1
 	maxSearchLimit        = 25
@@ -131,10 +139,45 @@ func usageErr(cmd *cobra.Command, format string, a ...any) error {
 
 func checkFormat(cmd *cobra.Command, format string) error {
 	switch format {
-	case "", "json", "table":
+	case "", "json", "table", formatCompact:
 		return nil
 	}
-	return usageErr(cmd, "--format must be table or json (got %q)", format)
+	return usageErr(cmd, "--format must be table, json or compact (got %q)", format)
+}
+
+// cursorUsage is the --cursor help every research verb shares (Story 81.4:
+// agents changed other arguments with a cursor, which the server refuses).
+const cursorUsage = "next_cursor from the previous call; keep the other arguments unchanged"
+
+// formatUsage is the --format help every research verb shares.
+const formatUsage = "Output format: table (default on TTY), json (default off a TTY) or compact (minified, fitted to about 6k tokens)"
+
+// pagedPath builds the request path from base and q, reading --cursor: a
+// server cursor is sent as is; a compact CLI cursor (c1.) must belong to this
+// request (its hash covers the path and query without the cursor) and sends
+// the server cursor it wraps.
+func pagedPath(cmd *cobra.Command, base string, q url.Values, rawCursor, format string) (string, pageCursor, error) {
+	path := base
+	if enc := q.Encode(); enc != "" {
+		path += "?" + enc
+	}
+	cur, err := parsePageCursor(cmd, rawCursor, format, requestHash(path))
+	if err != nil {
+		return "", cur, err
+	}
+	if cur.Server != "" {
+		q.Set("cursor", cur.Server)
+		path = base + "?" + q.Encode()
+	}
+	return path, cur, nil
+}
+
+// cursorHint tells the caller how to fetch the next page whenever the
+// response carries a next_cursor (filings and find page by next_cursor alone).
+func cursorHint(cmd *cobra.Command, next *string) {
+	if next != nil && *next != "" {
+		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "More results: rerun with --cursor %s\n", *next)
+	}
 }
 
 func checkUUID(cmd *cobra.Command, name, value string) error {
@@ -316,7 +359,7 @@ func chunkIndexLess(a, b PassageRecord) bool {
 type searchFlags struct {
 	symbol, formtype, dateFrom, dateTo, mode, cursor, format string
 	limit                                                    int
-	dryRun, stdin                                            bool
+	dryRun, stdin, latestOnly                                bool
 }
 
 func newSearchCmd(version string) *cobra.Command {
@@ -328,9 +371,10 @@ func newSearchCmd(version string) *cobra.Command {
 is a passage with its filing, company, form, date, section and a permalink url
 that opens the passage in Mosaic's filing viewer. Filter with --symbol (e.g.
 AAPL for a US listing, ABX:CA for a Canadian one; find one with 'companies
-search'), --formtype, --date-from and --date-to. Page
-with --cursor when a response is truncated. --mode broad searches without
-filters. Exit 3 when nothing matched, 6 when the symbol matches several
+search'), --formtype, --date-from and --date-to. Set --latest-only with
+--symbol and one --formtype to search only the newest filing of that form;
+latest_filing names it. Page with --cursor when a response is truncated.
+--mode broad searches without filters. Exit 3 when nothing matched, 6 when the symbol matches several
 issuers (rerun with the exact symbol 'companies search' returns: bare for US
 listings, ending in :CA or :TR otherwise).`,
 		Args:        cobra.MaximumNArgs(1),
@@ -343,10 +387,11 @@ listings, ending in :CA or :TR otherwise).`,
 	c.Flags().StringVar(&f.formtype, "formtype", "", "Limit to one form type, e.g. 10-K (at most 50 characters)")
 	c.Flags().StringVar(&f.dateFrom, "date-from", "", "Earliest filing date, YYYY-MM-DD")
 	c.Flags().StringVar(&f.dateTo, "date-to", "", "Latest filing date, YYYY-MM-DD")
+	c.Flags().BoolVar(&f.latestOnly, "latest-only", false, "Search only the newest filing of the formtype; needs symbol, takes no dates, semantic mode only")
 	c.Flags().StringVar(&f.mode, "mode", "semantic", "Search mode: semantic (accepts filters) or broad (no filters)")
 	c.Flags().IntVar(&f.limit, "limit", defaultSearchLimit, "Passages to return (1-25)")
-	c.Flags().StringVar(&f.cursor, "cursor", "", "Continuation cursor from a truncated response")
-	c.Flags().StringVar(&f.format, "format", "", "Output format: table (default on TTY) or json (default off a TTY)")
+	c.Flags().StringVar(&f.cursor, "cursor", "", cursorUsage)
+	c.Flags().StringVar(&f.format, "format", "", formatUsage)
 	c.Flags().BoolVar(&f.dryRun, "dry-run", false, "Print the request without sending it")
 	c.Flags().BoolVar(&f.stdin, "stdin", false, "Read the query from stdin instead of the positional argument")
 	return c
@@ -395,6 +440,18 @@ func runSearch(cmd *cobra.Command, args []string, version string, f *searchFlags
 	if f.dateFrom != "" && f.dateTo != "" && f.dateFrom > f.dateTo {
 		return usageErr(cmd, "--date-from must not be later than --date-to")
 	}
+	// Story 81.4: the server's own latest_only rules and wording, checked
+	// before any request.
+	if f.latestOnly {
+		switch {
+		case f.mode == "broad":
+			return usageErr(cmd, "Filters (symbol, formtype, date_from, date_to, latest_only) are not supported with mode=broad.")
+		case symbol == "":
+			return usageErr(cmd, "'latest_only' needs symbol.")
+		case f.dateFrom != "" || f.dateTo != "":
+			return usageErr(cmd, "'latest_only' cannot be combined with date_from or date_to.")
+		}
+	}
 	hasFilter := symbol != "" || formtype != "" || f.dateFrom != "" || f.dateTo != ""
 	if f.mode == "broad" && hasFilter {
 		return usageErr(cmd, "--mode broad takes no filters (--symbol, --formtype, --date-from, --date-to)")
@@ -414,14 +471,18 @@ func runSearch(cmd *cobra.Command, args []string, version string, f *searchFlags
 	if f.dateTo != "" {
 		q.Set("date_to", f.dateTo)
 	}
+	if f.latestOnly {
+		q.Set("latest_only", "true")
+	}
 	q.Set("mode", f.mode)
 	q.Set("limit", fmt.Sprintf("%d", f.limit))
-	if f.cursor != "" {
-		q.Set("cursor", f.cursor)
-	}
 
 	format := resolveFormat(f.format, cmd.OutOrStdout(), "table")
-	body, err := fetchResearch(cmd, version, "/research/search?"+q.Encode(), format, f.dryRun)
+	path, cur, err := pagedPath(cmd, "/research/search", q, f.cursor, format)
+	if err != nil {
+		return err
+	}
+	body, err := fetchResearch(cmd, version, path, format, f.dryRun)
 	if err != nil || body == nil {
 		return err
 	}
@@ -431,8 +492,13 @@ func runSearch(cmd *cobra.Command, args []string, version string, f *searchFlags
 	}
 
 	if len(resp.Results) == 0 {
-		if format == "json" {
+		switch format {
+		case "json":
 			if err := emitJSON(cmd, body, format); err != nil {
+				return err
+			}
+		case formatCompact:
+			if err := emitCompact(cmd, body, "results", cur); err != nil {
 				return err
 			}
 		}
@@ -446,12 +512,17 @@ func runSearch(cmd *cobra.Command, args []string, version string, f *searchFlags
 		return &ExitError{Code: ExitNotFound}
 	}
 
-	if format == "json" {
+	switch format {
+	case formatCompact:
+		return emitCompact(cmd, body, "results", cur)
+	case "json":
 		if err := emitJSON(cmd, body, format); err != nil {
 			return err
 		}
-	} else if err := renderPassageTable(cmd.OutOrStdout(), resp.Results); err != nil {
-		return err
+	default:
+		if err := renderPassageTable(cmd.OutOrStdout(), resp.Results); err != nil {
+			return err
+		}
 	}
 	truncationHint(cmd, resp.page)
 	return nil
@@ -493,8 +564,8 @@ permalink url.`,
 		},
 	}
 	c.Flags().IntVar(&f.window, "window", defaultPassageWindow, "Neighbouring passages on each side (0-2)")
-	c.Flags().StringVar(&f.cursor, "cursor", "", "Continuation cursor from a truncated response")
-	c.Flags().StringVar(&f.format, "format", "", "Output format: table (default on TTY) or json (default off a TTY)")
+	c.Flags().StringVar(&f.cursor, "cursor", "", cursorUsage)
+	c.Flags().StringVar(&f.format, "format", "", formatUsage)
 	c.Flags().BoolVar(&f.dryRun, "dry-run", false, "Print the request without sending it")
 	return c
 }
@@ -512,11 +583,11 @@ func runReadPassage(cmd *cobra.Command, chunkID, version string, f *readPassageF
 	}
 	q := url.Values{}
 	q.Set("window", fmt.Sprintf("%d", f.window))
-	if f.cursor != "" {
-		q.Set("cursor", f.cursor)
-	}
 	format := resolveFormat(f.format, cmd.OutOrStdout(), "table")
-	path := "/research/passages/" + url.PathEscape(chunkID) + "?" + q.Encode()
+	path, cur, err := pagedPath(cmd, "/research/passages/"+url.PathEscape(chunkID), q, f.cursor, format)
+	if err != nil {
+		return err
+	}
 	body, err := fetchResearch(cmd, version, path, format, f.dryRun)
 	if err != nil || body == nil {
 		return err
@@ -524,6 +595,10 @@ func runReadPassage(cmd *cobra.Command, chunkID, version string, f *readPassageF
 	var resp passageResponse
 	if err := decodeBody(cmd, body, &resp, format); err != nil {
 		return err
+	}
+	if format == formatCompact {
+		// The head passage stays on every page; the neighbours list is fitted.
+		return emitCompact(cmd, body, "neighbours", cur)
 	}
 	if format == "json" {
 		if err := emitJSON(cmd, body, format); err != nil {
@@ -574,8 +649,8 @@ permalink url.`,
 			return runReadSection(cmd, args[0], args[1], version, &f)
 		},
 	}
-	c.Flags().StringVar(&f.cursor, "cursor", "", "Continuation cursor from a truncated response")
-	c.Flags().StringVar(&f.format, "format", "", "Output format: table (default on TTY) or json (default off a TTY)")
+	c.Flags().StringVar(&f.cursor, "cursor", "", cursorUsage)
+	c.Flags().StringVar(&f.format, "format", "", formatUsage)
 	c.Flags().BoolVar(&f.dryRun, "dry-run", false, "Print the request without sending it")
 	return c
 }
@@ -593,11 +668,11 @@ func runReadSection(cmd *cobra.Command, filingID, sectionHeader, version string,
 	}
 	q := url.Values{}
 	q.Set("section_header", sectionHeader)
-	if f.cursor != "" {
-		q.Set("cursor", f.cursor)
-	}
 	format := resolveFormat(f.format, cmd.OutOrStdout(), "table")
-	path := "/research/filings/" + url.PathEscape(filingID) + "/sections?" + q.Encode()
+	path, cur, err := pagedPath(cmd, "/research/filings/"+url.PathEscape(filingID)+"/sections", q, f.cursor, format)
+	if err != nil {
+		return err
+	}
 	body, err := fetchResearch(cmd, version, path, format, f.dryRun)
 	if err != nil || body == nil {
 		return err
@@ -605,6 +680,9 @@ func runReadSection(cmd *cobra.Command, filingID, sectionHeader, version string,
 	var resp sectionResponse
 	if err := decodeBody(cmd, body, &resp, format); err != nil {
 		return err
+	}
+	if format == formatCompact {
+		return emitCompact(cmd, body, "passages", cur)
 	}
 	if format == "json" {
 		if err := emitJSON(cmd, body, format); err != nil {
@@ -642,8 +720,8 @@ read that section.`,
 			return runToc(cmd, args[0], version, &f)
 		},
 	}
-	c.Flags().StringVar(&f.cursor, "cursor", "", "Continuation cursor from a truncated response")
-	c.Flags().StringVar(&f.format, "format", "", "Output format: table (default on TTY) or json (default off a TTY)")
+	c.Flags().StringVar(&f.cursor, "cursor", "", cursorUsage)
+	c.Flags().StringVar(&f.format, "format", "", formatUsage)
 	c.Flags().BoolVar(&f.dryRun, "dry-run", false, "Print the request without sending it")
 	return c
 }
@@ -656,13 +734,11 @@ func runToc(cmd *cobra.Command, filingID, version string, f *tocFlags) error {
 	if err := checkUUID(cmd, "filing_id", filingID); err != nil {
 		return err
 	}
-	path := "/research/filings/" + url.PathEscape(filingID) + "/toc"
-	if f.cursor != "" {
-		q := url.Values{}
-		q.Set("cursor", f.cursor)
-		path += "?" + q.Encode()
-	}
 	format := resolveFormat(f.format, cmd.OutOrStdout(), "table")
+	path, cur, err := pagedPath(cmd, "/research/filings/"+url.PathEscape(filingID)+"/toc", url.Values{}, f.cursor, format)
+	if err != nil {
+		return err
+	}
 	body, err := fetchResearch(cmd, version, path, format, f.dryRun)
 	if err != nil || body == nil {
 		return err
@@ -670,6 +746,15 @@ func runToc(cmd *cobra.Command, filingID, version string, f *tocFlags) error {
 	var resp tocResponse
 	if err := decodeBody(cmd, body, &resp, format); err != nil {
 		return err
+	}
+	if format == formatCompact {
+		if err := emitCompact(cmd, body, "sections", cur); err != nil {
+			return err
+		}
+		if len(resp.Sections) == 0 {
+			_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "No sections found")
+		}
+		return nil
 	}
 	if format == "json" {
 		if err := emitJSON(cmd, body, format); err != nil {
@@ -685,4 +770,258 @@ func runToc(cmd *cobra.Command, filingID, version string, f *tocFlags) error {
 	}
 	truncationHint(cmd, resp.page)
 	return nil
+}
+
+// ─── filings (Story 81.4) ────────────────────────────────────────────────────
+
+// filingRow is one /research/filings row (Story 81.2).
+type filingRow struct {
+	FilingID  *string `json:"filing_id"`
+	Form      *string `json:"form"`
+	Datefiled *string `json:"datefiled"`
+	Period    *string `json:"period"`
+	URL       *string `json:"url"`
+}
+
+type filingsResponse struct {
+	page
+	Company *struct {
+		Name     *string `json:"name"`
+		Symbol   *string `json:"symbol"`
+		Exchange *string `json:"exchange"`
+	} `json:"company"`
+	Filings []filingRow `json:"filings"`
+}
+
+type filingsFlags struct {
+	formtype, dateFrom, dateTo, cursor, format string
+	limit                                      int
+	dryRun                                     bool
+}
+
+func newFilingsCmd(version string) *cobra.Command {
+	var f filingsFlags
+	c := &cobra.Command{
+		Use:   "filings <symbol>",
+		Short: "List a company's filings, newest first",
+		Long: `List one company's readable filings newest first, by symbol (AAPL for a
+US listing, ABX:CA for a Canadian one, AKBNK:TR for a Turkish one). Each row
+carries the filing_id that toc, read section and find take, the form, the
+filing date, the period and the filing url to cite. Filter by form type and
+filing dates. An empty list means no filing matched, not an error. Exit 3
+when no company has the symbol.`,
+		Args:        cobra.ExactArgs(1),
+		Annotations: researchAnnotations("List filings", "0,2,3,4,5,7"),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runFilings(cmd, args[0], version, &f)
+		},
+	}
+	c.Flags().StringVar(&f.formtype, "formtype", "", "Limit to one form, as a row's form shows it (at most 200 characters)")
+	c.Flags().StringVar(&f.dateFrom, "date-from", "", "Earliest filing date, YYYY-MM-DD")
+	c.Flags().StringVar(&f.dateTo, "date-to", "", "Latest filing date, YYYY-MM-DD")
+	c.Flags().IntVar(&f.limit, "limit", defaultSearchLimit, "Filings to return (1 to 25)")
+	c.Flags().StringVar(&f.cursor, "cursor", "", cursorUsage)
+	c.Flags().StringVar(&f.format, "format", "", formatUsage)
+	c.Flags().BoolVar(&f.dryRun, "dry-run", false, "Print the request without sending it")
+	return c
+}
+
+func runFilings(cmd *cobra.Command, symbol, version string, f *filingsFlags) error {
+	if err := checkFormat(cmd, f.format); err != nil {
+		return err
+	}
+	symbol = strings.TrimSpace(symbol)
+	if symbol == "" || jsLen(symbol) > maxSymbolChars {
+		return usageErr(cmd, "symbol must be 1 to %d characters", maxSymbolChars)
+	}
+	formtype := strings.TrimSpace(f.formtype)
+	if jsLen(formtype) > maxListFormtypeChars {
+		return usageErr(cmd, "--formtype must be at most %d characters", maxListFormtypeChars)
+	}
+	if f.limit < minSearchLimit || f.limit > maxSearchLimit {
+		return usageErr(cmd, "--limit must be from %d to %d (got %d)", minSearchLimit, maxSearchLimit, f.limit)
+	}
+	if err := checkDate(cmd, "date-from", f.dateFrom); err != nil {
+		return err
+	}
+	if err := checkDate(cmd, "date-to", f.dateTo); err != nil {
+		return err
+	}
+	if f.dateFrom != "" && f.dateTo != "" && f.dateFrom > f.dateTo {
+		return usageErr(cmd, "--date-from must not be later than --date-to")
+	}
+
+	q := url.Values{}
+	q.Set("symbol", symbol)
+	if formtype != "" {
+		q.Set("formtype", formtype)
+	}
+	if f.dateFrom != "" {
+		q.Set("date_from", f.dateFrom)
+	}
+	if f.dateTo != "" {
+		q.Set("date_to", f.dateTo)
+	}
+	q.Set("limit", fmt.Sprintf("%d", f.limit))
+
+	format := resolveFormat(f.format, cmd.OutOrStdout(), "table")
+	path, cur, err := pagedPath(cmd, "/research/filings", q, f.cursor, format)
+	if err != nil {
+		return err
+	}
+	body, err := fetchResearch(cmd, version, path, format, f.dryRun)
+	if err != nil || body == nil {
+		return err
+	}
+	var resp filingsResponse
+	if err := decodeBody(cmd, body, &resp, format); err != nil {
+		return err
+	}
+	switch format {
+	case formatCompact:
+		err = emitCompact(cmd, body, "filings", cur)
+	case "json":
+		if err = emitJSON(cmd, body, format); err == nil {
+			cursorHint(cmd, resp.NextCursor)
+		}
+	default:
+		err = renderFilingsTable(cmd.OutOrStdout(), resp.Filings)
+		cursorHint(cmd, resp.NextCursor)
+	}
+	if err != nil {
+		return err
+	}
+	// The hosted contract: a known company with no matching filing is an
+	// empty list, not an error.
+	if len(resp.Filings) == 0 {
+		_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "No filings found")
+	}
+	return nil
+}
+
+// renderFilingsTable writes FILING_ID FORM DATE PERIOD URL.
+func renderFilingsTable(w io.Writer, rows []filingRow) error {
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	_, _ = fmt.Fprintln(tw, "FILING_ID\tFORM\tDATE\tPERIOD\tURL")
+	for _, r := range rows {
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n",
+			cell(r.FilingID), clipCell(r.Form, sectionColumnRunes), cell(r.Datefiled), cell(r.Period), cell(r.URL))
+	}
+	return tw.Flush()
+}
+
+// ─── find (Story 81.4) ───────────────────────────────────────────────────────
+
+type findMatch struct {
+	ChunkID       *string `json:"chunk_id"`
+	SectionHeader *string `json:"section_header"`
+	Snippet       *string `json:"snippet"`
+	URL           *string `json:"url"`
+}
+
+type findResponse struct {
+	Term         string      `json:"term"`
+	Found        bool        `json:"found"`
+	TotalMatches int         `json:"total_matches"`
+	Matches      []findMatch `json:"matches"`
+	NextCursor   *string     `json:"next_cursor"`
+}
+
+type findFlags struct {
+	cursor, format string
+	limit          int
+	dryRun         bool
+}
+
+func newFindCmd(version string) *cobra.Command {
+	var f findFlags
+	c := &cobra.Command{
+		Use:   "find <filing_id> <term>",
+		Short: "Check whether one filing mentions a term",
+		Long: `Check whether one filing mentions a term, by filing_id (from search,
+filings or toc). The result says found, total_matches and the best matching
+passages with their section, a short snippet and the url to cite. Every word
+of the term must appear in a passage; put the term in double quotes for an
+exact phrase. found false is an answer, not an error: use it instead of
+repeated searches to check that a term is absent. Exit 3 when the filing id
+is unknown.`,
+		Args:        cobra.ExactArgs(2),
+		Annotations: researchAnnotations("Find in filing", "0,2,3,4,5,7"),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runFind(cmd, args[0], args[1], version, &f)
+		},
+	}
+	c.Flags().IntVar(&f.limit, "limit", defaultFindLimit, "Matches to return (1 to 10)")
+	c.Flags().StringVar(&f.cursor, "cursor", "", cursorUsage)
+	c.Flags().StringVar(&f.format, "format", "", formatUsage)
+	c.Flags().BoolVar(&f.dryRun, "dry-run", false, "Print the request without sending it")
+	return c
+}
+
+func runFind(cmd *cobra.Command, filingID, term, version string, f *findFlags) error {
+	if err := checkFormat(cmd, f.format); err != nil {
+		return err
+	}
+	filingID = strings.TrimSpace(filingID)
+	if err := checkUUID(cmd, "filing_id", filingID); err != nil {
+		return err
+	}
+	// The server's own rule: trimmed, 1 to 200 characters, at least one
+	// letter or digit. Quotes pass through unchanged (an exact phrase).
+	term = strings.TrimSpace(term)
+	if term == "" || jsLen(term) > maxFindTermChars || !hasLetterOrDigit(term) {
+		return usageErr(cmd, "term must be 1 to %d characters with at least one letter or digit", maxFindTermChars)
+	}
+	if f.limit < minFindLimit || f.limit > maxFindLimit {
+		return usageErr(cmd, "--limit must be from %d to %d (got %d)", minFindLimit, maxFindLimit, f.limit)
+	}
+	q := url.Values{}
+	q.Set("term", term)
+	q.Set("limit", fmt.Sprintf("%d", f.limit))
+
+	format := resolveFormat(f.format, cmd.OutOrStdout(), "table")
+	path, cur, err := pagedPath(cmd, "/research/filings/"+url.PathEscape(filingID)+"/find", q, f.cursor, format)
+	if err != nil {
+		return err
+	}
+	body, err := fetchResearch(cmd, version, path, format, f.dryRun)
+	if err != nil || body == nil {
+		return err
+	}
+	var resp findResponse
+	if err := decodeBody(cmd, body, &resp, format); err != nil {
+		return err
+	}
+	switch format {
+	case formatCompact:
+		return emitCompact(cmd, body, "matches", cur)
+	case "json":
+		if err := emitJSON(cmd, body, format); err != nil {
+			return err
+		}
+	default:
+		if err := renderFindTable(cmd.OutOrStdout(), resp); err != nil {
+			return err
+		}
+	}
+	cursorHint(cmd, resp.NextCursor)
+	return nil
+}
+
+// renderFindTable writes a found line, then CHUNK_ID SECTION SNIPPET URL.
+func renderFindTable(w io.Writer, resp findResponse) error {
+	if !resp.Found {
+		_, err := fmt.Fprintf(w, "Not found: no passage mentions %s\n", resp.Term)
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "Found: %d matching passages for %s\n", resp.TotalMatches, resp.Term); err != nil {
+		return err
+	}
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	_, _ = fmt.Fprintln(tw, "CHUNK_ID\tSECTION\tSNIPPET\tURL")
+	for _, m := range resp.Matches {
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n",
+			cell(m.ChunkID), clipCell(m.SectionHeader, sectionColumnRunes), clipCell(m.Snippet, snippetColumnRunes), cell(m.URL))
+	}
+	return tw.Flush()
 }

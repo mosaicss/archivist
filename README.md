@@ -92,6 +92,10 @@ archivist search "revenue growth drivers" --symbol SHOP --formtype 10-K
 archivist read passage <chunk_id> --window 2
 archivist toc <filing_id>
 archivist read section <filing_id> "Item 7. Management's Discussion and Analysis"
+
+# 4. List a company's filings, or check whether one filing mentions a term
+archivist filings NVDA --formtype 10-K --limit 3
+archivist find <filing_id> "TSMC"
 ```
 
 On a terminal, `search` prints a table:
@@ -105,6 +109,18 @@ Piped or redirected, every verb prints JSON instead: the server response,
 indented, keys and values unchanged. Pass `--format json` or `--format table`
 to choose. Diagnostics go to stderr, so stdout stays clean for `jq`.
 
+`--format compact` (research verbs and `companies`) prints one line of
+minified JSON for an agent: no nulls, no `truncated: false`, no `chunk_index`
+or `exchange` on passages, no `formdescription` beside a US listing's form
+code such as 10-K (Canadian and Turkish rows keep it), and no
+`entity_resolution` when the symbol resolved plainly. Ids, `url`, `cite_as`
+and exchange document ids stay, in the server's order. `search`,
+`read passage` (its neighbours; the passage itself stays on every page),
+`read section`, `toc`, `filings` and `find` also fit each page to 24,000 bytes
+as a host prints it (about 6k tokens): a cut page says `truncated: true` and
+carries a `c1.` cursor that continues the same request with `--format
+compact` (other arguments or another format exit 2).
+
 When a response is too large it is truncated and stderr says
 `More results: rerun with --cursor <token>`.
 
@@ -112,10 +128,12 @@ When a response is too large it is truncated and stderr says
 
 | Verb | What it does |
 |------|--------------|
-| `search <query>` | Search passages. `--symbol`, `--formtype`, `--date-from`, `--date-to`, `--mode semantic\|broad`, `--limit 1-25`, `--cursor` |
+| `search <query>` | Search passages. `--symbol`, `--formtype`, `--date-from`, `--date-to`, `--latest-only`, `--mode semantic\|broad`, `--limit 1-25`, `--cursor` |
 | `read passage <chunk_id>` | A passage with up to `--window` (0 to 2, default 1) neighbours on each side |
 | `read section <filing_id> <section_header>` | Every passage of one section, in order |
 | `toc <filing_id>` | A filing's section headers |
+| `filings <symbol>` | A company's filings, newest first. `--formtype`, `--date-from`, `--date-to`, `--limit 1-25` (default 10), `--cursor`; an empty list exits 0 |
+| `find <filing_id> <term>` | Whether one filing mentions a term: `found`, `total_matches`, the best matches. `--limit 1-10` (default 5), `--cursor`; quote the term for an exact phrase; `found: false` exits 0 |
 | `companies search <query>` | Find a company and its symbol |
 | `companies get <issuer_key>` | One company's details |
 | `auth login\|status\|whoami\|logout` | Manage the credential |
@@ -162,9 +180,9 @@ An old binary exits 5 with "Run 'archivist update' to upgrade."
 ## MCP server
 
 `archivist mcp serve` runs the binary as an MCP server over stdio. Each
-research verb becomes a read only MCP tool with the same credential, exit
-codes and JSON, so any MCP host (Claude Desktop, Cursor, custom agents) can
-search filings without shell access.
+research verb becomes a read only MCP tool with the same credential and exit
+codes, so any MCP host (Claude Desktop, Cursor, custom agents) can search
+filings without shell access.
 
 Claude Desktop config (`claude_desktop_config.json`):
 
@@ -183,16 +201,18 @@ Claude Desktop config (`claude_desktop_config.json`):
 The `env` block is optional once `archivist auth login` has saved a
 credential.
 
-Tools (11): `search`, `read_passage`, `read_section`, `toc`,
-`companies_search`, `companies_get`, `auth_status`, `auth_whoami`, `usage`,
-`doctor`, `version`. Tool names join the verb path with underscores. Every
-tool has a title and the annotations `readOnlyHint: true`,
-`destructiveHint: false`, `openWorldHint: false`.
+Tools (8): `search`, `read_passage`, `read_section`, `toc`, `filings`,
+`find`, `companies_search`, `companies_get`. Tool names join the verb path
+with underscores. Every tool has a title and the annotations
+`readOnlyHint: true`, `destructiveHint: false`, `openWorldHint: false`. Every
+result is the `--format compact` output (the tools take no `format` or
+`dry_run` argument), so a page stays well under a host's tool output limit.
 
 `auth login`, `auth logout`, `update` and `connect` are not exposed: token
-setup, binary replacement and harness supervision are operator actions. A
-failed call returns an error result naming the exit code, with the verb's
-stderr and stdout.
+setup, binary replacement and harness supervision are operator actions.
+`auth status`, `auth whoami`, `doctor`, `usage` and `version` are shell verbs
+only, so agents do not pay for their descriptions. A failed call returns an
+error result naming the exit code, with the verb's stderr and stdout.
 
 `--token-file <path>` reads the token from a file on every tool call, so a
 supervisor can rotate it without restarting the server (it cannot be combined
@@ -201,9 +221,10 @@ with `--token`).
 **Task mode.** When the token is a session task token (`mst_...`, minted by
 `archivist connect` for one workspace session), the server exposes only the
 tools whose chat-api routes a task token may call: `search`,
-`companies_search`, `read_passage`, `read_section` and `toc`. `companies_get`
-falls back to the full company catalog, which task tokens cannot read, so it
-is left out. `auth login` refuses task tokens. With `--publish-session <id>`
+`companies_search`, `read_passage`, `read_section`, `toc`, `filings` and
+`find`. `companies_get` falls back to the full company catalog, which task
+tokens cannot read, so it is left out. Task mode results stay the full
+`--format json` body: the Mosaic workspace reads those records. `auth login` refuses task tokens. With `--publish-session <id>`
 and `--publish-dir <dir>` (set by `archivist connect` when the token carries
 the `publish` scope) task mode adds `publish_artifact`, which uploads one file
 from that directory to the session's workspace (see below).
@@ -362,7 +383,7 @@ when it starts and changeable while it runs. Low to high:
 | `full_auto` | Full auto | The harness runs without asking, but anything it still asks about (for example deleting a critical folder) is shown as a card | `--permission-mode bypassPermissions` | `never`, `danger-full-access` (no sandbox, network on) |
 
 The Mosaic search and read tools (`search`, `companies_search`,
-`companies_get`, `read_passage`, `read_section`, `toc`) never ask, in any
+`companies_get`, `read_passage`, `read_section`, `toc`, `filings`, `find`) never ask, in any
 mode and on both harnesses. `publish_artifact` follows the mode. The daemon
 enforces the mode itself on every approval request that reaches it,
 whatever the harness version does: Mosaic read tools are allowed, `read_only`

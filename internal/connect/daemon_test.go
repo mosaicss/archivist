@@ -331,7 +331,7 @@ func TestDaemonSessionLifecycle(t *testing.T) {
 	rec := h.record(sid)
 	args := strings.Join(runs[0].Args, " ")
 	for _, want := range []string{"--permission-prompt-tool stdio", "--strict-mcp-config", "--tools " + ClaudeBuiltinTools,
-		"--allowedTools mcp__archivist__companies_search,mcp__archivist__read_passage,mcp__archivist__read_section,mcp__archivist__search,mcp__archivist__toc",
+		"--allowedTools mcp__archivist__companies_search,mcp__archivist__filings,mcp__archivist__find,mcp__archivist__read_passage,mcp__archivist__read_section,mcp__archivist__search,mcp__archivist__toc",
 		"--add-dir " + rec.Cwd} {
 		if !strings.Contains(args, want) {
 			t.Errorf("args missing %q: %s", want, args)
@@ -411,7 +411,7 @@ func TestDaemonSessionLifecycle(t *testing.T) {
 	// MCP: task mode tools only, and the call carries the task token.
 	h.message(sid, "mcp")
 	h.waitFinishes(sid, 8)
-	if !strings.Contains(h.relay.text(sid), "tools: companies_search,publish_artifact,read_passage,read_section,search,toc") {
+	if !strings.Contains(h.relay.text(sid), "tools: companies_search,filings,find,publish_artifact,read_passage,read_section,search,toc") {
 		t.Fatalf("mcp tools text: %q", h.relay.text(sid))
 	}
 	bearers := h.api.researchBearers()

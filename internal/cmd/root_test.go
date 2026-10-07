@@ -61,7 +61,7 @@ func TestHelpListsAllVerbsInOrder(t *testing.T) {
 		t.Fatalf("execute: %v", err)
 	}
 	helpText := out.String()
-	verbsInOrder := []string{"auth", "search", "read", "toc", "companies", "doctor", "usage", "update", "version"}
+	verbsInOrder := []string{"auth", "search", "read", "toc", "filings", "find", "companies", "doctor", "usage", "update", "version"}
 	lastIdx := -1
 	for _, verb := range verbsInOrder {
 		// Cobra renders subcommands as "  <use>   <short>" under

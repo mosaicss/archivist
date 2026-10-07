@@ -19,7 +19,7 @@ var Scopes = []string{"search", "read", "publish"}
 // publish scope (Story 78.18).
 const PublishTool = "publish_artifact"
 
-var readRoute = regexp.MustCompile(`^(/research/passages/[^/]+|/research/filings/[^/]+/(toc|sections)|/uploads/[^/]+/chunks/[0-9]+)$`)
+var readRoute = regexp.MustCompile(`^(/research/passages/[^/]+|/research/filings/[^/]+/(toc|sections|find)|/uploads/[^/]+/chunks/[0-9]+)$`)
 
 // RouteScope mirrors chat-api's taskRouteScope
 // (chat-api/src/middleware/task-scope.ts): the scope a route needs, or ""
@@ -32,7 +32,7 @@ func RouteScope(method, path string) string {
 		return ""
 	}
 	switch path {
-	case "/research/search", "/research/companies", "/uploads/search":
+	case "/research/search", "/research/companies", "/research/filings", "/uploads/search":
 		return "search"
 	}
 	if readRoute.MatchString(path) {
@@ -43,7 +43,8 @@ func RouteScope(method, path string) string {
 
 // ToolRoutes lists every chat-api route each MCP-exposed verb can call
 // (":id" stands for a path parameter). A verb missing here is never exposed
-// in task mode.
+// in task mode. The admin verbs (auth status, auth whoami, doctor, usage,
+// version) are hidden from MCP since Story 81.4, so they have no entry.
 var ToolRoutes = map[string][]string{
 	"search":           {"GET /research/search"},
 	"companies_search": {"GET /research/companies"},
@@ -51,10 +52,8 @@ var ToolRoutes = map[string][]string{
 	"read_passage":     {"GET /research/passages/:id"},
 	"read_section":     {"GET /research/filings/:id/sections"},
 	"toc":              {"GET /research/filings/:id/toc"},
-	"auth_status":      {"GET /account/cli-tokens"},
-	"auth_whoami":      {"GET /account/cli-tokens"},
-	"usage":            {"GET /account/usage"},
-	"doctor":           {"GET /health", "GET /account/cli-tokens"},
+	"filings":          {"GET /research/filings"},
+	"find":             {"GET /research/filings/:id/find"},
 	PublishTool:        {"POST /artifacts"},
 }
 
@@ -65,7 +64,8 @@ func ApprovalRequired(name string) bool { return name == PublishTool }
 // ReadTools are the Mosaic read tools (Story 78.32): a session answers them
 // allow in every permission mode, on both harnesses, without an approval
 // card. They only search and read filings; publish_artifact is not one.
-var ReadTools = []string{"search", "companies_search", "companies_get", "read_passage", "read_section", "toc"}
+// filings and find joined in Story 81.4.
+var ReadTools = []string{"search", "companies_search", "companies_get", "read_passage", "read_section", "toc", "filings", "find"}
 
 // IsReadTool reports a Mosaic read tool (by its MCP tool name).
 func IsReadTool(name string) bool { return contains(ReadTools, name) && !ApprovalRequired(name) }
