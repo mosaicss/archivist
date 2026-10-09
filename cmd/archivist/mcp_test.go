@@ -891,3 +891,22 @@ func TestMCPServer_Search504IsOneRequest(t *testing.T) {
 		t.Errorf("want exactly 1 request (no retry after a 504), got %d", n)
 	}
 }
+
+// TestCollectTools_SearchDescriptionNotTruncated (hf-date-fix): the search
+// verb's Short plus Long stays within toolDescription's 900 char cap, so the
+// period sentence and the exit 6 rerun guidance both reach MCP hosts whole.
+func TestCollectTools_SearchDescriptionNotTruncated(t *testing.T) {
+	d := strings.Join(strings.Fields(findSpec(t, "search").Description), " ")
+	if strings.Contains(d, "…") {
+		t.Errorf("search description is truncated:\n%s", d)
+	}
+	for _, want := range []string{
+		"search once per period with --date-from/--date-to",
+		"6 when the symbol matches several",
+		"rerun with the exact symbol",
+	} {
+		if !strings.Contains(d, want) {
+			t.Errorf("search description missing %q:\n%s", want, d)
+		}
+	}
+}

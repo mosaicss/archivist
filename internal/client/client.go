@@ -92,12 +92,15 @@ func (c *Client) Do(ctx context.Context, method, path string, body io.Reader) (*
 	return c.doAs(ctx, method, path, body, "application/json", retryStandard)
 }
 
-// DoNoReplay is Do, except that a 504 response or a client timeout ends the
-// call at once: the 504 comes back as the *ExitCodeError (exit 5, HTTPStatus
-// 504) Do returns after its last retry, the timeout as a network error. The
-// search request uses it (hf-date-fix): a 504 there means the server already
-// ran the expensive vector search to its 30 s cap, and a replay repeats that
-// work. Every other status and error keeps Do's retries.
+// DoNoReplay is Do, except that a 504 response or a client timeout after the
+// connection was made ends the call at once: the 504 comes back as the
+// *ExitCodeError (exit 5, HTTPStatus 504) Do returns after its last retry, the
+// timeout as a network error. The search request uses it (hf-date-fix): a
+// search 504 means chat-api's 35 s deadline passed, or Archivist failed after
+// running its vector statement to Honey's 30 s cap (chat-api maps that 5xx to
+// 504), and a replay repeats that work. A timeout while dialing never sent the
+// request, so it is a connection error and keeps its retries, as does every
+// other status and error.
 func (c *Client) DoNoReplay(ctx context.Context, method, path string, body io.Reader) (*http.Response, error) {
 	return c.doAs(ctx, method, path, body, "application/json", retryNoReplay)
 }
@@ -114,7 +117,7 @@ const (
 	// so a retry cannot create a duplicate.
 	retryNever
 	// retryNoReplay is retryStandard without a retry after a 504 or a client
-	// timeout.
+	// timeout outside the dial phase.
 	retryNoReplay
 )
 
@@ -171,7 +174,7 @@ func (c *Client) doAs(ctx context.Context, method, path string, body io.Reader, 
 		resp, err := c.httpClient.Do(req)
 		if err != nil {
 			lastErr = fmt.Errorf("archivist: network error: %w", err)
-			if policy == retryNoReplay && isTimeout(err) {
+			if policy == retryNoReplay && isTimeout(err) && !isDialError(err) {
 				break
 			}
 			// POST: only 1 retry on network error; GET: 3 retries
@@ -319,6 +322,13 @@ func isTimeout(err error) bool {
 	}
 	var netErr net.Error
 	return errors.As(err, &netErr) && netErr.Timeout()
+}
+
+// isDialError reports whether a request error happened while dialing, before
+// the request was sent.
+func isDialError(err error) bool {
+	var opErr *net.OpError
+	return errors.As(err, &opErr) && opErr.Op == "dial"
 }
 
 // backoffWithJitter adds ±25% jitter to the given base duration.

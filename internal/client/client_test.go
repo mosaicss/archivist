@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -610,5 +611,37 @@ func TestDo_GETClientTimeoutStillRetried(t *testing.T) {
 	}
 	if n := calls.Load(); n != 4 {
 		t.Errorf("want 4 attempts (1 + 3 retries), got %d", n)
+	}
+}
+
+// dialTimeout is a net.Error that reports a timeout.
+type dialTimeout struct{}
+
+func (dialTimeout) Error() string   { return "i/o timeout" }
+func (dialTimeout) Timeout() bool   { return true }
+func (dialTimeout) Temporary() bool { return true }
+
+// TestDoNoReplay_DialTimeoutKeepsRetries: a timeout while dialing never sent
+// the request, so it is a connection error and keeps its 3 retries.
+func TestDoNoReplay_DialTimeoutKeepsRetries(t *testing.T) {
+	var dials atomic.Int32
+	c := client.New("mc_pat_testtoken", "0.2.0")
+	c.BaseURL = "http://archivist.invalid"
+	c.SetTransportForTest(&http.Transport{
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			dials.Add(1)
+			return nil, &net.OpError{Op: "dial", Net: network, Err: dialTimeout{}}
+		},
+	})
+	_, err := c.DoNoReplay(context.Background(), http.MethodGet, searchPath, nil)
+	if err == nil || !strings.Contains(err.Error(), "network error") {
+		t.Fatalf("want a network error, got %v", err)
+	}
+	var netErr net.Error
+	if !errors.As(err, &netErr) || !netErr.Timeout() {
+		t.Fatalf("the test dial error must be a timeout, got %v", err)
+	}
+	if n := dials.Load(); n != 4 {
+		t.Errorf("want 4 dial attempts (1 + 3 retries) on a dial timeout, got %d", n)
 	}
 }

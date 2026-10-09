@@ -398,10 +398,8 @@ AAPL for a US listing, ABX:CA for a Canadian one; find one with 'companies
 search'), --formtype, --date-from and --date-to. Set --latest-only with
 --symbol and one --formtype to search only the newest filing of that form;
 latest_filing names it. Page with --cursor when a response is truncated.
---mode broad searches without filters. For a question spanning several years,
-search once per period with --date-from and --date-to (adding --formtype when
-one filing type holds the answer) instead of one undated search: a wide undated
-search on a large issuer can time out. Exit 3 when nothing matched, 6 when the symbol matches several
+--mode broad searches without filters. For several years, search once per
+period with --date-from/--date-to. Exit 3 when nothing matched, 6 when the symbol matches several
 issuers (rerun with the exact symbol 'companies search' returns: bare for US
 listings, ending in :CA or :TR otherwise).`,
 		Args:        cobra.MaximumNArgs(1),

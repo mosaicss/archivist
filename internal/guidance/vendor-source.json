@@ -8,7 +8,7 @@
   "files": [
     {
       "path": "agent-ui.full.md",
-      "sha256": "c368119c0c22ed3bc457be22e28dbc23163900187e684c5b3fae8b8cca2fe412"
+      "sha256": "5e2b8f42924a46469dd17028e0177b732123786b2b853c7c9414a43799e2369a"
     },
     {
       "path": "agent-ui.compact.md",
@@ -16,7 +16,7 @@
     },
     {
       "path": "mosaic-ui.full.md",
-      "sha256": "f6eb965c6687f3df250527434355cd6209508f466092bf42fd2593404f645eaf"
+      "sha256": "69292cdf2aa9b8e0b152e0ff6df3a7f8af41b518c4135a709d2a069e9f072bce"
     },
     {
       "path": "mosaic-ui.compact.md",
@@ -24,7 +24,7 @@
     },
     {
       "path": "agent-ui.full.web.md",
-      "sha256": "62cd64049c9d0b01e2e16c1c2a4d0eea1850efaf4f5365ecb887b1a76bfdabee"
+      "sha256": "ce5e19aca84ca42dd3499613b98159b97d890f588e29b2ed51ef5369d100cf1a"
     },
     {
       "path": "agent-ui.compact.web.md",
@@ -32,7 +32,7 @@
     },
     {
       "path": "mosaic-ui.full.web.md",
-      "sha256": "fde8fe2053bde4d0f35adaad204840dd63d591cbe98c3f1343ec40c4da293333"
+      "sha256": "f97036b19fa5f022726326f86a36269fb618edd5a384be602b06c98b19a445df"
     },
     {
       "path": "mosaic-ui.compact.web.md",
