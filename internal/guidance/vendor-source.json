@@ -1,7 +1,7 @@
 {
   "schemaVersion": "mosaic-agent-guidance/1",
   "repository": "https://forge.hive.mosaic-finance.com/tunc/mosaic.git",
-  "sourceCommit": "577baeba5337448bc2121dbe67f20b4299f64b2d",
+  "sourceCommit": "36f27e7e8a241419f0949d0aa5ef2b27e08fb873",
   "snapshotPath": "reference/schemas/agent-guidance/1",
   "vendoredPath": "internal/guidance/vendor/1",
   "capturedAt": "2026-10-09",
