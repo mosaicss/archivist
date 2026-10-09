@@ -122,7 +122,7 @@ func (c *Client) PublishArtifact(ctx context.Context, sessionID, name, mediaType
 		return nil, fmt.Errorf("encode request: %w", err)
 	}
 	// No retry: a retried POST /artifacts could publish a duplicate artifact.
-	resp, err := c.doAs(ctx, http.MethodPost, "/artifacts", &body, w.FormDataContentType(), false)
+	resp, err := c.doAs(ctx, http.MethodPost, "/artifacts", &body, w.FormDataContentType(), retryNever)
 	if err != nil {
 		return nil, err
 	}

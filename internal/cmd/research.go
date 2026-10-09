@@ -215,10 +215,26 @@ func newResearchClient(cmd *cobra.Command, version, format string) (*client.Clie
 	return c, nil
 }
 
+// searchTimeoutSuggestion replaces the server's suggestion on a search 504:
+// a narrower search takes the cheap plan (hf-date-fix).
+const searchTimeoutSuggestion = "Search one period at a time with --date-from and --date-to, " +
+	"or add --formtype; repeating the same search times out again."
+
 // fetchResearch runs one GET against chat-api and returns the 2xx body.
 // --dry-run prints the request instead. A nil body with a nil error means the
 // dry run already printed.
 func fetchResearch(cmd *cobra.Command, version, path, format string, dryRun bool) ([]byte, error) {
+	return fetchResearchGet(cmd, version, path, format, dryRun, false)
+}
+
+// fetchSearch is fetchResearch for GET /research/search: no retry after a 504
+// or a client timeout (client.DoNoReplay), and a 504 suggests one period per
+// search. The search verb and the mcp serve search tool both run it.
+func fetchSearch(cmd *cobra.Command, version, path, format string, dryRun bool) ([]byte, error) {
+	return fetchResearchGet(cmd, version, path, format, dryRun, true)
+}
+
+func fetchResearchGet(cmd *cobra.Command, version, path, format string, dryRun, search bool) ([]byte, error) {
 	if dryRun {
 		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "[dry-run] GET %s%s\n", client.ResolveBaseURL(), path)
 		return nil, nil
@@ -227,8 +243,16 @@ func fetchResearch(cmd *cobra.Command, version, path, format string, dryRun bool
 	if err != nil {
 		return nil, err
 	}
-	resp, err := c.Do(cmd.Context(), http.MethodGet, path, nil)
+	do := c.Do
+	if search {
+		do = c.DoNoReplay
+	}
+	resp, err := do(cmd.Context(), http.MethodGet, path, nil)
 	if err != nil {
+		var exitErr *client.ExitCodeError
+		if search && errors.As(err, &exitErr) && exitErr.HTTPStatus == http.StatusGatewayTimeout {
+			exitErr.Suggestion = searchTimeoutSuggestion
+		}
 		return nil, failFromDo(cmd, err, format)
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -374,7 +398,10 @@ AAPL for a US listing, ABX:CA for a Canadian one; find one with 'companies
 search'), --formtype, --date-from and --date-to. Set --latest-only with
 --symbol and one --formtype to search only the newest filing of that form;
 latest_filing names it. Page with --cursor when a response is truncated.
---mode broad searches without filters. Exit 3 when nothing matched, 6 when the symbol matches several
+--mode broad searches without filters. For a question spanning several years,
+search once per period with --date-from and --date-to (adding --formtype when
+one filing type holds the answer) instead of one undated search: a wide undated
+search on a large issuer can time out. Exit 3 when nothing matched, 6 when the symbol matches several
 issuers (rerun with the exact symbol 'companies search' returns: bare for US
 listings, ending in :CA or :TR otherwise).`,
 		Args:        cobra.MaximumNArgs(1),
@@ -482,7 +509,7 @@ func runSearch(cmd *cobra.Command, args []string, version string, f *searchFlags
 	if err != nil {
 		return err
 	}
-	body, err := fetchResearch(cmd, version, path, format, f.dryRun)
+	body, err := fetchSearch(cmd, version, path, format, f.dryRun)
 	if err != nil || body == nil {
 		return err
 	}

@@ -169,7 +169,7 @@ Agents should branch on exit codes, not parse output text:
 | 2    | usage error (bad flag, id or argument; unknown command) |
 | 3    | not found (no passages; unknown id or company) |
 | 4    | auth error (missing or invalid credential; no Pro account) |
-| 5    | server error (5xx after retries; network failure; minimum CLI version block) |
+| 5    | server error (5xx after retries, a search 504 or timeout without one; network failure; minimum CLI version block) |
 | 6    | ambiguous match (a search symbol matched several issuers) |
 | 7    | rate limit or monthly fair use limit reached |
 | 8    | reserved, not emitted |

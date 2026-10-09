@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand"
+	"net"
 	"net/http"
 	"os"
 	"runtime"
@@ -87,14 +89,39 @@ func (c *Client) SetStderr(w io.Writer) {
 // an *ExitCodeError with code 7. A non-2xx response other than 429 and 5xx is
 // returned to the caller unread.
 func (c *Client) Do(ctx context.Context, method, path string, body io.Reader) (*http.Response, error) {
-	return c.doAs(ctx, method, path, body, "application/json", true)
+	return c.doAs(ctx, method, path, body, "application/json", retryStandard)
 }
 
-// doAs is Do with the request body's Content-Type. retry false makes exactly
-// one attempt: a network error, 429 or 5xx is returned as Do would return it
-// after its last retry. A non-idempotent create uses it so a retry cannot
-// create a duplicate.
-func (c *Client) doAs(ctx context.Context, method, path string, body io.Reader, contentType string, retry bool) (*http.Response, error) {
+// DoNoReplay is Do, except that a 504 response or a client timeout ends the
+// call at once: the 504 comes back as the *ExitCodeError (exit 5, HTTPStatus
+// 504) Do returns after its last retry, the timeout as a network error. The
+// search request uses it (hf-date-fix): a 504 there means the server already
+// ran the expensive vector search to its 30 s cap, and a replay repeats that
+// work. Every other status and error keeps Do's retries.
+func (c *Client) DoNoReplay(ctx context.Context, method, path string, body io.Reader) (*http.Response, error) {
+	return c.doAs(ctx, method, path, body, "application/json", retryNoReplay)
+}
+
+// retryPolicy selects which failures doAs retries.
+type retryPolicy int
+
+const (
+	// retryStandard: GET retries 3 times on 5xx, non-quota 429 and network
+	// errors; any other method retries once on 503, non-quota 429 and
+	// network errors.
+	retryStandard retryPolicy = iota
+	// retryNever makes exactly one attempt. A non-idempotent create uses it
+	// so a retry cannot create a duplicate.
+	retryNever
+	// retryNoReplay is retryStandard without a retry after a 504 or a client
+	// timeout.
+	retryNoReplay
+)
+
+// doAs is Do with the request body's Content-Type and retry policy. Without
+// a retry a network error, 429 or 5xx is returned as Do would return it after
+// its last retry.
+func (c *Client) doAs(ctx context.Context, method, path string, body io.Reader, contentType string, policy retryPolicy) (*http.Response, error) {
 	url := c.BaseURL + path
 
 	isGet := method == http.MethodGet
@@ -102,7 +129,7 @@ func (c *Client) doAs(ctx context.Context, method, path string, body io.Reader, 
 	if isGet {
 		maxRetries = 3
 	}
-	if !retry {
+	if policy == retryNever {
 		maxRetries = 0
 	}
 
@@ -144,6 +171,9 @@ func (c *Client) doAs(ctx context.Context, method, path string, body io.Reader, 
 		resp, err := c.httpClient.Do(req)
 		if err != nil {
 			lastErr = fmt.Errorf("archivist: network error: %w", err)
+			if policy == retryNoReplay && isTimeout(err) {
+				break
+			}
 			// POST: only 1 retry on network error; GET: 3 retries
 			continue
 		}
@@ -219,11 +249,13 @@ func (c *Client) doAs(ctx context.Context, method, path string, body io.Reader, 
 			}
 		}
 
-		// 5xx — for POST only retry 503; for GET retry any 5xx
+		// 5xx — for POST only retry 503; for GET retry any 5xx; no replay
+		// after a 504 under retryNoReplay
 		if status >= 500 {
 			errBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
 			_ = resp.Body.Close()
-			if attempt < maxRetries && (isGet || status == http.StatusServiceUnavailable) {
+			noReplay := policy == retryNoReplay && status == http.StatusGatewayTimeout
+			if attempt < maxRetries && (isGet || status == http.StatusServiceUnavailable) && !noReplay {
 				lastResp = nil
 				lastErr = fmt.Errorf("server error %d", status)
 				continue
@@ -277,6 +309,16 @@ func (c *Client) GetCLITokens(ctx context.Context) (*CLITokensResponse, error) {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 	return &result, nil
+}
+
+// isTimeout reports whether a request error is a client timeout: the HTTP
+// client's own Timeout, a net.Error timeout or an expired context deadline.
+func isTimeout(err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
 // backoffWithJitter adds ±25% jitter to the given base duration.
@@ -345,6 +387,8 @@ type ExitCodeError struct {
 	APICode string
 	// Suggestion is the server's suggestion, when the response carried one.
 	Suggestion string
+	// HTTPStatus is the response status of a final 5xx; 0 otherwise.
+	HTTPStatus int
 	// Reported is true when Do already wrote the message to stderr.
 	Reported bool
 }
@@ -360,7 +404,7 @@ func serverError(apiErr *APIError) *ExitCodeError {
 	if code == "" {
 		code = "SERVER_ERROR"
 	}
-	return &ExitCodeError{Code: 5, Message: msg, APICode: code, Suggestion: apiErr.Suggestion}
+	return &ExitCodeError{Code: 5, Message: msg, APICode: code, Suggestion: apiErr.Suggestion, HTTPStatus: apiErr.Status}
 }
 
 // APIError is a non-2xx chat-api response decoded from its JSON error body

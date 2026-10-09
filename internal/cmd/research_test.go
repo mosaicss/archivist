@@ -483,3 +483,68 @@ func TestTocNumberedHeaders(t *testing.T) {
 		t.Errorf("request: %q", u)
 	}
 }
+
+// ─── hf-date-fix: search makes no retry after a 504 ──────────────────────────
+
+const archivistTimeoutBody = `{"error":"Filing search timed out.","code":"ARCHIVIST_TIMEOUT","suggestion":"Try again, or narrow the request."}`
+
+func TestSearch504IsOneRequestWithPeriodSuggestion(t *testing.T) {
+	srv := newStub(t, http.StatusGatewayTimeout, nil, archivistTimeoutBody)
+	stdout, stderr, code := runVerb(t, srv.URL, "search", "revenue trend", "--symbol", "RY:CA", "--format", "json")
+	if code != ExitServerError {
+		t.Fatalf("exit %d, want %d; stderr:\n%s", code, ExitServerError, stderr)
+	}
+	if n := srv.calls.Load(); n != 1 {
+		t.Errorf("want exactly 1 request (no retry after a 504), got %d", n)
+	}
+	for _, want := range []string{"ARCHIVIST_TIMEOUT", "--date-from", "--date-to", "--formtype", "one period"} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("stderr missing %q:\n%s", want, stderr)
+		}
+	}
+	if strings.Contains(stderr, "Try again, or narrow the request.") {
+		t.Errorf("the server's generic suggestion should be replaced:\n%s", stderr)
+	}
+	var env map[string]any
+	if err := json.Unmarshal([]byte(stdout), &env); err != nil {
+		t.Fatalf("JSON error envelope: %v\n%s", err, stdout)
+	}
+	if s, _ := env["suggestion"].(string); s != searchTimeoutSuggestion {
+		t.Errorf("JSON suggestion: got %q, want %q", s, searchTimeoutSuggestion)
+	}
+}
+
+func TestSearchTransient5xxKeepsRetries(t *testing.T) {
+	srv := newStub(t, http.StatusBadGateway, nil, `{}`)
+	_, stderr, code := runVerb(t, srv.URL, "search", "revenue", "--symbol", "RY:CA")
+	if code != ExitServerError {
+		t.Fatalf("exit %d, want %d", code, ExitServerError)
+	}
+	if n := srv.calls.Load(); n != 4 {
+		t.Errorf("want 4 requests (1 + 3 retries), got %d", n)
+	}
+	if strings.Contains(stderr, "--date-from") {
+		t.Errorf("a 502 is not a search timeout; no period suggestion:\n%s", stderr)
+	}
+}
+
+func TestNonSearchGet504KeepsRetries(t *testing.T) {
+	for name, argv := range map[string][]string{
+		"read passage":     {"read", "passage", testChunkID},
+		"companies search": {"companies", "search", "Royal"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := newStub(t, http.StatusGatewayTimeout, nil, archivistTimeoutBody)
+			_, stderr, code := runVerb(t, srv.URL, argv...)
+			if code != ExitServerError {
+				t.Fatalf("exit %d, want %d", code, ExitServerError)
+			}
+			if n := srv.calls.Load(); n != 4 {
+				t.Errorf("want 4 requests (1 + 3 retries), got %d", n)
+			}
+			if strings.Contains(stderr, "--date-from") {
+				t.Errorf("the period suggestion is for search only:\n%s", stderr)
+			}
+		})
+	}
+}

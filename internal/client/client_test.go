@@ -8,7 +8,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -433,5 +435,180 @@ func TestIsOlderVersion(t *testing.T) {
 				t.Errorf("current=%s minimum=%s: blocked=%v want=%v", tc.current, tc.minimum, blocked, tc.want)
 			}
 		})
+	}
+}
+
+// ─── hf-date-fix: the search request makes no retry after a 504 or a client timeout ───
+
+// countingServer answers every request with handler and counts requests.
+func countingServer(t *testing.T, handler func(w http.ResponseWriter, r *http.Request)) (*httptest.Server, *atomic.Int32) {
+	t.Helper()
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		handler(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &calls
+}
+
+const searchPath = "/research/search?q=revenue&symbol=RY:CA&mode=semantic&limit=10"
+
+func TestDoNoReplay_504IsOneAttemptExit5(t *testing.T) {
+	srv, calls := countingServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusGatewayTimeout)
+		_, _ = w.Write([]byte(`{"error":"Filing search timed out.","code":"ARCHIVIST_TIMEOUT","suggestion":"Try again, or narrow the request."}`))
+	})
+	c := newTestClient(t, srv)
+	_, err := c.DoNoReplay(context.Background(), http.MethodGet, searchPath, nil)
+	var exitErr *client.ExitCodeError
+	if !errors.As(err, &exitErr) {
+		t.Fatalf("want *ExitCodeError, got %T: %v", err, err)
+	}
+	if exitErr.Code != 5 || exitErr.HTTPStatus != http.StatusGatewayTimeout || exitErr.APICode != "ARCHIVIST_TIMEOUT" {
+		t.Errorf("got code %d status %d api code %q, want 5, 504, ARCHIVIST_TIMEOUT",
+			exitErr.Code, exitErr.HTTPStatus, exitErr.APICode)
+	}
+	if n := calls.Load(); n != 1 {
+		t.Errorf("want exactly 1 request (no retry after a 504), got %d", n)
+	}
+}
+
+func TestDoNoReplay_ClientTimeoutIsOneAttempt(t *testing.T) {
+	srv, calls := countingServer(t, func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-time.After(2 * time.Second):
+		}
+	})
+	c := newTestClient(t, srv)
+	c.SetHTTPTimeoutForTest(50 * time.Millisecond)
+	_, err := c.DoNoReplay(context.Background(), http.MethodGet, searchPath, nil)
+	if err == nil {
+		t.Fatal("want a network error after the client timeout")
+	}
+	var exitErr *client.ExitCodeError
+	if errors.As(err, &exitErr) {
+		t.Fatalf("a client timeout is a network error, not an exit code error: %v", err)
+	}
+	if !strings.Contains(err.Error(), "network error") {
+		t.Errorf("want a network error, got %v", err)
+	}
+	if n := calls.Load(); n != 1 {
+		t.Errorf("want exactly 1 attempt (no retry after a client timeout), got %d", n)
+	}
+}
+
+func TestDoNoReplay_ContextDeadlineIsOneAttempt(t *testing.T) {
+	srv, calls := countingServer(t, func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-time.After(2 * time.Second):
+		}
+	})
+	c := newTestClient(t, srv)
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	_, err := c.DoNoReplay(ctx, http.MethodGet, searchPath, nil)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("want a deadline exceeded error, got %v", err)
+	}
+	if n := calls.Load(); n != 1 {
+		t.Errorf("want exactly 1 attempt, got %d", n)
+	}
+}
+
+func TestDoNoReplay_OtherServerErrorsKeepThreeRetries(t *testing.T) {
+	for _, status := range []int{http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable} {
+		t.Run(strconv.Itoa(status), func(t *testing.T) {
+			srv, calls := countingServer(t, func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(status)
+			})
+			c := newTestClient(t, srv)
+			_, err := c.DoNoReplay(context.Background(), http.MethodGet, searchPath, nil)
+			if !isExitCode(err, 5) {
+				t.Fatalf("want exit code 5, got %v", err)
+			}
+			if n := calls.Load(); n != 4 {
+				t.Errorf("want 4 requests (1 + 3 retries), got %d", n)
+			}
+		})
+	}
+}
+
+func TestDoNoReplay_ConnectionErrorKeepsRetries(t *testing.T) {
+	srv, calls := countingServer(t, func(w http.ResponseWriter, r *http.Request) {
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			t.Errorf("hijack: %v", err)
+			return
+		}
+		_ = conn.Close()
+	})
+	c := newTestClient(t, srv)
+	_, err := c.DoNoReplay(context.Background(), http.MethodGet, searchPath, nil)
+	if err == nil || !strings.Contains(err.Error(), "network error") {
+		t.Fatalf("want a network error, got %v", err)
+	}
+	if n := calls.Load(); n != 4 {
+		t.Errorf("want 4 attempts (1 + 3 retries) on a dropped connection, got %d", n)
+	}
+}
+
+func TestDoNoReplay_Burst429KeepsRetries(t *testing.T) {
+	var seen atomic.Int32
+	srv, calls := countingServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Retry-After", "1")
+		if seen.Add(1) == 1 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = w.Write([]byte(`{"error":"Rate limit exceeded","code":"rate_limit_exceeded"}`))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	c := newTestClient(t, srv)
+	resp, err := c.DoNoReplay(context.Background(), http.MethodGet, searchPath, nil)
+	if err != nil {
+		t.Fatalf("want success after one 429 retry, got %v", err)
+	}
+	_ = resp.Body.Close()
+	if n := calls.Load(); n != 2 {
+		t.Errorf("want 2 requests (429 then retry), got %d", n)
+	}
+}
+
+// TestDo_GET504StillRetried: every request other than search keeps today's
+// policy, so a 504 on Do is retried three times.
+func TestDo_GET504StillRetried(t *testing.T) {
+	srv, calls := countingServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusGatewayTimeout)
+	})
+	c := newTestClient(t, srv)
+	_, err := c.Do(context.Background(), http.MethodGet, "/research/companies?q=royal", nil)
+	if !isExitCode(err, 5) {
+		t.Fatalf("want exit code 5, got %v", err)
+	}
+	if n := calls.Load(); n != 4 {
+		t.Errorf("want 4 requests (1 + 3 retries), got %d", n)
+	}
+}
+
+// TestDo_GETClientTimeoutStillRetried: Do keeps retrying a client timeout.
+func TestDo_GETClientTimeoutStillRetried(t *testing.T) {
+	srv, calls := countingServer(t, func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-time.After(2 * time.Second):
+		}
+	})
+	c := newTestClient(t, srv)
+	c.SetHTTPTimeoutForTest(50 * time.Millisecond)
+	_, err := c.Do(context.Background(), http.MethodGet, "/research/companies?q=royal", nil)
+	if err == nil {
+		t.Fatal("want a network error")
+	}
+	if n := calls.Load(); n != 4 {
+		t.Errorf("want 4 attempts (1 + 3 retries), got %d", n)
 	}
 }
