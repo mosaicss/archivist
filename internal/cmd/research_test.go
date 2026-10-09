@@ -502,6 +502,9 @@ func TestSearch504IsOneRequestWithPeriodSuggestion(t *testing.T) {
 			t.Errorf("stderr missing %q:\n%s", want, stderr)
 		}
 	}
+	if strings.Contains(stderr, "Try again later") {
+		t.Errorf("a search 504 must not advise trying again:\n%s", stderr)
+	}
 	if strings.Contains(stderr, "Try again, or narrow the request.") {
 		t.Errorf("the server's generic suggestion should be replaced:\n%s", stderr)
 	}

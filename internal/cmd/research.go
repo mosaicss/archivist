@@ -251,6 +251,8 @@ func fetchResearchGet(cmd *cobra.Command, version, path, format string, dryRun, 
 	if err != nil {
 		var exitErr *client.ExitCodeError
 		if search && errors.As(err, &exitErr) && exitErr.HTTPStatus == http.StatusGatewayTimeout {
+			// A replay of the same search times out again: no "Try again later".
+			exitErr.Message = strings.TrimSuffix(exitErr.Message, " Try again later.")
 			exitErr.Suggestion = searchTimeoutSuggestion
 		}
 		return nil, failFromDo(cmd, err, format)
