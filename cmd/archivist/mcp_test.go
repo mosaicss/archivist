@@ -865,3 +865,48 @@ func propNames(s toolSpec) []string {
 	sort.Strings(names)
 	return names
 }
+
+// TestMCPServer_Search504IsOneRequest (hf-date-fix): the search tool shares
+// the search verb's client call, so a 504 is not retried and the error names
+// exit code 5 with the one period suggestion.
+func TestMCPServer_Search504IsOneRequest(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusGatewayTimeout)
+		_, _ = w.Write([]byte(`{"error":"Filing search timed out.","code":"ARCHIVIST_TIMEOUT"}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	cs := newMCPSession(t, srv.URL)
+	text, isError := callToolText(t, cs, "search", map[string]any{"query": "revenue trend", "symbol": "RY:CA"})
+	if !isError {
+		t.Fatalf("want IsError=true for a backend 504, got success:\n%s", text)
+	}
+	if !strings.Contains(text, "exit code 5 (server error)") || !strings.Contains(text, "--date-from") {
+		t.Errorf("error text missing exit code 5 or the period suggestion:\n%s", text)
+	}
+	if n := calls.Load(); n != 1 {
+		t.Errorf("want exactly 1 request (no retry after a 504), got %d", n)
+	}
+}
+
+// TestCollectTools_SearchDescriptionNotTruncated (hf-date-fix): the search
+// verb's Short plus Long stays within toolDescription's 900 char cap, so the
+// period sentence and the exit 6 rerun guidance both reach MCP hosts whole.
+func TestCollectTools_SearchDescriptionNotTruncated(t *testing.T) {
+	d := strings.Join(strings.Fields(findSpec(t, "search").Description), " ")
+	if strings.Contains(d, "…") {
+		t.Errorf("search description is truncated:\n%s", d)
+	}
+	for _, want := range []string{
+		"search once per period with --date-from/--date-to",
+		"6 when the symbol matches several",
+		"rerun with the exact symbol",
+	} {
+		if !strings.Contains(d, want) {
+			t.Errorf("search description missing %q:\n%s", want, d)
+		}
+	}
+}

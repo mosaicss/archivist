@@ -134,11 +134,20 @@ func TestHTTPFailureMatrix(t *testing.T) {
 		},
 		{
 			name:       "server down after retries",
+			status:     503,
+			body:       `{"error":"Filing search is temporarily unavailable.","code":"SEARCH_UNAVAILABLE"}`,
+			wantExit:   ExitServerError,
+			wantCalls:  4,
+			wantStderr: []string{"Filing search is temporarily unavailable.", "SEARCH_UNAVAILABLE"},
+		},
+		{
+			// hf-date-fix: a search 504 is not retried and suggests one period.
+			name:       "search timeout without retry",
 			status:     504,
 			body:       `{"error":"Archivist timed out.","code":"ARCHIVIST_TIMEOUT"}`,
 			wantExit:   ExitServerError,
-			wantCalls:  4,
-			wantStderr: []string{"Archivist timed out.", "ARCHIVIST_TIMEOUT"},
+			wantCalls:  1,
+			wantStderr: []string{"Archivist timed out.", "ARCHIVIST_TIMEOUT", "--date-from"},
 		},
 		{
 			name:       "old binary",

@@ -107,8 +107,10 @@ Two "latest" intents:
 - Latest PERIODIC filing ("latest 10-K", "last annual report", "most recent AIF / MD&A / 10-Q / audited financial statements"): call search/search_filings with symbol, one exact formtype, and latest_only: true. The result's latest_filing names the filing used. Where search takes no latest_only, take the newest filing date. Do NOT guess date windows.
 - Latest NEWS/developments ("latest news", "recent developments", "what's new", "latest on Barrick", "latest about Shopify", "what's the latest with Apple", "last quarter"): omit latest_only; date_from = 3 months ago, date_to = today. If fewer than 3 results, widen to 6 months, then 12 months.
 - Historical periods ("2013 10-K", "revenue in 2020") → explicit date_from/date_to. NEVER latest_only.
+- Several years (trends, "since 2015", period comparisons) → one search per period, usually per year (wider periods under a search limit), each with date_from/date_to, not one undated search; an open trend ("how has X trended") covers the last 5 years. Add formtype when one filing type holds the answer: annual figures in the 10-K or Annual information form; quarterly figures in the 10-Q or MD&A; events in the 8-K or News release.
+- Do not settle for the first results: if they miss a period or part of the question, search again with another period, filing type or wording before answering.
 - "last year" → date_from = Jan 1 of previous year, date_to = Dec 31 of previous year.
-- No time reference → omit date filters.
+- No time reference (not a trend or period comparison) → omit date filters.
 For news, wide windows bury critical events under routine filings; start tight.
 
 # Citation Rules
@@ -192,7 +194,7 @@ Branch on exit codes, not on output text:
 | 2 | Usage error: bad flag, id or argument | Fix the invocation |
 | 3 | Not found: no passages, unknown id or company | Broaden the query or filters |
 | 4 | Auth error: missing or bad credential, or no Pro account | Run `archivist auth status`; see the plans page |
-| 5 | Server error, or this CLI version is too old | Run `archivist update`, then retry |
+| 5 | Server error, or this CLI version is too old | Run `archivist update`, then retry; after a search timeout (504), narrow it to one period with `--date-from`/`--date-to` or add `--formtype` instead of repeating it |
 | 6 | A search symbol matched several issuers | Rerun with the full `TICKER:EXCHANGE` symbol |
 | 7 | Rate limit or monthly fair use limit reached | Wait; check `archivist usage` |
 | 8 | Reserved | Not emitted |

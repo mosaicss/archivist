@@ -1,14 +1,14 @@
 {
   "schemaVersion": "mosaic-agent-guidance/1",
   "repository": "https://forge.hive.mosaic-finance.com/tunc/mosaic.git",
-  "sourceCommit": "a7af9eac93268f1fcb31e06ed33696e1e15ebf68",
+  "sourceCommit": "aa440a5ce8e9eac998fbeafe4ec7b702b8295844",
   "snapshotPath": "reference/schemas/agent-guidance/1",
   "vendoredPath": "internal/guidance/vendor/1",
-  "capturedAt": "2026-10-06",
+  "capturedAt": "2026-10-09",
   "files": [
     {
       "path": "agent-ui.full.md",
-      "sha256": "e6cf632716a373f5137a562bffb1d9ad2601ef1ac6e3e7ff43d06ae7fbaaf007"
+      "sha256": "a7f5a15cdb815179ea6ef297e68995ed3ad0edc204d27fa85502f50c7d93f1b7"
     },
     {
       "path": "agent-ui.compact.md",
@@ -16,7 +16,7 @@
     },
     {
       "path": "mosaic-ui.full.md",
-      "sha256": "dffb1f7be050001a9cbe82e1adc51203d696455d3f54c4d77ecf4f1d30b9d525"
+      "sha256": "b1c39853e2ca15f54779e09eebe730eebb37d785c4e216238f3f4e7c3850577e"
     },
     {
       "path": "mosaic-ui.compact.md",
@@ -24,7 +24,7 @@
     },
     {
       "path": "agent-ui.full.web.md",
-      "sha256": "ae6de461656ba687e2b1db5f215dbcb9a3ee461b46387afc3d93ce3296370261"
+      "sha256": "336bf996698ea841bb9892132ed1ef7d47b39a23fddaf2941d8b08cdf7d10d4c"
     },
     {
       "path": "agent-ui.compact.web.md",
@@ -32,7 +32,7 @@
     },
     {
       "path": "mosaic-ui.full.web.md",
-      "sha256": "21f0c26d07ef5fbc52fddbe4b9bc8f089fc8666e029e9baf2eb029b835de0717"
+      "sha256": "4730c5b6af68dbac761b27ae2b6d76a99d06dbe4090ca6532ca4ac32e2e288f2"
     },
     {
       "path": "mosaic-ui.compact.web.md",
