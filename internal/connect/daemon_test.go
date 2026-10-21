@@ -331,7 +331,7 @@ func TestDaemonSessionLifecycle(t *testing.T) {
 	rec := h.record(sid)
 	args := strings.Join(runs[0].Args, " ")
 	for _, want := range []string{"--permission-prompt-tool stdio", "--strict-mcp-config", "--tools " + ClaudeBuiltinTools,
-		"--allowedTools mcp__archivist__companies_search,mcp__archivist__filings,mcp__archivist__find,mcp__archivist__read_passage,mcp__archivist__read_section,mcp__archivist__search,mcp__archivist__toc",
+		"--allowedTools mcp__archivist__companies_search,mcp__archivist__filings,mcp__archivist__find,mcp__archivist__publish_artifact,mcp__archivist__read_passage,mcp__archivist__read_section,mcp__archivist__search,mcp__archivist__toc",
 		"--add-dir " + rec.Cwd} {
 		if !strings.Contains(args, want) {
 			t.Errorf("args missing %q: %s", want, args)

@@ -288,8 +288,9 @@ func truncateString(s string, keep int) string {
 }
 
 // reduceDescriptor keeps the fields an approval card needs and truncates the
-// tool input: Claude's can_use_tool keys, and Codex's command, cwd, kind,
-// reason, availableDecisions, ids and the changed paths of a file change.
+// tool input: Claude's can_use_tool keys and session scope (Story 94.4),
+// and Codex's command, cwd, kind, reason, availableDecisions, ids and the
+// changed paths of a file change.
 func reduceDescriptor(v any) any {
 	d, ok := v.(map[string]any)
 	if !ok {
@@ -297,7 +298,7 @@ func reduceDescriptor(v any) any {
 	}
 	out := map[string]any{}
 	for _, k := range []string{"subtype", "tool_name", "display_name", "tool_use_id", "blocked_path",
-		"kind", "threadId", "turnId", "itemId", "approvalId", "serverName"} {
+		"kind", "threadId", "turnId", "itemId", "approvalId", "serverName", sessionScopeKey} {
 		if x, ok := d[k]; ok {
 			out[k] = x
 		}

@@ -69,12 +69,12 @@ type session struct {
 	turnActive bool
 	queue      []string
 	pending    map[string]*pendingApproval
-	remember   map[string]bool // tool name -> allow (true) or deny (false)
-	running    bool            // a passing init was seen for the current process
-	held       []Chunk         // turn start chunks waiting for the init proof
-	resumedID  string          // Claude session id the current process resumed
-	slot       bool            // holds one of the daemon's live-process slots
-	fatal      string          // subscription proof failure: no further turns
+	rules      *sessionRules // Claude "for the session" answers (sessionrules.go)
+	running    bool          // a passing init was seen for the current process
+	held       []Chunk       // turn start chunks waiting for the init proof
+	resumedID  string        // Claude session id the current process resumed
+	slot       bool          // holds one of the daemon's live-process slots
+	fatal      string        // subscription proof failure: no further turns
 	stopping   bool
 	// early holds user messages that arrived during a Codex sign-in; they
 	// follow the first prompt (Story 78.22).
@@ -153,7 +153,7 @@ func newSession(d *Daemon, rec *SessionRecord) *session {
 	log := d.log.With("session " + rec.SessionID[:8])
 	s := &session{d: d, id: rec.SessionID, rec: rec, log: log, login: d.claude.Login,
 		cmds: make(chan sessionCmd, 64), pending: map[string]*pendingApproval{},
-		remember: map[string]bool{}, modeReqs: map[string]Mode{}, linkErr: make(chan error, 1), done: make(chan struct{}),
+		rules: newSessionRules(), modeReqs: map[string]Mode{}, linkErr: make(chan error, 1), done: make(chan struct{}),
 		art: newArtifactTracker(d.chatAPIURL), parkReq: make(chan chan bool), lastActive: time.Now()}
 	s.outbox = NewOutbox(d.parser, log)
 	s.tr = NewTranslator()
@@ -856,7 +856,11 @@ func (s *session) handleControlRequest(f claudeFrame, line []byte) bool {
 	if s.claudeBackstop(f.RequestID, req) {
 		return true // decided by the permission mode (Story 78.32): no card
 	}
-	if allow, ok := s.remember[req.ToolName]; ok {
+	if msg := s.claudeCardRefusal(f.RequestID, f.Request); msg != "" {
+		_ = s.proc.WriteJSON(denyFrame(f.RequestID, msg)) // no card (approvalcard.go)
+		return true
+	}
+	if allow, ok := s.rules.decide(req.ToolName, req.Input); ok {
 		// Remembered for this session: answer locally, no relay round trip.
 		if allow {
 			s.write(allowFrame(f.RequestID, req.Input))
@@ -1026,9 +1030,9 @@ func (s *session) answerApproval(in *Inbound) {
 		s.emit(Chunk{"type": "data-permission-scope", "data": data})
 		switch in.Scope {
 		case "allow_always":
-			s.remember[p.toolName] = true
+			s.rules.remember(p.toolName, p.input, true)
 		case "reject_always":
-			s.remember[p.toolName] = false
+			s.rules.remember(p.toolName, p.input, false)
 		}
 	}
 }

@@ -257,10 +257,8 @@ func TestCodexArgsAreFixed(t *testing.T) {
 		"mcp_servers.archivist.command":          `"/opt/archivist"`,
 		"mcp_servers.archivist.args":             `["mcp","serve","--token-file","/state/run/x/task-token"]`,
 		"mcp_servers.archivist.enabled_tools":    `["companies_search","filings","find","publish_artifact","read_passage","read_section","search","toc"]`,
-		// Story 78.32: Mosaic read tools never ask; publish_artifact prompts.
+		// Story 94.4: Mosaic tools never ask, publish_artifact included.
 		"mcp_servers.archivist.default_tools_approval_mode": `"approve"`,
-		// Story 78.18: publish_artifact is never auto-approved.
-		"mcp_servers.archivist.tools.publish_artifact.approval_mode": `"prompt"`,
 	}
 	for k, v := range want {
 		if set[k] != v {
@@ -268,6 +266,9 @@ func TestCodexArgsAreFixed(t *testing.T) {
 		}
 	}
 	for k := range set {
+		if strings.HasPrefix(k, "mcp_servers.archivist.tools.") {
+			t.Errorf("-c %s: no per tool approval override (the server default covers every Mosaic tool)", k)
+		}
 		if strings.HasPrefix(k, "approval_policy") || strings.HasPrefix(k, "model_reasoning") || k == "model" {
 			t.Errorf("-c %s must not be set in argv", k)
 		}
@@ -641,10 +642,11 @@ func TestCodexFileChangeApproval(t *testing.T) {
 }
 
 func TestCodexMCPApprovalAndOtherServerRequests(t *testing.T) {
-	// mcpApproval: the fake asks even for search. Real Codex never asks
-	// for a read tool (approve mode), so an elicitation is never treated as
-	// one (Story 78.32): a card in ask mode.
-	h := newCodexHarness(t, map[string]any{"mcpApproval": true})
+	// mcpApproval: the fake asks even for search and publish_artifact, and
+	// elicitTool names a tool that is not a Mosaic tool, so these approvals
+	// take the card path (a Mosaic tool approval is accepted without a card,
+	// TestCodexMosaicToolApprovalAccepted).
+	h := newCodexHarness(t, map[string]any{"mcpApproval": true, "elicitTool": "other_tool"})
 	h.start()
 	sid := h.startCodexSession("mcp")
 	h.approve(sid, 1, "allow", "user", "allow_once")
@@ -652,7 +654,7 @@ func TestCodexMCPApprovalAndOtherServerRequests(t *testing.T) {
 	if !strings.Contains(h.relay.text(sid), "tools: ") {
 		t.Fatalf("text %q", h.relay.text(sid))
 	}
-	// publish_artifact asks in ask mode: card, then allow / deny.
+	// The publish approval (named other_tool): card, then allow / deny.
 	h.writeCwd(sid, "a.md", []byte("# a\n"))
 	h.message(sid, "publish a.md")
 	req := h.approve(sid, 2, "allow", "user", "allow_once")
@@ -999,7 +1001,9 @@ func TestOversizedCodexCardsAndPatchesFit(t *testing.T) {
 }
 
 func TestCodexMoreServerRequestRows(t *testing.T) {
-	h := newCodexHarness(t, map[string]any{"mcpApproval": true})
+	// elicitTool: MCP approvals naming a tool that is not a Mosaic tool keep
+	// the card path and Codex's own session semantics.
+	h := newCodexHarness(t, map[string]any{"mcpApproval": true, "elicitTool": "other_tool"})
 	h.start()
 	// kind:"writeStdin" takes the command approval path.
 	sid := h.startCodexSession("stdin")
@@ -1008,8 +1012,7 @@ func TestCodexMoreServerRequestRows(t *testing.T) {
 	if req["approvalDescriptor"].(map[string]any)["kind"] != "writeStdin" || !strings.Contains(h.relay.text(sid), "stdin: accept") {
 		t.Fatalf("writeStdin row: %v %q", req, h.relay.text(sid))
 	}
-	// MCP deny for session: cancel (publish_artifact: Mosaic read tools
-	// never reach a card).
+	// MCP deny for session: cancel.
 	h.writeCwd(sid, "a.md", []byte("# a\n"))
 	h.message(sid, "publish a.md")
 	h.approve(sid, 2, "deny", "user", "reject_always")
@@ -1375,7 +1378,7 @@ func TestCodexConnectionClosedDuringMCPWaitStaysResumable(t *testing.T) {
 }
 
 func TestCodexMCPApprovalAfterCompletedCallHasOwnID(t *testing.T) {
-	h := newCodexHarness(t, nil)
+	h := newCodexHarness(t, map[string]any{"elicitTool": "other_tool"})
 	h.start()
 	sid := h.startCodexSession("mcplate")
 	req := h.approve(sid, 1, "deny", "user", "")

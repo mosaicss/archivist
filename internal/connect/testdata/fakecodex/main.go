@@ -20,7 +20,8 @@
 //	mcp              call the archivist MCP search tool (MCP approval when configured)
 //	publish <path>   call publish_artifact; an MCP approval when its
 //	                 approval mode (per tool, else the server default) is
-//	                 "prompt"
+//	                 "prompt", or with config.json mcpApproval (a harness
+//	                 that asks anyway)
 //	elicit           send a non-approval MCP elicitation
 //	askuser          send item/tool/requestUserInput
 //	perms            send item/permissions/requestApproval
@@ -45,6 +46,8 @@
 //	                 -c web_search="disabled" it answers without searching
 //	websearchnostart a webSearch item/completed with no item/started
 //
+// config.json elicitTool sets the _meta.tool_name of MCP tool approvals
+// ("-" leaves it out, as codex-cli 0.160.0 does).
 // config.json also sets mcpFail (archivist reports failed),
 // handshakeAccount (an account/updated before MCP ready) and
 // turnStartDelayMs (a slow turn/start reply), lateExtraMCP (another MCP
@@ -106,6 +109,9 @@ type config struct {
 	LateExtraMCP       bool     `json:"lateExtraMCP"`
 	CloseBeforeMCP     bool     `json:"closeBeforeMCP"`
 	ResumeError        string   `json:"resumeError"`
+	// ElicitTool replaces _meta.tool_name in the MCP tool approvals ("" keeps
+	// the real tool name, "-" leaves the key out, as codex-cli 0.160.0 does).
+	ElicitTool string `json:"elicitTool"`
 	// ThreadModel is the model thread/start and thread/resume report
 	// (default: the requested one), as when Codex substitutes a model.
 	ThreadModel string `json:"threadModel"`
@@ -746,7 +752,7 @@ func (s *server) turn(turn, text string, stop <-chan struct{}) {
 		t.item("item/started", srch)
 		r := s.ask("mcpServer/elicitation/request", t.with("serverName", "archivist", "mode", "form", "message", "Allow publish?",
 			"requestedSchema", map[string]any{"type": "object", "properties": map[string]any{}},
-			"_meta", map[string]any{"codex_approval_kind": "mcp_tool_call", "tool_name": "publish_artifact"}))
+			"_meta", elicitMeta(map[string]any{"codex_approval_kind": "mcp_tool_call"}, "publish_artifact")))
 		for _, it := range []map[string]any{srch, pub} {
 			it["status"] = "failed"
 			t.item("item/completed", it)
@@ -768,7 +774,7 @@ func (s *server) turn(turn, text string, stop <-chan struct{}) {
 		t.item("item/completed", item)
 		r := s.ask("mcpServer/elicitation/request", t.with("serverName", "archivist", "mode", "form", "message", "Allow?",
 			"requestedSchema", map[string]any{"type": "object", "properties": map[string]any{}},
-			"_meta", map[string]any{"codex_approval_kind": "mcp_tool_call", "tool_name": "search"}))
+			"_meta", elicitMeta(map[string]any{"codex_approval_kind": "mcp_tool_call"}, "search")))
 		t.say("mcplate: " + decisionOf(r))
 	case "stdin":
 		t.itemN++
@@ -926,8 +932,8 @@ func (t *turnCtx) mcpCall() {
 	if cfg.MCPApproval {
 		r := t.s.ask("mcpServer/elicitation/request", t.with("serverName", "archivist", "mode", "form",
 			"message", "Allow archivist search?", "requestedSchema", map[string]any{"type": "object", "properties": map[string]any{}},
-			"_meta", map[string]any{"codex_approval_kind": "mcp_tool_call", "persist": []any{"session", "always"},
-				"tool_name": "search", "tool_params": args}))
+			"_meta", elicitMeta(map[string]any{"codex_approval_kind": "mcp_tool_call", "persist": []any{"session", "always"},
+				"tool_params": args}, "search")))
 		_ = os.WriteFile(filepath.Join(base, "elicitation-reply.json"), r, 0o600)
 		if decisionOf(r) != "accept" {
 			item["status"] = "failed"
@@ -963,8 +969,8 @@ func (t *turnCtx) mcpCall() {
 	t.say("tools: " + strings.Join(t.s.tools, ","))
 }
 
-// publish calls publish_artifact. Only the "prompt" approval mode asks;
-// "auto" is treated as no prompt, so a test proves the per-tool override.
+// publish calls publish_artifact. Only the "prompt" approval mode (or
+// mcpApproval) asks; "auto" and "approve" are treated as no prompt.
 func (t *turnCtx) publish(path string) {
 	t.itemN++
 	id := fmt.Sprintf("mcp-%s-%d", t.turn[:8], t.itemN)
@@ -976,11 +982,11 @@ func (t *turnCtx) publish(path string) {
 	if !ok {
 		mode = t.s.overrides["mcp_servers.archivist.default_tools_approval_mode"]
 	}
-	if mode == `"prompt"` {
+	if mode == `"prompt"` || cfg.MCPApproval {
 		r := t.s.ask("mcpServer/elicitation/request", t.with("serverName", "archivist", "mode", "form",
 			"message", "Allow archivist publish_artifact?", "requestedSchema", map[string]any{"type": "object", "properties": map[string]any{}},
-			"_meta", map[string]any{"codex_approval_kind": "mcp_tool_call", "persist": []any{"session", "always"},
-				"tool_name": "publish_artifact", "tool_params": args}))
+			"_meta", elicitMeta(map[string]any{"codex_approval_kind": "mcp_tool_call", "persist": []any{"session", "always"},
+				"tool_params": args}, "publish_artifact")))
 		_ = os.WriteFile(filepath.Join(base, "elicitation-reply.json"), r, 0o600)
 		if decisionOf(r) != "accept" {
 			item["status"] = "failed"
@@ -1020,6 +1026,20 @@ func (t *turnCtx) publish(path string) {
 	} else {
 		t.say("published")
 	}
+}
+
+// elicitMeta adds the tool name to an MCP tool approval's _meta, as
+// config.json elicitTool says.
+func elicitMeta(meta map[string]any, tool string) map[string]any {
+	switch cfg.ElicitTool {
+	case "-":
+		return meta
+	case "":
+		meta["tool_name"] = tool
+	default:
+		meta["tool_name"] = cfg.ElicitTool
+	}
+	return meta
 }
 
 func slicesContains(list []string, s string) bool {

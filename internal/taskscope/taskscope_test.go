@@ -5,8 +5,8 @@ import (
 	"testing"
 )
 
-// The Mosaic read tools (Story 78.32) are answered allow in every mode;
-// publish_artifact and the account verbs are not read tools.
+// The Mosaic read tools (Story 78.32) only search and read; publish_artifact
+// and the account verbs are not read tools.
 func TestIsReadTool(t *testing.T) {
 	for name, want := range map[string]bool{
 		"search": true, "companies_search": true, "companies_get": true, "read_passage": true, "read_section": true,
@@ -17,10 +17,27 @@ func TestIsReadTool(t *testing.T) {
 			t.Errorf("IsReadTool(%q) != %v", name, want)
 		}
 	}
-	for _, name := range AutoAllowedTools() {
-		if !IsReadTool(name) {
-			t.Errorf("auto-allowed task tool %q is not a read tool", name)
+}
+
+// Story 94.4: every Mosaic tool, publish_artifact included, runs without
+// asking; the account verbs and unknown names are not Mosaic tools.
+func TestMosaicToolsNeverAsk(t *testing.T) {
+	for name, want := range map[string]bool{
+		"search": true, "companies_search": true, "companies_get": true, "read_passage": true, "read_section": true,
+		"toc": true, "filings": true, "find": true, PublishTool: true, "usage": false, "auth_status": false,
+		"auth_whoami": false, "doctor": false, "version": false, "": false, "Bash": false,
+	} {
+		if IsMosaicTool(name) != want {
+			t.Errorf("IsMosaicTool(%q) != %v", name, want)
 		}
+	}
+	for _, name := range AutoAllowedTools() {
+		if !IsMosaicTool(name) {
+			t.Errorf("auto-allowed task tool %q is not a Mosaic tool", name)
+		}
+	}
+	if strings.Join(AutoAllowedTools(), ",") != strings.Join(Tools(), ",") {
+		t.Errorf("AutoAllowedTools() = %v, want every task tool %v", AutoAllowedTools(), Tools())
 	}
 }
 
@@ -38,7 +55,7 @@ func TestTaskToolsMirrorChatAPI(t *testing.T) {
 	if got := strings.Join(Tools(), ","); got != want {
 		t.Fatalf("Tools() = %s", got)
 	}
-	if got := strings.Join(AutoAllowedTools(), ","); got != "companies_search,filings,find,read_passage,read_section,search,toc" {
+	if got := strings.Join(AutoAllowedTools(), ","); got != want {
 		t.Fatalf("AutoAllowedTools() = %s", got)
 	}
 }
