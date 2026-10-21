@@ -508,7 +508,9 @@ For each "My Claude Code" session the daemon:
   `run`, `exec` or `x` after the program; a prefix never covers a `find` that
   runs commands, deletes or writes files, or an option that runs another
   program (such as `git -c`, `tar -I`, `rsync -e`, in any spelling). For Edit
-  and Write it is the file path (one rule for both tools), and for Read, Glob,
+  and Write it is the absolute file path (one rule for both tools; a path with
+  a `..` element is kept as that exact call; letter case is compared as
+  written), and for Read, Glob,
   Grep and any other tool every later call of that tool. "Deny for session"
   applies to every later call of that tool. Both live in the daemon's memory,
   so restarting `archivist connect` clears them;

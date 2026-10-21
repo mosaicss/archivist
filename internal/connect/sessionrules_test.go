@@ -2,6 +2,8 @@ package connect
 
 import (
 	"encoding/json"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -13,6 +15,21 @@ func bashInput(cmd string) json.RawMessage {
 
 func fileInput(path string) json.RawMessage {
 	raw, _ := json.Marshal(map[string]any{"file_path": path, "old_string": "a", "new_string": "b"})
+	return raw
+}
+
+// absPath is an absolute path on this OS: /s/<name> on Unix, C:\s\<name>
+// on Windows (where /s/<name> is not absolute).
+func absPath(name string) string {
+	if runtime.GOOS == "windows" {
+		return `C:\s\` + name
+	}
+	return "/s/" + name
+}
+
+// writeInput is a Write input for path.
+func writeInput(path, content string) json.RawMessage {
+	raw, _ := json.Marshal(map[string]any{"file_path": path, "content": content})
 	return raw
 }
 
@@ -200,17 +217,19 @@ func TestBashExactAndFindRules(t *testing.T) {
 // Matrix rows "Path rule", "Unparseable Edit" and "Tool wide".
 func TestPathCallAndToolRules(t *testing.T) {
 	r := newSessionRules()
-	r.remember("Edit", fileInput("/s/a.md"), true)
-	if kind, value := sessionScope("Write", json.RawMessage(`{"file_path":"/s/./a.md","content":"x"}`)); kind != scopePath || value != "/s/a.md" {
+	a, b := absPath("a.md"), absPath("b.md")
+	r.remember("Edit", fileInput(a), true)
+	dotted := filepath.Dir(a) + string(filepath.Separator) + "." + string(filepath.Separator) + "a.md"
+	if kind, value := sessionScope("Write", writeInput(dotted, "x")); kind != scopePath || value != a {
 		t.Fatalf("Write scope (%s, %q)", kind, value)
 	}
-	if !covered(r, "Write", json.RawMessage(`{"file_path":"/s/a.md","content":"other"}`)) || !covered(r, "Edit", fileInput("/s/a.md")) {
+	if !covered(r, "Write", writeInput(a, "other")) || !covered(r, "Edit", fileInput(a)) {
 		t.Error("the path rule does not cover Edit and Write of the same path")
 	}
-	if covered(r, "Edit", fileInput("/s/b.md")) || covered(r, "Write", json.RawMessage(`{"file_path":"/s/b.md"}`)) {
+	if covered(r, "Edit", fileInput(b)) || covered(r, "Write", writeInput(b, "")) {
 		t.Error("the path rule covered another path")
 	}
-	if covered(r, "Bash", bashInput("cat /s/a.md")) || covered(r, "Read", json.RawMessage(`{"file_path":"/s/a.md"}`)) {
+	if covered(r, "Bash", bashInput("cat "+a)) || covered(r, "Read", json.RawMessage(`{"file_path":`+string(mustJSON(a))+`}`)) {
 		t.Error("the path rule covered another tool")
 	}
 
@@ -290,28 +309,92 @@ func TestClaudeAllowForSessionIsNarrow(t *testing.T) {
 		}
 	}
 	// Edit: the path, not the tool.
-	h.message(sid, "edit /s/a.md")
+	a, b := absPath("a.md"), absPath("b.md")
+	h.message(sid, "edit "+a)
 	h.approve(sid, 5, "allow", "user", "allow_always")
 	h.waitFinishes(sid, 5)
-	h.message(sid, "write /s/a.md")
+	h.message(sid, "write "+a)
 	h.waitFinishes(sid, 6)
-	h.message(sid, "edit /s/b.md")
+	h.message(sid, "edit "+b)
 	h.waitCard(sid, 6)
 	h.approve(sid, 6, "deny", "user", "")
 	h.waitFinishes(sid, 7)
 	ranA := 0
 	for _, e := range h.relay.eventsOf(sid, "tool-output-available") {
-		if e["payload"].(map[string]any)["output"] == "ran: /s/a.md" {
+		if e["payload"].(map[string]any)["output"] == "ran: "+a {
 			ranA++
 		}
 	}
-	if n := h.cards(sid); n != 6 || ranA != 2 || h.toolOutput(sid, "ran: /s/b.md") {
-		t.Fatalf("path rule: cards %d, /s/a.md ran %d times, text %q", n, ranA, h.relay.text(sid))
+	if n := h.cards(sid); n != 6 || ranA != 2 || h.toolOutput(sid, "ran: "+b) {
+		t.Fatalf("path rule: cards %d, %s ran %d times, text %q", n, a, ranA, h.relay.text(sid))
 	}
 	if len(h.relay.invalid) != 0 {
 		t.Fatalf("relay saw invalid events: %v", h.relay.invalid)
 	}
 	if strings.Contains(h.log.String(), "cannot be shown whole") {
 		t.Fatal("a small card was refused")
+	}
+}
+
+func mustJSON(v any) []byte {
+	raw, _ := json.Marshal(v)
+	return raw
+}
+
+// Story 94.4: path rules on each OS's own absolute paths. A ".." element
+// keeps the exact call; letter case and other spellings are not folded
+// into the rule (they raise a card).
+func TestPathRuleShapes(t *testing.T) {
+	type c struct {
+		path, kind, value string
+	}
+	cases := []c{
+		{"relative/a.md", scopeCall, ""},
+		{"~/a.md", scopeCall, ""},
+	}
+	var covers, notCovers []string
+	rule := absPath("a.md")
+	if runtime.GOOS == "windows" {
+		cases = append(cases,
+			c{`C:\s\a.md`, scopePath, `C:\s\a.md`},
+			c{`C:/s/a.md`, scopePath, `C:\s\a.md`},
+			c{`C:\s\.\a.md`, scopePath, `C:\s\a.md`},
+			c{`\\srv\share\a.md`, scopePath, `\\srv\share\a.md`},
+			c{`\s\a.md`, scopeCall, ""},
+			c{`/s/a.md`, scopeCall, ""},
+			c{`C:\s\x\..\a.md`, scopeCall, ""},
+			c{`C:/s/x/../a.md`, scopeCall, ""},
+			c{`C:a.md`, scopeCall, ""},
+		)
+		covers = []string{`C:\s\a.md`, `C:/s/a.md`, `C:\s\\a.md`}
+		notCovers = []string{`C:\s\x\..\a.md`, `c:\s\a.md`, `C:\S\A.md`, `C:\s\a.md.bak`, `D:\s\a.md`}
+	} else {
+		cases = append(cases,
+			c{"/s/a.md", scopePath, "/s/a.md"},
+			c{"/s/./a.md", scopePath, "/s/a.md"},
+			c{"//s//a.md", scopePath, "/s/a.md"},
+			c{"/s/x/../a.md", scopeCall, ""},
+			c{`/s/x\..\a.md`, scopeCall, ""},
+			c{`C:\s\a.md`, scopeCall, ""},
+		)
+		covers = []string{"/s/a.md", "/s/./a.md", "/s//a.md"}
+		notCovers = []string{"/s/x/../a.md", "/S/A.md", "/s/a.md.bak", "/t/a.md"}
+	}
+	for _, tc := range cases {
+		if kind, value := sessionScope("Edit", fileInput(tc.path)); kind != tc.kind || value != tc.value {
+			t.Errorf("%q: scope (%s, %q), want (%s, %q)", tc.path, kind, value, tc.kind, tc.value)
+		}
+	}
+	r := newSessionRules()
+	r.remember("Write", writeInput(rule, "x"), true)
+	for _, p := range covers {
+		if !covered(r, "Edit", fileInput(p)) {
+			t.Errorf("%q not covered by the rule for %q", p, rule)
+		}
+	}
+	for _, p := range notCovers {
+		if covered(r, "Edit", fileInput(p)) {
+			t.Errorf("%q covered by the rule for %q", p, rule)
+		}
 	}
 }

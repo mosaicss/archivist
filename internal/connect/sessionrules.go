@@ -17,7 +17,9 @@ import (
 //     plain command; the exact command for anything else (shell operators,
 //     substitutions, redirections, environment assignments, wrappers,
 //     interpreters and runners).
-//   - Edit and Write: the file path, shared by both tools.
+//   - Edit and Write: the absolute file path, shared by both tools (a
+//     path with a ".." element is kept as that exact call; letter case is
+//     compared as written).
 //   - Read, Grep, Glob and any other tool: every call of that tool.
 //
 // A call whose input cannot be read that way is remembered as that exact
@@ -129,12 +131,26 @@ func scopeOf(tool string, in any) (kind, value string) {
 	case "Edit", "Write":
 		m, _ := in.(map[string]any)
 		p, ok := m["file_path"].(string)
-		if !ok || p == "" || !filepath.IsAbs(p) || strings.ContainsRune(p, 0) {
+		if !ok || p == "" || !filepath.IsAbs(p) || strings.ContainsRune(p, 0) || hasParentElement(p) {
 			return scopeCall, ""
 		}
 		return scopePath, filepath.Clean(p)
 	}
 	return scopeTool, tool
+}
+
+// hasParentElement reports a path with a ".." element (split on / and \):
+// such a path is kept as that exact call, since resolving ".." by name can
+// name another file than the one the link structure reaches. A path rule
+// is otherwise the cleaned absolute path, so on Windows "C:/s/a.md" and
+// "C:\s\a.md" are one rule; letter case is compared as written.
+func hasParentElement(p string) bool {
+	for _, e := range strings.FieldsFunc(p, func(r rune) bool { return r == '/' || r == '\\' }) {
+		if e == ".." {
+			return true
+		}
+	}
+	return false
 }
 
 // decodeInput decodes a tool input (numbers kept exact); nil when it is not
