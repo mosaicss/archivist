@@ -58,6 +58,8 @@ func testOpts(t *testing.T, f *fakeRunner) Options {
 		UID:    501,
 		User:   "alice",
 		Sleep:  func(time.Duration) {},
+		// Story 94.6: never the real /var/lib/systemd/linger.
+		LingerDir: t.TempDir(),
 	}
 }
 
@@ -335,10 +337,32 @@ func TestLaunchdStatusAndUninstall(t *testing.T) {
 	if st, _ = m.Status(context.Background()); st.Loaded || st.Running {
 		t.Fatalf("unloaded: %+v", st)
 	}
-	f.answers["launchctl print"] = []Result{{}}
+	// Uninstall waits until the job has left the domain and its daemon
+	// exited before it returns (the caller then removes the state).
+	f.answers["launchctl print"] = []Result{{}, {}, {ExitCode: 113}}
+	exits := 0
+	m.opts.Alive = func(int) bool { exits++; return exits < 3 }
+	f.calls = nil
 	removed, err := m.Uninstall(context.Background())
 	if !removed || err != nil || fileExists(m.Path()) || f.called("launchctl bootout gui/501/"+Label) != 1 {
 		t.Fatalf("%v %v %v", removed, err, f.calls)
+	}
+	if f.called("launchctl print") != 5 || exits != 3 {
+		t.Fatalf("did not wait: prints %d, pid checks %d (%v)", f.called("launchctl print"), exits, f.calls)
+	}
+	// A job that never leaves: the plist still goes, and the wait is
+	// bounded and reported.
+	if _, err := m.Install(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	f.answers["launchctl print"] = []Result{{}}
+	f.calls = nil
+	removed, err = m.Uninstall(context.Background())
+	if !removed || err == nil || !strings.Contains(err.Error(), "did not stop") || fileExists(m.Path()) {
+		t.Fatalf("stuck job: %v %v", removed, err)
+	}
+	if n := f.called("launchctl print"); n != launchdUnloadWait+2 {
+		t.Fatalf("polls %d", n)
 	}
 }
 
@@ -539,4 +563,156 @@ func TestInstallWritesArgsAndStatusReadsThem(t *testing.T) {
 	if st, _ := m.Status(context.Background()); st.Args != nil {
 		t.Fatalf("args %q", st.Args)
 	}
+}
+
+// Story 94.6: lingering Archivist turned on is turned off at uninstall;
+// lingering the user had on before stays on.
+func TestSystemdLingerOwnership(t *testing.T) {
+	lingerOpts := func(t *testing.T, f *fakeRunner, on bool) Options {
+		opts := testOpts(t, f)
+		opts.LingerDir = t.TempDir()
+		if on {
+			if err := os.WriteFile(filepath.Join(opts.LingerDir, opts.User), nil, 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return opts
+	}
+	marker := func(opts Options) string {
+		b, err := os.ReadFile(LingerMarkerPath(opts.Home))
+		if err != nil {
+			return ""
+		}
+		return strings.TrimSpace(string(b))
+	}
+
+	t.Run("off before: Archivist owns it and uninstall disables it", func(t *testing.T) {
+		f := &fakeRunner{}
+		opts := lingerOpts(t, f, false)
+		m := newSystemd(opts)
+		rep, err := m.Install(context.Background())
+		if err != nil || !rep.LingerOK || !rep.LingerByArchivist || marker(opts) != "archivist" {
+			t.Fatalf("install: %+v %v marker %q", rep, err, marker(opts))
+		}
+		// The install turned it on: a reinstall still sees it Archivist's.
+		if err := os.WriteFile(filepath.Join(opts.LingerDir, opts.User), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if rep, err = m.Install(context.Background()); err != nil || !rep.LingerByArchivist || marker(opts) != "archivist" {
+			t.Fatalf("reinstall: %+v %v marker %q", rep, err, marker(opts))
+		}
+		released, err := m.ReleaseLinger(context.Background(), true)
+		if released != LingerTurnedOff || err != nil || f.called("loginctl --no-ask-password disable-linger alice") != 1 {
+			t.Fatalf("release: %v %v %v", released, err, f.calls)
+		}
+		if marker(opts) != "" {
+			t.Fatal("marker left behind after disable-linger")
+		}
+	})
+
+	t.Run("on before a fresh install: the user's, left on", func(t *testing.T) {
+		f := &fakeRunner{}
+		opts := lingerOpts(t, f, true)
+		m := newSystemd(opts)
+		rep, err := m.Install(context.Background())
+		if err != nil || !rep.LingerOK || rep.LingerByArchivist || marker(opts) != "user" {
+			t.Fatalf("install: %+v %v marker %q", rep, err, marker(opts))
+		}
+		// A reinstall keeps the user's ownership.
+		if rep, err = m.Install(context.Background()); err != nil || rep.LingerByArchivist || marker(opts) != "user" {
+			t.Fatalf("reinstall: %+v %v marker %q", rep, err, marker(opts))
+		}
+		released, err := m.ReleaseLinger(context.Background(), true)
+		if released != LingerLeft || err != nil || f.called("loginctl --no-ask-password disable-linger") != 0 {
+			t.Fatalf("release: %v %v %v", released, err, f.calls)
+		}
+	})
+
+	t.Run("the user turned it off later: the next install that turns it on owns it", func(t *testing.T) {
+		f := &fakeRunner{}
+		opts := lingerOpts(t, f, false)
+		if err := os.MkdirAll(filepath.Dir(LingerMarkerPath(opts.Home)), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(LingerMarkerPath(opts.Home), []byte("user\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		rep, err := newSystemd(opts).Install(context.Background())
+		if err != nil || !rep.LingerByArchivist || marker(opts) != "archivist" {
+			t.Fatalf("install: %+v %v marker %q", rep, err, marker(opts))
+		}
+	})
+
+	t.Run("reinstall over an install from before the marker: unknown, recorded as nothing", func(t *testing.T) {
+		f := &fakeRunner{}
+		opts := lingerOpts(t, f, true)
+		m := newSystemd(opts)
+		if err := os.MkdirAll(filepath.Dir(m.Path()), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(m.Path(), []byte("[Unit]\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		rep, err := m.Install(context.Background())
+		if err != nil || rep.LingerByArchivist || marker(opts) != "" {
+			t.Fatalf("install: %+v %v marker %q", rep, err, marker(opts))
+		}
+	})
+
+	t.Run("uninstall of an install from before the marker leaves lingering on", func(t *testing.T) {
+		f := &fakeRunner{}
+		m := newSystemd(lingerOpts(t, f, true))
+		released, err := m.ReleaseLinger(context.Background(), true)
+		if released != LingerUnknownOwner || err != nil || len(f.calls) != 0 {
+			t.Fatalf("release: %v %v %v", released, err, f.calls)
+		}
+	})
+
+	t.Run("no marker and lingering off: nothing to say", func(t *testing.T) {
+		f := &fakeRunner{}
+		m := newSystemd(lingerOpts(t, f, false))
+		if released, err := m.ReleaseLinger(context.Background(), true); released != LingerLeft || err != nil || len(f.calls) != 0 {
+			t.Fatalf("release: %v %v %v", released, err, f.calls)
+		}
+	})
+
+	t.Run("no marker and no unit: untouched", func(t *testing.T) {
+		f := &fakeRunner{}
+		m := newSystemd(lingerOpts(t, f, true))
+		if released, err := m.ReleaseLinger(context.Background(), false); released != LingerLeft || err != nil || len(f.calls) != 0 {
+			t.Fatalf("release: %v %v %v", released, err, f.calls)
+		}
+	})
+
+	t.Run("failed enable records nothing; failed disable reports it", func(t *testing.T) {
+		f := &fakeRunner{answers: map[string][]Result{"loginctl": {{ExitCode: 1, Output: "Access denied"}}}}
+		opts := lingerOpts(t, f, false)
+		m := newSystemd(opts)
+		rep, err := m.Install(context.Background())
+		if err != nil || rep.LingerOK || rep.LingerByArchivist || marker(opts) != "" {
+			t.Fatalf("install: %+v %v marker %q", rep, err, marker(opts))
+		}
+		if err := os.WriteFile(LingerMarkerPath(opts.Home), []byte("archivist\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		released, err := m.ReleaseLinger(context.Background(), false)
+		if released != LingerLeft || err == nil || !strings.Contains(err.Error(), "Access denied") {
+			t.Fatalf("release: %v %v", released, err)
+		}
+	})
+
+	t.Run("an unreadable linger state records nothing and is never turned off", func(t *testing.T) {
+		f := &fakeRunner{}
+		opts := lingerOpts(t, f, false)
+		opts.User = ""
+		m := newSystemd(opts)
+		rep, err := m.Install(context.Background())
+		if err != nil || !rep.LingerOK || rep.LingerByArchivist || marker(opts) != "" {
+			t.Fatalf("install: %+v %v marker %q", rep, err, marker(opts))
+		}
+		released, err := m.ReleaseLinger(context.Background(), true)
+		if released != LingerUnknownOwner || err != nil || f.called("loginctl --no-ask-password disable-linger") != 0 {
+			t.Fatalf("release: %v %v %v", released, err, f.calls)
+		}
+	})
 }

@@ -284,8 +284,10 @@ func TestReviewStartupSweepAndCorruptRecord(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	_ = st.Save(&SessionRecord{SessionID: expired, Agent: "claude", Cwd: expiredCwd, ExpiresAt: 1, Status: "active", CreatedAt: 1})
-	_ = st.Save(&SessionRecord{SessionID: ended, Agent: "claude", Cwd: endedCwd, Status: "ended", CreatedAt: 2})
+	// Recent records: ones older than a week are pruned at startup (Story 94.6).
+	now := time.Now().UnixMilli()
+	_ = st.Save(&SessionRecord{SessionID: expired, Agent: "claude", Cwd: expiredCwd, ExpiresAt: now - 1000, Status: "active", CreatedAt: now - 2000})
+	_ = st.Save(&SessionRecord{SessionID: ended, Agent: "claude", Cwd: endedCwd, Status: "ended", CreatedAt: now - 1000})
 	for _, id := range []string{expired, ended} {
 		dir, _ := st.RunDir(id)
 		_ = os.WriteFile(filepath.Join(dir, "task-token"), []byte("stale"), 0o600)

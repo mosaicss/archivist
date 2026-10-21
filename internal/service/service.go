@@ -83,6 +83,9 @@ type Options struct {
 	// Alive reports whether a process id is alive (processAlive when nil:
 	// signal 0 on Unix, the process exit code on Windows).
 	Alive func(pid int) bool
+	// LingerDir is systemd-logind's per user linger directory
+	// (/var/lib/systemd/linger when empty; tests).
+	LingerDir string
 }
 
 func (o Options) run(ctx context.Context, name string, args ...string) (Result, error) {
@@ -149,6 +152,10 @@ type InstallReport struct {
 	Linger string
 	// LingerOK is true when loginctl enable-linger succeeded.
 	LingerOK bool
+	// LingerByArchivist is true when Archivist turned lingering on (this
+	// install, or an earlier one with the marker, saw it off), so uninstall
+	// turns it off again; recorded in LingerMarkerPath.
+	LingerByArchivist bool
 }
 
 // Manager installs, removes and reports the background service.

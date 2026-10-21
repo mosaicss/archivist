@@ -27,6 +27,13 @@
 # without the signature; one signed by another key; the unmodified
 # install.ps1 (release key) against the test signed release; a plain http://
 # release URL that is not loopback (before any download).
+#
+# Story 94.6: Windows has a real Credential Manager, so the saved key is read
+# from there (or from ~\.archivist\credentials where it is not usable), the
+# first install takes the start question's default (no console to ask), and
+# connect --uninstall revokes the key (DELETE /account/cli-tokens/current),
+# deletes the task and removes the key, the task XML and ~\.archivist\connect.
+# Credential Manager items the replay created are deleted at the end.
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 3.0
@@ -106,6 +113,72 @@ function Assert-Refused([string]$Name, [string]$UserHome, $Result, [string]$Mess
     if (Test-Path -LiteralPath (Join-Path $UserHome 'bin')) { Fail "$Name left the install directory" }
     if (Test-Path -LiteralPath (Join-Path $UserHome '.archivist')) { Fail "$Name left ~\.archivist" }
     if (Test-Path -LiteralPath (Join-Path $UserHome '.claude\skills\archivist')) { Fail "$Name installed the skill" }
+}
+
+# The saved key as the CLI reads it (Story 94.6): the credentials file when
+# it exists, else the Credential Manager item go-keyring writes (generic
+# credential "archivist:<absolute credentials path>", UTF-8 blob).
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public static class ArchivistReplayCred {
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    struct CREDENTIAL {
+        public uint Flags; public uint Type; public string TargetName; public string Comment;
+        public uint LastWrittenLow; public uint LastWrittenHigh; public uint CredentialBlobSize;
+        public IntPtr CredentialBlob; public uint Persist; public uint AttributeCount; public IntPtr Attributes;
+        public string TargetAlias; public string UserName;
+    }
+    [DllImport("advapi32.dll", EntryPoint = "CredReadW", CharSet = CharSet.Unicode, SetLastError = true)]
+    static extern bool CredRead(string target, uint type, uint flags, out IntPtr credential);
+    [DllImport("advapi32.dll", EntryPoint = "CredDeleteW", CharSet = CharSet.Unicode, SetLastError = true)]
+    static extern bool CredDelete(string target, uint type, uint flags);
+    [DllImport("advapi32.dll")]
+    static extern void CredFree(IntPtr credential);
+    public static string Read(string target) {
+        IntPtr p;
+        if (!CredRead(target, 1, 0, out p)) { return null; }
+        try {
+            CREDENTIAL c = (CREDENTIAL)Marshal.PtrToStructure(p, typeof(CREDENTIAL));
+            byte[] b = new byte[c.CredentialBlobSize];
+            Marshal.Copy(c.CredentialBlob, b, 0, b.Length);
+            return System.Text.Encoding.UTF8.GetString(b);
+        } finally { CredFree(p); }
+    }
+    public static bool Delete(string target) { return CredDelete(target, 1, 0); }
+}
+"@
+
+function Get-CredTarget([string]$UserHome) { return 'archivist:' + (Join-Path $UserHome '.archivist\credentials') }
+
+function Get-SavedKey([string]$UserHome) {
+    $file = Join-Path $UserHome '.archivist\credentials'
+    if (Test-Path -LiteralPath $file) { return (Get-Content -LiteralPath $file -Raw).Trim() }
+    return [ArchivistReplayCred]::Read((Get-CredTarget $UserHome))
+}
+
+# Invoke-Bin runs the installed archivist.exe of UserHome in the replay
+# environment; returns @{ Out; Code }.
+function Invoke-Bin([string]$UserHome, [string[]]$BinArgs) {
+    $vars = @{
+        USERPROFILE = $UserHome; HOME = $UserHome; LOCALAPPDATA = (Join-Path $UserHome 'AppData\Local')
+        ARCHIVIST_BASE_URL = $Base; ARCHIVIST_TOKEN = $null; STUB_LOG = $callLog
+        STUB_STATE = (Join-Path $UserHome 'task-registered'); Path = "$stubs;$env:Path"
+    }
+    $saved = @{}
+    foreach ($k in $vars.Keys) {
+        $saved[$k] = [Environment]::GetEnvironmentVariable($k, 'Process')
+        [Environment]::SetEnvironmentVariable($k, $vars[$k], 'Process')
+    }
+    $eap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $out = & (Join-Path $UserHome 'bin\archivist.exe') @BinArgs 2>&1 | Out-String
+        return @{ Out = $out; Code = $LASTEXITCODE }
+    } finally {
+        $ErrorActionPreference = $eap
+        foreach ($k in $saved.Keys) { [Environment]::SetEnvironmentVariable($k, $saved[$k], 'Process') }
+    }
 }
 
 function Stop-StandIns {
@@ -231,7 +304,7 @@ try {
     foreach ($exe in 'archivist.exe', 'archivistw.exe') {
         if (-not (Test-Path -LiteralPath (Join-Path $h1 "bin\$exe"))) { Fail "$exe not installed" }
     }
-    if ((Get-Content -LiteralPath (Join-Path $h1 '.archivist\credentials') -Raw).Trim() -ne $key1) { Fail 'credentials not saved' }
+    if ((Get-SavedKey $h1) -ne $key1) { Fail 'credentials not saved' }
     $xml = Join-Path $h1 '.archivist\connect\MosaicArchivistConnect.xml'
     if (-not (Test-Path -LiteralPath $xml)) { Fail 'task XML not written' }
     $calls = Get-Content -LiteralPath $callLog -Raw
@@ -249,7 +322,8 @@ try {
     if ($r.Out -notmatch 'Paired as archivist replay') { Fail "no pairing line:`n$($r.Out)" }
     if ($r.Out -notmatch 'Service:\s+running \(Task Scheduler:') { Fail "status not running:`n$($r.Out)" }
     if ($r.Out -notmatch 'Download verified\.') { Fail "no verified line:`n$($r.Out)" }
-    Pass 'install, pair, task created and running'
+    if ($r.Out -notmatch [regex]::Escape('Starting Archivist when your computer starts (the default).')) { Fail "no default start line:`n$($r.Out)" }
+    Pass 'install, pair, task created and running; no console takes the start default'
 
     # --- 2. update without -Pair recreates the task, no redeem --------------------
     Reset-CallLog
@@ -322,7 +396,7 @@ try {
     Reset-CallLog
     $r = Invoke-Install $h2 'v9.9.9' @('-Pair', 'ABCDE-12346', '-NoService')
     if ($r.Code -ne 0) { Fail "-NoService exited $($r.Code):`n$($r.Out)" }
-    if ((Get-Content -LiteralPath (Join-Path $h2 '.archivist\credentials') -Raw).Trim() -ne $key2) { Fail '-NoService did not pair' }
+    if ((Get-SavedKey $h2) -ne $key2) { Fail '-NoService did not pair' }
     if ((Get-Content -LiteralPath $callLog -Raw) -match 'schtasks /create') { Fail '-NoService created a task' }
     if (Test-Path -LiteralPath (Join-Path $h2 '.archivist\connect\MosaicArchivistConnect.xml')) { Fail '-NoService wrote a task XML' }
     Pass '-NoService pairs only'
@@ -331,7 +405,7 @@ try {
     $h3 = Join-Path $Work 'home3'
     $r = Invoke-Install $h3 'v9.9.9' @('-Pair', 'ABCDE12345') @{ STUB_FAIL_CREATE = '1' }
     if ($r.Code -eq 0) { Fail 'a failed task registration exited 0' }
-    if (-not (Test-Path -LiteralPath (Join-Path $h3 '.archivist\credentials'))) { Fail 'pairing was lost' }
+    if (-not (Get-SavedKey $h3)) { Fail 'pairing was lost' }
     if ($r.Out -notmatch 'connect --install \(no new code is needed\)') { Fail "no resume step:`n$($r.Out)" }
     if ($r.Out -notmatch 'Access is denied') { Fail "schtasks output not shown:`n$($r.Out)" }
     Pass 'failed task registration after pairing prints the resume step'
@@ -359,7 +433,7 @@ try {
     $line = "& ([scriptblock]::Create((irm $Base/latest/download/install.ps1))) -Pair ABCDE12345"
     $r = Invoke-Install $h7 'v9.9.9' @() @{} $line
     if ($r.Code -ne 0) { Fail "the one-liner exited $($r.Code):`n$($r.Out)" }
-    if ((Get-Content -LiteralPath (Join-Path $h7 '.archivist\credentials') -Raw).Trim() -ne $key1) { Fail 'the one-liner did not pair' }
+    if ((Get-SavedKey $h7) -ne $key1) { Fail 'the one-liner did not pair' }
     if (-not (Test-Path -LiteralPath (Join-Path $h7 '.archivist\connect\MosaicArchivistConnect.xml'))) { Fail 'the one-liner did not install the task' }
     if ($r.Out -notmatch 'Service:\s+running \(Task Scheduler:') { Fail "the one-liner's status is not running:`n$($r.Out)" }
     Pass 'the panel one-liner installs, pairs and starts background connect'
@@ -386,12 +460,37 @@ try {
     }
     Pass 'non loopback http:// and malformed release URLs are refused before any download'
 
+    # --- 10. connect --uninstall cleans this computer up (Story 94.6) ---------------
+    Reset-CallLog
+    $deletesBefore = @(Get-Content -LiteralPath $redeemLog | Where-Object { $_ -match '"method":"DELETE"' }).Count
+    $r = Invoke-Bin $h1 @('connect', '--uninstall')
+    if ($r.Code -ne 0) { Fail "uninstall exited $($r.Code):`n$($r.Out)" }
+    $deletes = @(Get-Content -LiteralPath $redeemLog | Where-Object { $_ -match '"method":"DELETE"' })
+    if ($deletes.Count -ne $deletesBefore + 1) { Fail "uninstall did not revoke once:`n$($deletes -join "`n")" }
+    if ($deletes[-1] -notmatch [regex]::Escape("""auth"":""Bearer $key1""")) { Fail "uninstall did not revoke the saved key with itself:`n$($deletes[-1])" }
+    $calls = Get-Content -LiteralPath $callLog -Raw
+    if ($calls -notmatch 'schtasks /delete') { Fail "the task was not deleted:`n$calls" }
+    if (Get-SavedKey $h1) { Fail 'uninstall kept the saved key' }
+    foreach ($left in (Join-Path $h1 '.archivist\connect'), (Join-Path $h1 '.archivist\credentials')) {
+        if (Test-Path -LiteralPath $left) { Fail "uninstall left $left" }
+    }
+    if ($r.Out -match [regex]::Escape($key1)) { Fail 'uninstall printed the key' }
+    if ($r.Out -notmatch 'no longer works') { Fail "no revoke line:`n$($r.Out)" }
+    $r = Invoke-Bin $h1 @('connect', '--uninstall')
+    if ($r.Code -ne 0 -or $r.Out -notmatch 'Background connect is not installed\.') { Fail "second uninstall exited $($r.Code):`n$($r.Out)" }
+    if (@(Get-Content -LiteralPath $redeemLog | Where-Object { $_ -match '"method":"DELETE"' }).Count -ne $deletesBefore + 1) { Fail 'a second uninstall revoked again' }
+    Pass 'uninstall revokes the key, deletes the task and removes the key and the connect files'
+
     Write-Host 'install.ps1 replay: all checks passed'
 }
 finally {
     if ($script:running -and -not $script:running.HasExited) { $script:running.Kill() }
     Stop-StandIns
     if ($server) { Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue }
+    # Credential Manager items the replay's installs created (Story 94.6).
+    foreach ($d in @(Get-ChildItem -LiteralPath $Work -Directory -ErrorAction SilentlyContinue)) {
+        [void][ArchivistReplayCred]::Delete((Get-CredTarget $d.FullName))
+    }
     Remove-Item -LiteralPath $Work -Recurse -Force -ErrorAction SilentlyContinue
 }
 

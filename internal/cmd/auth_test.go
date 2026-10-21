@@ -3,6 +3,7 @@ package cmd_test
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mosaicss/archivist/internal/auth"
 	"github.com/mosaicss/archivist/internal/cmd"
 )
 
@@ -461,8 +463,29 @@ func TestAuthLogoutIdempotentWhenNoFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected exit 0 for missing file, got: %v", err)
 	}
-	if !strings.Contains(output, "no credentials file found") {
-		t.Errorf("expected 'no credentials file found', got:\n%s", output)
+	// Story 94.6: the saved key is the keychain item or the credentials file.
+	if !strings.Contains(output, "no saved key found") {
+		t.Errorf("expected 'no saved key found', got:\n%s", output)
+	}
+}
+
+// Story 94.6: logout of a key saved in the keychain names it plainly.
+func TestAuthLogoutNamesTheKeySavedInTheKeychain(t *testing.T) {
+	sandboxAuthHome(t)
+	t.Setenv("ARCHIVIST_TOKEN", "")
+	auth.MockKeychainForTest(t, false)
+	if _, err := auth.SaveToken("ak_keychainlogout1"); err != nil {
+		t.Fatal(err)
+	}
+	output, err := runAuthCmd(t, "auth", "logout")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(output, "Logged out: deleted the key saved in the keychain\n") {
+		t.Errorf("got:\n%s", output)
+	}
+	if _, err := auth.SavedToken(); !errors.Is(err, auth.ErrNoToken) {
+		t.Errorf("key kept: %v", err)
 	}
 }
 

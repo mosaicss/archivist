@@ -620,7 +620,8 @@ func (d *Daemon) sendControls(ctx context.Context, l *live) {
 var controlsRefusalWindow = 10 * time.Second
 
 // refusalWindow recognizes an older relay's refusal of a frame kind it does
-// not know (controls, Story 78.32; signing, Story 94.7): such a relay
+// not know (controls, Story 78.32; signing, Story 94.7; features, Story
+// 94.6): such a relay
 // answers INVALID_FRAME and keeps the socket, while a relay that accepts the
 // frame answers nothing. The first INVALID_FRAME within
 // controlsRefusalWindow of a send is that refusal (logged once per daemon).
@@ -653,12 +654,19 @@ func (w *refusalWindow) claim(code string) (claimed, first bool) {
 }
 
 // relayRefusedFrame handles a user socket relay error; true when it is an
-// older relay refusing the signing frame (sent first) or the controls frame.
+// older relay refusing the signing frame (sent first), the features frame
+// (Story 94.6, sent after the capabilities) or the controls frame.
 // Every other error takes the usual path.
 func (d *Daemon) relayRefusedFrame(code string) bool {
 	if ok, first := d.signingWin.claim(code); ok {
 		if first {
 			d.log.Printf("the relay refused the signing frame (an older relay): commands keep working as before")
+		}
+		return true
+	}
+	if ok, first := d.featuresWin.claim(code); ok {
+		if first {
+			d.log.Printf("the relay refused the features frame (an older relay): Pause works only with 'archivist connect --pause' until it is updated")
 		}
 		return true
 	}

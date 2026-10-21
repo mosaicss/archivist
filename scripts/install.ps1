@@ -9,7 +9,10 @@
 # connect (archivist connect --install: a per-user scheduled task that
 # starts at every login, designed to need no admin rights; it requests no
 # elevation) and reports it (archivist connect
-# --status). Every download is checked before anything is installed: the
+# --status). A first install asks "Start Archivist when your computer
+# starts? (recommended)" (yes is the default; with no console to answer it
+# the answer is yes, said in one line); no keeps the foreground mode.
+# Every download is checked before anything is installed: the
 # release's archivist_v<ver>_SHA256SUMS must carry a valid signature
 # (archivist_v<ver>_SHA256SUMS.sig, checked with .NET RSA against the
 # release key below), and each archive must match its line in it.
@@ -270,7 +273,13 @@ if ($Pair) {
     if ($LASTEXITCODE -ne 0) { throw "archivist install: pairing failed (exit $LASTEXITCODE)" }
     # An installed task is restarted on the new binary and key even with -NoService.
     if ((-not $NoService) -or (Test-ServiceInstalled)) {
-        & $exe connect --install
+        # Story 94.6: a first install asks whether to start at login (--ask);
+        # an installed task is reinstalled without the question.
+        if (Test-ServiceInstalled) {
+            & $exe connect --install
+        } else {
+            & $exe connect --install --ask
+        }
         if ($LASTEXITCODE -ne 0) {
             Write-Host ''
             Write-Host 'This computer is paired, but background connect could not be installed.'

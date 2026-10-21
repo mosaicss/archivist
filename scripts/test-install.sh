@@ -13,7 +13,8 @@
 # pending pairing) and the replay needs no terminal. Nothing touches the real
 # ~/.archivist, ~/.config or service manager.
 #
-# Asserts: install + pair + unit written; a re-pair saves the new key and
+# Asserts: install + pair + unit written (with no terminal to ask, the start
+# question takes its default, said in one line); a re-pair saves the new key and
 # revokes the earlier one (masked only), and --no-service still reinstalls a
 # service that is already installed; an update without --pair reinstalls the
 # service; a stale brew channel with no installed cask installs directly; a
@@ -27,7 +28,11 @@
 # release URL that is not loopback (refused before any download); and no
 # openssl on PATH. On Linux without bwrap or socat the install prints one
 # line naming the missing packages and the apt-get command (both missing, or
-# only socat), none when both are present, and the exit code stays 0.
+# only socat), none when both are present, and the exit code stays 0. Story
+# 94.6: connect --uninstall revokes the saved key (DELETE
+# /account/cli-tokens/current with it), turns off the lingering Archivist
+# turned on (stub loginctl disable-linger), and removes the unit, the
+# credentials, ~/.archivist/connect and the session work folders.
 
 set -euo pipefail
 
@@ -330,7 +335,11 @@ case "$OUT" in *"Paired as archivist replay"*) ;; *) fail "no pairing line:
 $OUT" ;; esac
 case "$OUT" in *"Download verified."*) ;; *) fail "no verified line:
 $OUT" ;; esac
-pass "install, pair and unit written"
+case "$OUT" in *"Starting Archivist when your computer starts (the default)."*) ;; *) fail "no default start line:
+$OUT" ;; esac
+case "$OUT" in *"Service:  "*) ;; *) fail "connect --status did not run:
+$OUT" ;; esac
+pass "install, pair and unit written; no terminal takes the start default"
 
 # --- 2. --no-service with the service already installed still reinstalls -----
 : > "$WORK/calls.log"
@@ -342,6 +351,8 @@ set -e
 $OUT"
 grep -q 'systemctl --user enable --now archivist-connect.service' "$WORK/calls.log" \
   || fail "--no-service did not restart the installed service"
+case "$OUT" in *"Start Archivist when"*|*"(the default)"*) fail "an installed service was asked about again:
+$OUT" ;; esac
 OLD_KEY="ak_replay_abcde12345$(printf 'x%.0s' $(seq 1 24))"
 NEW_KEY="ak_replay_abcde12346$(printf 'x%.0s' $(seq 1 24))"
 [ "$(cat "$CRED")" = "$NEW_KEY" ] || fail "re-pair did not save the new key"
@@ -563,5 +574,57 @@ $OUT"
 printf '%s\n' "$OUT" | grep -qxF "$SOCAT_LINE" || fail "no socat only line:
 $OUT"
 pass "only socat missing prints the socat line, exit 0"
+
+# --- 10. connect --uninstall cleans this computer up (Story 94.6) -------------
+# run_bin HOME ARGS...: the installed binary in the replay environment.
+run_bin() {
+  local home="$1"
+  shift
+  env -i \
+    HOME="$home" \
+    PATH="$WORK/stubs:/usr/local/bin:/usr/bin:/bin" \
+    TMPDIR="$WORK" \
+    LANG=C.UTF-8 \
+    STUB_LOG="$WORK/calls.log" \
+    ARCHIVIST_BASE_URL="$BASE" \
+    "$home/.local/bin/archivist" "$@"
+}
+# Archivist turned lingering on (the marker install writes; set here so the
+# replay does not depend on the host's own linger state).
+printf 'archivist\n' > "$H1/.archivist/connect/linger"
+mkdir -p "$WORK/archivist-connect-replay1/src"
+: > "$WORK/calls.log"
+DELETES_BEFORE="$(grep -c '"method": "DELETE"' "$WORK/redeem.log" || true)"
+set +e
+OUT="$(run_bin "$H1" connect --uninstall 2>&1)"
+CODE=$?
+set -e
+[ "$CODE" = 0 ] || fail "uninstall exited $CODE:
+$OUT"
+[ "$(grep -c '"method": "DELETE"' "$WORK/redeem.log")" = "$((DELETES_BEFORE + 1))" ] || fail "uninstall did not revoke once"
+grep '"method": "DELETE", "path": "/account/cli-tokens/current"' "$WORK/redeem.log" | tail -1 | grep -q "\"auth\": \"Bearer $NEW_KEY\"" \
+  || fail "uninstall did not revoke the saved key with itself"
+grep -q 'systemctl --user disable --now archivist-connect.service' "$WORK/calls.log" || fail "service not disabled"
+grep -q 'loginctl --no-ask-password disable-linger' "$WORK/calls.log" || fail "lingering not turned off"
+for left in "$UNIT" "$CRED" "$H1/.archivist/connect" "$WORK/archivist-connect-replay1"; do
+  [ ! -e "$left" ] || fail "uninstall left $left"
+done
+case "$OUT" in *"$NEW_KEY"*) fail "uninstall printed the key" ;; esac
+case "$OUT" in *"no longer works"*) ;; *) fail "no revoke line:
+$OUT" ;; esac
+pass "uninstall revokes the key, turns off lingering and removes the unit, credentials, connect files and work folders"
+
+: > "$WORK/calls.log"
+set +e
+OUT="$(run_bin "$H1" connect --uninstall 2>&1)"
+CODE=$?
+set -e
+[ "$CODE" = 0 ] || fail "second uninstall exited $CODE:
+$OUT"
+case "$OUT" in *"Background connect is not installed."*) ;; *) fail "second uninstall:
+$OUT" ;; esac
+[ "$(grep -c '"method": "DELETE"' "$WORK/redeem.log")" = "$((DELETES_BEFORE + 1))" ] || fail "a second uninstall revoked again"
+if grep -q 'loginctl' "$WORK/calls.log"; then fail "a second uninstall touched lingering"; fi
+pass "a second uninstall says nothing is installed and revokes nothing"
 
 echo "install.sh replay: all checks passed"

@@ -54,16 +54,21 @@ type CheckResult struct {
 type RunConfig struct {
 	Token string
 	// TokenSource names the auth ladder rung the token came from
-	// ("flag", "env", "file", or "none"); set by runDoctor from auth.Resolve.
+	// ("flag", "env", "file", "keychain", or "none"); set by runDoctor from
+	// auth.Resolve.
 	TokenSource string
 	// CredentialsPath is the ~/.archivist/credentials path (injectable for tests).
 	CredentialsPath string
-	Version         string
-	Commit          string
-	Date            string
-	HTTPClient      *http.Client
-	BaseURL         string
-	NoNetwork       bool
+	// KeychainError is set when no other rung had a key and the keychain
+	// could not be read (Story 94.6: a locked keyring), so the check names
+	// it instead of reporting no credential.
+	KeychainError string
+	Version       string
+	Commit        string
+	Date          string
+	HTTPClient    *http.Client
+	BaseURL       string
+	NoNetwork     bool
 	// SkillPath overrides the default ~/.claude/skills/archivist/SKILL.md path (for tests).
 	SkillPath string
 }
@@ -169,11 +174,19 @@ func versionsEqual(a, b string) bool {
 // exists, permission drift produces a WARN (not a FAIL — the token still
 // works); skipped on windows where file modes are advisory.
 func Check3Credentials(cfg *RunConfig) CheckResult {
+	if cfg.Token == "" && cfg.KeychainError != "" {
+		return CheckResult{
+			Name:       "Credentials",
+			Status:     StatusFail,
+			Message:    "the keychain could not be read: " + cfg.KeychainError,
+			Suggestion: "Unlock the keychain (log in to this computer) and run 'archivist doctor' again",
+		}
+	}
 	if cfg.Token == "" {
 		return CheckResult{
 			Name:       "Credentials",
 			Status:     StatusFail,
-			Message:    "no credential found: checked --token flag, ARCHIVIST_TOKEN, and ~/.archivist/credentials",
+			Message:    "no credential found: checked --token flag, ARCHIVIST_TOKEN, ~/.archivist/credentials and the keychain",
 			Suggestion: "Run 'archivist auth login --token ak_...' to save a credential",
 		}
 	}
@@ -186,6 +199,8 @@ func Check3Credentials(cfg *RunConfig) CheckResult {
 		Status: StatusPass,
 		Detail: fmt.Sprintf("source: %s (key_id: %s, fingerprint: %s)", source, tokenKeyID(cfg.Token), tokenFingerprint(cfg.Token)),
 	}
+	// The file mode is checked only when the file exists (Story 94.6: a key
+	// in the keychain has no file).
 	if runtime.GOOS != "windows" && cfg.CredentialsPath != "" {
 		if fi, err := os.Stat(cfg.CredentialsPath); err == nil && fi.Mode().IsRegular() && fi.Mode().Perm() != 0o600 {
 			result.Status = StatusWarn

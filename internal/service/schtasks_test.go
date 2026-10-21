@@ -320,7 +320,8 @@ func TestSchtasksStatusAndUninstall(t *testing.T) {
 		return r, err
 	}
 	alive := false
-	opts.Alive = func(int) bool { return alive }
+	isAlive := func() bool { return alive }
+	opts.Alive = func(int) bool { return isAlive() }
 	m := newSchtasks(opts)
 	st, err := m.Status(context.Background())
 	if err != nil || st.Installed || st.Loaded || st.Running || st.Manager != "Task Scheduler" {
@@ -348,9 +349,13 @@ func TestSchtasksStatusAndUninstall(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.calls = nil
+	// The ended run's daemon exits a few polls after /end: uninstall waits
+	// for it before removing the files it holds open.
+	polls := 0
+	isAlive = func() bool { polls++; return polls < 4 }
 	removed, err := m.Uninstall(context.Background())
-	if !removed || err != nil {
-		t.Fatalf("uninstall: %v %v", removed, err)
+	if !removed || err != nil || polls < 4 {
+		t.Fatalf("uninstall: %v %v (polls %d)", removed, err, polls)
 	}
 	if f.called("schtasks /end /tn "+testTask) != 1 || f.called("schtasks /delete /tn "+testTask+" /f") != 1 {
 		t.Fatalf("calls %v", f.calls)
@@ -365,6 +370,17 @@ func TestSchtasksStatusAndUninstall(t *testing.T) {
 	f.answers = map[string][]Result{"schtasks /delete": {{ExitCode: 1, Output: "ERROR: denied"}}}
 	if removed, err := m.Uninstall(context.Background()); removed || err == nil || !fileExists(m.Path()) {
 		t.Fatalf("refused delete: %v %v", removed, err)
+	}
+	// A daemon still alive after the wait: the task and files go, and the
+	// uninstall says so.
+	f.answers = nil
+	if _, err := WritePID(opts.Home, 77); err != nil {
+		t.Fatal(err)
+	}
+	isAlive = func() bool { return true }
+	removed, err = m.Uninstall(context.Background())
+	if !removed || err == nil || !strings.Contains(err.Error(), "did not stop") || fileExists(m.Path()) {
+		t.Fatalf("still alive: %v %v", removed, err)
 	}
 }
 

@@ -102,12 +102,23 @@ token and save it once:
 archivist auth login --token ak_<your-token>
 ```
 
-The CLI verifies the token against the server and writes it to
-`~/.archivist/credentials` (mode 0600). `archivist auth status` shows which
-credential is active and where it came from; `archivist auth logout` deletes
-the saved file.
+The CLI verifies the token against the server and saves it in your
+operating system's keychain (macOS Keychain, the Secret Service on Linux
+desktops, Windows Credential Manager; item `archivist`, account the
+credentials path below). Where no keychain can be used (a Linux machine
+without a session bus or without a Secret Service on it, a keychain that
+does not answer within 30 seconds, or a `~/.archivist/credentials` symlink
+from a dotfiles setup), it writes `~/.archivist/credentials` (mode 0600)
+instead. A key
+saved in that file before this release moves into the keychain the next
+time a key is saved, or at `archivist connect --install`. `archivist auth
+status` shows which credential is active and where it came from (`keychain`
+or `file`); `archivist auth logout` deletes the saved key from both. A shell
+that cannot reach the keychain (for example SSH into a Mac whose login
+keychain is locked, cron, or `sudo -u`) does not find a key saved there: in
+such a shell set `ARCHIVIST_TOKEN` or pass `--token`.
 
-For CI and scripting, `ARCHIVIST_TOKEN=ak_...` overrides the saved file, and
+For CI and scripting, `ARCHIVIST_TOKEN=ak_...` overrides the saved key, and
 `--token ak_...` overrides both for one call.
 
 ## Quickstart
@@ -279,10 +290,27 @@ curl -fsSL https://github.com/mosaicss/archivist/releases/latest/download/instal
 It installs or updates archivist, then runs:
 
 ```sh
-archivist connect --pair ABCDE-FGHJK   # redeem the code for a new ak_ key, saved to ~/.archivist/credentials
+archivist connect --pair ABCDE-FGHJK   # redeem the code for a new ak_ key and save it (keychain, else ~/.archivist/credentials)
 archivist connect --install            # run connect as a background user service
 archivist connect --status             # report the service, its ceiling, the saved key, its account and its browsers
 ```
+
+A first install (no background service yet) asks one question on the
+terminal, the same way pairing asks:
+
+```text
+Start Archivist when your computer starts? (recommended) [Y/n]
+```
+
+Enter, `y` or `yes` installs the background service as below. `n` or `no`
+installs nothing more: the installer prints "Archivist will not start by
+itself. Run 'archivist connect' when you want to use your agents from
+Mosaic." and exits 0. Ctrl-C stops the install (exit 1). Where no terminal
+can answer (an agent shell that captures the output, CI), the answer is yes
+and the installer says so in one line ("Starting Archivist when your
+computer starts (the default)."). An update, or a re-pair with the service
+already installed, reinstalls it without asking. `--no-service` (`-NoService`
+on Windows) still means no service.
 
 Before it saves anything, `--pair` names the account the code belongs to and
 has it confirmed. On a terminal it asks:
@@ -311,6 +339,14 @@ confirmation. `ARCHIVIST_PAIR_CONFIRM=browser` chooses the browser page even
 on a terminal, and `BROWSER` names the program that opens it (the first
 entry of the list).
 
+`--pair` saves the key in the operating system keychain where one is usable
+(macOS Keychain, the Secret Service on a Linux desktop, Windows Credential
+Manager), else in `~/.archivist/credentials` (0600). On Linux the keychain
+is used only when a session bus already runs; nothing starts one. A desktop
+keyring stays locked until you log in, so a background service started at
+boot (lingering) logs "waiting for the keyring" and connects after your
+login; no file is written meanwhile.
+
 `--pair` accepts the code in any case, with or without the hyphen or spaces,
 and never prints the key (only its masked form). An unknown, used or expired
 code exits 4: get a new code in Mosaic. The redeem request is sent once and
@@ -323,9 +359,9 @@ When the background service is installed, `--pair` says to run
 `archivist connect --install` so the service restarts with the new key.
 `--status` shows the saved key's account (`Account:`), or says the key is no
 longer accepted or that Mosaic could not be reached; its exit code does not
-depend on that line. A `~/.archivist/credentials` symlink (dotfiles) is kept:
-the key is written to the file it points to, which is created when it does
-not exist yet.
+depend on that line. Where the key goes to the file, a
+`~/.archivist/credentials` symlink (dotfiles) is kept: the key is written to
+the file it points to, which is created when it does not exist yet.
 
 `--install` writes a launchd agent on macOS
 (`~/Library/LaunchAgents/com.mosaic-finance.archivist.connect.plist`, loaded
@@ -348,8 +384,47 @@ without lingering) or the next boot. Running `--install` again restarts it
 on the current binary. The install script does that on every update;
 after `archivist update` or `brew upgrade`, run `archivist connect --install`
 yourself so the service runs the new binary (`archivist update` reminds you
-when a service is installed). `archivist connect --uninstall`
-stops and removes it and keeps the saved key.
+when a service is installed).
+
+`archivist connect --uninstall` stops and removes the service and cleans the
+computer up: on Linux it turns lingering off again when Archivist turned it
+on (recorded in `~/.archivist/connect/linger` when an install found it off
+and turned it on). Lingering you had on before stays on; when no record says
+who turned it on (a service installed by an earlier release), it stays on
+and the command prints "Lingering stays on. Run 'loginctl disable-linger' if
+nothing else needs it.". A paused computer's pause is cleared in Mosaic
+first, so the workspace stops showing it paused. Then it revokes a saved `ak_` key
+(`DELETE /account/cli-tokens/current`, sent with that key) and removes it
+from the keychain and `~/.archivist/credentials`, and it removes
+`~/.archivist/connect` (session records, logs, Codex homes) and the session
+work folders. The saved `ak_` key is revoked also when you saved it with
+`archivist auth login --token`, so it then stops working everywhere you use
+it (other computers that use the same key need a new one). A key saved
+with `archivist auth login` that is not an `ak_` key is left alone. When the revoke fails the files are still removed, and
+the command says "Remove this computer's key in Mosaic settings." and exits
+1. With nothing installed it says "Background connect is not installed." and
+cleans up the same way.
+
+### Pause
+
+Pause stops your agents on this computer without uninstalling anything:
+
+```sh
+archivist connect --pause    # sessions stop; no relay connection until resumed
+archivist connect --resume   # connect again (within about 2 seconds)
+```
+
+The workspace offers the same Pause, and while paused shows "Paused on this
+computer" with Resume. Paused, connect holds no relay connection: it ends
+its sessions (they resume from where they were after Resume), revokes their
+task tokens and keeps the pause in `~/.archivist/connect/paused`, which
+survives restarts. It tells the Mosaic relay it is paused and, every 10
+seconds, asks it over HTTPS whether you chose Resume in the workspace (a
+computer that was asleep or off then still resumes when it wakes, and
+starting Archivist on another computer never resumes this one). `--status`
+shows a `Paused:` line. A relay that does not know Pause yet keeps the
+computer paused here only (the workspace shows it offline) until
+`archivist connect --resume`.
 
 `archivist connect --install --max-permission <mode>` sets the service's
 permission ceiling (see Session controls below): the service then runs
@@ -374,7 +449,7 @@ the task is registered and the daemon in `service.pid` is alive) and a key
 is saved, else 1, and prints the ceiling and the last log line. A loaded launchd job whose
 daemon has stopped shows "loaded, not running"; a job loaded a moment ago gets
 about 5 seconds to write its pid first. `--pair`, `--trust`, `--install`,
-`--uninstall` and `--status` are used one at a time.
+`--uninstall`, `--status`, `--pause` and `--resume` are used one at a time.
 
 #### Windows
 
@@ -387,7 +462,8 @@ In PowerShell (designed to need no admin rights; nothing asks for elevation):
 `install.ps1` installs or updates `archivist.exe` and `archivistw.exe` in
 `%LOCALAPPDATA%\Programs\archivist` (a running exe is renamed aside, never
 overwritten), adds that folder to your user PATH, then pairs, installs and
-reports background connect like `install.sh`. Options: `-Pair CODE`,
+reports background connect like `install.sh` (the first install asks the
+same start question). Options: `-Pair CODE`,
 `-NoService`; `ARCHIVIST_INSTALL_DIR`, `ARCHIVIST_INSTALL_VERSION` and
 `ARCHIVIST_RELEASE_BASE_URL` work as for `install.sh`.
 

@@ -112,7 +112,9 @@ func (l *launchd) Install(ctx context.Context) (InstallReport, error) {
 	return rep, err
 }
 
-// Uninstall boots the job out and removes the plist.
+// Uninstall boots the job out, waits (about 10 s, like Install) until it
+// has left the domain and its daemon (service.pid) has exited, so nothing
+// still writes state when the caller removes it, and removes the plist.
 func (l *launchd) Uninstall(ctx context.Context) (bool, error) {
 	path := l.Path()
 	was, err := l.loaded(ctx)
@@ -124,12 +126,25 @@ func (l *launchd) Uninstall(ctx context.Context) (bool, error) {
 	}
 	var stopErr error
 	if was {
+		old := readPID(l.opts.Home)
 		r, err := l.launchctl(ctx, "bootout", l.target())
 		switch {
 		case err != nil:
 			stopErr = err
 		case !r.OK():
 			stopErr = commandError("launchctl bootout "+l.target(), r)
+		default:
+			gone := false
+			for i := 0; i <= launchdUnloadWait; i++ {
+				still, _ := l.loaded(ctx)
+				if gone = !still && (old <= 0 || !l.opts.alive(old)); gone || i == launchdUnloadWait {
+					break
+				}
+				l.opts.sleep(launchdPoll)
+			}
+			if !gone {
+				stopErr = errors.New("background connect did not stop within 10 s")
+			}
 		}
 	}
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {

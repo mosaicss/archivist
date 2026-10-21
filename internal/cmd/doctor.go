@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"runtime"
 
@@ -66,8 +67,12 @@ func runDoctor(cmd *cobra.Command, version, commit, date, formatFlag string, qui
 	// source even when the only problem is the format, so the checks can
 	// still report on what was found.
 	tokenFlag, _ := cmd.Root().PersistentFlags().GetString("token")
-	token, source, _ := auth.Resolve(tokenFlag)
+	token, source, resolveErr := auth.Resolve(tokenFlag)
 	credsPath, _ := auth.CredentialsPath()
+	keychainErr := ""
+	if token == "" && errors.Is(resolveErr, auth.ErrKeychainUnavailable) {
+		keychainErr = resolveErr.Error()
+	}
 
 	baseURL := client.ResolveBaseURL()
 
@@ -75,6 +80,7 @@ func runDoctor(cmd *cobra.Command, version, commit, date, formatFlag string, qui
 		Token:           token,
 		TokenSource:     source.String(),
 		CredentialsPath: credsPath,
+		KeychainError:   keychainErr,
 		Version:         version,
 		Commit:          commit,
 		Date:            date,

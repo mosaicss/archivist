@@ -207,7 +207,7 @@ when the server sent them.
 ## Verbs
 
 ```
-archivist auth          Manage credentials (auth login saves ~/.archivist/credentials)
+archivist auth          Manage credentials (auth login saves the key in the keychain, or ~/.archivist/credentials)
 archivist search        Search filing passages
 archivist read passage  Read a passage with its neighbours
 archivist read section  Read a whole filing section
