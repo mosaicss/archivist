@@ -461,7 +461,7 @@ func TestE2EFakeClaude(t *testing.T) {
 	chk := exec.Command(archivistBin, "connect", "--check")
 	chk.Env = daemonEnv
 	out, err := chk.CombinedOutput()
-	if err != nil || !strings.Contains(string(out), "2.1.280") || !strings.Contains(string(out), "status:   usable") {
+	if err != nil || !strings.Contains(string(out), "2.1.299") || !strings.Contains(string(out), "status:   usable") {
 		t.Fatalf("--check: %v\n%s", err, out)
 	}
 	// mc_pat_ is refused before any network call.

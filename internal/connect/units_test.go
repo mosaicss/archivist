@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -117,6 +119,78 @@ func TestScrub(t *testing.T) {
 	}
 }
 
+// Story 94.5: common token formats. Every sample is assembled at run time
+// from its prefix and a filler, so no token shaped literal is in the source.
+func TestScrubTokenFormats(t *testing.T) {
+	alnum := func(n int) string {
+		const set = "AbCd3fGh1jKlMn0pQr5tUvWxYz2a4b6c8d"
+		out := make([]byte, n)
+		for i := range out {
+			out[i] = set[i%len(set)]
+		}
+		return string(out)
+	}
+	upper := strings.ToUpper(alnum(16))
+	samples := map[string]string{
+		"github classic": "gh" + "p_" + alnum(36),
+		"github oauth":   "gh" + "o_" + alnum(36),
+		"github user":    "gh" + "u_" + alnum(36),
+		"github server":  "gh" + "s_" + alnum(36),
+		"github refresh": "gh" + "r_" + alnum(36),
+		"github fine":    "github" + "_pat_" + alnum(22) + "_" + alnum(59),
+		"aws key id":     "AK" + "IA" + upper,
+		"aws session id": "AS" + "IA" + upper,
+		"slack bot":      "xo" + "xb-" + alnum(12) + "-" + alnum(24),
+		"slack user":     "xo" + "xp-" + alnum(12) + "-" + alnum(24),
+		"slack app":      "xa" + "pp-" + alnum(30),
+		"stripe secret":  "sk" + "_live_" + alnum(24),
+		"stripe limited": "rk" + "_live_" + alnum(24),
+		"google key":     "AI" + "za" + alnum(35),
+		"google oauth":   "ya" + "29." + alnum(40),
+	}
+	for name, secret := range samples {
+		for _, text := range []string{"token " + secret + " end", `{"token":"` + secret + `"}`, "x=" + secret} {
+			if out := Scrub(text); strings.Contains(out, secret) || !strings.Contains(out, "[redacted]") {
+				t.Errorf("%s: scrub kept it: %q", name, out)
+			}
+		}
+	}
+	// The AWS secret access key value goes; its label stays.
+	value := alnum(40)
+	for _, text := range []string{"aws_secret_access_key = " + value, `"aws_secret_access_key": "` + value + `"`,
+		"AWS_SECRET_ACCESS_KEY=" + value, `{"out":"{\"aws_secret_access_key\": \"` + value + `\"}"}`} {
+		out := Scrub(text)
+		if strings.Contains(out, value) || !strings.Contains(strings.ToLower(out), "aws_secret_access_key") {
+			t.Errorf("aws secret: %q", out)
+		}
+	}
+	// PEM private key blocks, whole or cut off.
+	body := alnum(64) + "\n" + alnum(64)
+	begin, end := "-----BEGIN "+"RSA PRIVATE KEY-----", "-----END "+"RSA PRIVATE KEY-----"
+	for _, text := range []string{"key:\n" + begin + "\n" + body + "\n" + end + "\nafter",
+		"key:\n" + begin + "\n" + body, "-----BEGIN " + "OPENSSH PRIVATE KEY-----\n" + body + "\n-----END " + "OPENSSH PRIVATE KEY-----",
+		"-----BEGIN " + "PGP PRIVATE KEY BLOCK-----\n\n" + body + "\n-----END " + "PGP PRIVATE KEY BLOCK-----\nafter"} {
+		out := Scrub(text)
+		if strings.Contains(out, alnum(64)) || !strings.Contains(out, "[redacted]") {
+			t.Errorf("pem: %q", out)
+		}
+	}
+	if out := Scrub("key:\n" + begin + "\n" + body + "\n" + end + "\nafter"); !strings.HasSuffix(out, "\nafter") {
+		t.Errorf("text after the block lost: %q", out)
+	}
+	pgp := "-----BEGIN " + "PGP PRIVATE KEY BLOCK-----\n" + body + "\n-----END " + "PGP PRIVATE KEY BLOCK-----\nafter"
+	if out := Scrub(pgp); out != "[redacted]\nafter" {
+		t.Errorf("pgp block: %q", out)
+	}
+	// Ordinary text is untouched.
+	for _, plain := range []string{"the ghost_town report", "AKIA is a prefix", "risk_live_review", "skip the ya29 section",
+		"xoxo from the team", "-----BEGIN PUBLIC KEY-----"} {
+		if out := Scrub(plain); out != plain {
+			t.Errorf("plain text changed: %q -> %q", plain, out)
+		}
+	}
+}
+
 // ─── closed command set ─────────────────────────────────────────────────────
 
 const unitSID = "0f8fad5b-d9cb-469f-a165-70867728950e"
@@ -198,8 +272,8 @@ func TestCommandAckShapes(t *testing.T) {
 	if got := string(commandAck(UserSocket, "resolved:x", unitSID)); got != `{"kind":"command_ack","correlationId":"resolved:x","sessionId":"`+unitSID+`"}` {
 		t.Errorf("user ack %s", got)
 	}
-	caps := string(capabilitiesFrame([]Capability{{Agent: "claude", Version: "2.1.280", Available: true, LoggedIn: true}}))
-	if caps != `{"kind":"capabilities","agents":[{"agent":"claude","version":"2.1.280","available":true,"loggedIn":true}]}` {
+	caps := string(capabilitiesFrame([]Capability{{Agent: "claude", Version: "2.1.299", Available: true, LoggedIn: true}}))
+	if caps != `{"kind":"capabilities","agents":[{"agent":"claude","version":"2.1.299","available":true,"loggedIn":true}]}` {
 		t.Errorf("capabilities %s", caps)
 	}
 	if capabilityVersion(" 1.2.3\x07 ") != "1.2.3" || capabilityVersion("") != "unknown" || len(capabilityVersion(strings.Repeat("9", 80))) != 64 {
@@ -502,22 +576,38 @@ func TestDetect(t *testing.T) {
 		name, version, auth, problem string
 		found                        []string
 	}{
-		{"usable", "2.1.288 (Claude Code)", sub, "", []string{"claude"}},
+		{"usable", "2.1.303 (Claude Code)", sub, "", []string{"claude", "bwrap", "socat"}},
 		{"missing", "", "", "missing", nil},
-		{"too old", "2.1.279 (Claude Code)", sub, "version", []string{"claude"}},
-		{"logged out", "2.1.280 (Claude Code)", `{"loggedIn":false}`, "auth", []string{"claude"}},
-		{"api key login", "2.1.280 (Claude Code)", `{"loggedIn":true,"authMethod":"api-key"}`, "auth", []string{"claude"}},
-		{"garbage version", "Claude Code", sub, "version", []string{"claude"}},
+		{"too old", "2.1.298 (Claude Code)", sub, "version", []string{"claude", "bwrap", "socat"}},
+		{"logged out", "2.1.299 (Claude Code)", `{"loggedIn":false}`, "auth", []string{"claude", "bwrap", "socat"}},
+		{"api key login", "2.1.299 (Claude Code)", `{"loggedIn":true,"authMethod":"api-key"}`, "auth", []string{"claude", "bwrap", "socat"}},
+		{"garbage version", "Claude Code", sub, "version", []string{"claude", "bwrap", "socat"}},
+	}
+	// Story 94.5: on Linux, Claude Code without bubblewrap or socat is not
+	// usable, with the install line as its problem.
+	if runtime.GOOS == "linux" {
+		cases = append(cases,
+			struct {
+				name, version, auth, problem string
+				found                        []string
+			}{"no bwrap", "2.1.306 (Claude Code)", sub, "packages", []string{"claude", "socat"}},
+			struct {
+				name, version, auth, problem string
+				found                        []string
+			}{"no socat", "2.1.306 (Claude Code)", sub, "packages", []string{"claude", "bwrap"}})
 	}
 	for _, c := range cases {
 		d := Detect(context.Background(), look(c.found...), fakeRunner(c.version, c.auth), nil, "/")
 		if d.Claude.ProblemCode != c.problem {
 			t.Errorf("%s: problem %q (%s), want %q", c.name, d.Claude.ProblemCode, d.Claude.Problem, c.problem)
 		}
+		if c.problem == "packages" && d.Claude.Problem != ClaudeLinuxPackages {
+			t.Errorf("%s: problem text %q", c.name, d.Claude.Problem)
+		}
 	}
-	d := Detect(context.Background(), look("claude", "codex"), fakeRunner("codex-cli 0.160.0", sub), nil, "/")
+	d := Detect(context.Background(), look("claude", "codex"), fakeRunner("codex-cli 0.163.0", sub), nil, "/")
 	caps := d.Capabilities()
-	if len(caps) != 2 || caps[1] != (Capability{Agent: "codex", Version: "0.160.0"}) {
+	if len(caps) != 2 || caps[1] != (Capability{Agent: "codex", Version: "0.163.0"}) {
 		t.Fatalf("capabilities %+v", caps)
 	}
 }
@@ -599,6 +689,19 @@ func TestClaudeArgsAreFixed(t *testing.T) {
 	// Plan mode never lets the auto mode classifier approve shell commands.
 	if !strings.Contains(joined, `--settings {"useAutoModeDuringPlan":false} --append-system-prompt-file /state/run/x/mosaic-guidance.md --add-dir /tmp/cwd`) {
 		t.Fatalf("no --settings before the guidance file and --add-dir: %s", joined)
+	}
+	// Story 94.5: the launch's fence settings (a file in the run folder)
+	// take the same --settings place.
+	fenced := cfg
+	fenced.Settings = "/state/run/x/" + claudeSettingsFileName
+	fa := claudeArgs(fenced, "/m", "/g.md", "/tmp/cwd", "")
+	if i := slices.Index(fa, "--settings"); i < 0 || fa[i+1] != fenced.Settings || fa[i+2] != "--append-system-prompt-file" ||
+		slices.Index(fa[i+1:], "--settings") >= 0 {
+		t.Fatalf("fenced --settings: %v", fa)
+	}
+	if !strings.HasPrefix(claudeSettings("linux", []string{"/home/u/.ssh"}, nil, nil, nil),
+		`{"useAutoModeDuringPlan":false,"plansDirectory":".plans","sandbox":{"enabled":true,`) {
+		t.Fatal("settings do not keep useAutoModeDuringPlan first")
 	}
 	for _, m := range Modes {
 		c := cfg
@@ -687,9 +790,9 @@ func TestDetectCodexLogin(t *testing.T) {
 			switch strings.Join(args, " ") {
 			case "--version":
 				if strings.HasSuffix(bin, "codex") {
-					return []byte("codex-cli 0.160.0"), nil
+					return []byte("codex-cli 0.163.0"), nil
 				}
-				return []byte("2.1.280 (Claude Code)"), nil
+				return []byte("2.1.299 (Claude Code)"), nil
 			case "auth status --json":
 				return []byte(sub), nil
 			case "login status":
@@ -740,7 +843,7 @@ func TestDetectCodexLogin(t *testing.T) {
 	// the key never reaches Login or Problem.
 	old := func(_ context.Context, _ []string, _ string, bin string, args ...string) ([]byte, error) {
 		if strings.Join(args, " ") == "--version" {
-			return []byte("codex-cli 0.159.2"), nil
+			return []byte("codex-cli 0.162.1"), nil
 		}
 		return []byte("Logged in using an API key - sk-proj-AbCdEfGhIjKlMnOpQrStUvWx"), nil
 	}

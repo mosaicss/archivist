@@ -1,4 +1,4 @@
-// Command fakeclaude imitates the Claude Code 2.1.280 stream-json surface
+// Command fakeclaude imitates the Claude Code 2.1.299 stream-json surface
 // used by archivist connect, for tests only. It never calls a model.
 //
 // Configuration comes from $HOME/.fakeclaude/config.json (HOME is one of the
@@ -43,7 +43,10 @@
 //
 // The init frame's tools are the --tools list plus the archivist MCP tools
 // (Story 78.33); config.json "extraInitTools" adds names and
-// "dropInitTools" removes them, for the tool proof tests.
+// "dropInitTools" removes them, for the tool proof tests. Its plugins are
+// one built-in (as Claude Code 2.1.306 reports them) plus config.json
+// "extraInitPlugins", and its mcp_servers archivist (once connected) plus
+// "extraInitMCPServers" (Story 94.5).
 //
 // Permission modes (Story 78.32): --permission-mode must be one of Claude
 // Code's modes; init reports it (config.json "permissionMode" overrides
@@ -123,6 +126,10 @@ type config struct {
 	// ExtraInitTools and DropInitTools edit the init frame's tools (Story 78.33).
 	ExtraInitTools []string `json:"extraInitTools"`
 	DropInitTools  []string `json:"dropInitTools"`
+	// ExtraInitPlugins and ExtraInitMCPServers add init frame plugins and
+	// MCP server names (Story 94.5).
+	ExtraInitPlugins    []map[string]any `json:"extraInitPlugins"`
+	ExtraInitMCPServers []string         `json:"extraInitMCPServers"`
 }
 
 var (
@@ -218,7 +225,7 @@ func main() {
 	}
 	args := os.Args[1:]
 	if len(args) == 1 && (args[0] == "--version" || args[0] == "-v") {
-		fmt.Println("2.1.280 (Claude Code)")
+		fmt.Println("2.1.299 (Claude Code)")
 		return
 	}
 	if len(args) >= 2 && args[0] == "auth" && args[1] == "status" {
@@ -276,8 +283,8 @@ func main() {
 		mode = "default"
 	}
 	var flagSettings map[string]any
-	if json.Unmarshal([]byte(flags["--settings"]), &flagSettings) != nil {
-		fmt.Fprintln(os.Stderr, "fakeclaude: --settings is not a JSON object")
+	if json.Unmarshal(settingsJSON(flags["--settings"]), &flagSettings) != nil {
+		fmt.Fprintln(os.Stderr, "fakeclaude: --settings is not a JSON object or a JSON file")
 		os.Exit(2)
 	}
 	_, allowBypass = flags["--allow-dangerously-skip-permissions"]
@@ -402,6 +409,16 @@ func parseFlags(args []string) map[string]string {
 	return out
 }
 
+// settingsJSON is a --settings value as Claude Code reads it: an inline
+// JSON string, or the path of a JSON file.
+func settingsJSON(v string) []byte {
+	if strings.HasPrefix(strings.TrimSpace(v), "{") {
+		return []byte(v)
+	}
+	b, _ := os.ReadFile(v)
+	return b
+}
+
 func record(args []string, flags map[string]string) {
 	dir := filepath.Join(base, "runs")
 	_ = os.MkdirAll(dir, 0o700)
@@ -421,6 +438,10 @@ func record(args []string, flags map[string]string) {
 			os.Exit(1)
 		}
 		run["appendSystemPrompt"] = string(b)
+	}
+	// Story 94.5: the --settings JSON as Claude reads it (inline or a file).
+	if v, ok := flags["--settings"]; ok {
+		run["settings"] = string(settingsJSON(v))
 	}
 	b, _ := json.MarshalIndent(run, "", "  ")
 	_ = os.WriteFile(filepath.Join(dir, fmt.Sprintf("%d.json", os.Getpid())), b, 0o600)
@@ -467,6 +488,11 @@ func (r *runner) initFrame() {
 		}
 		servers = append(servers, map[string]any{"name": "archivist", "status": "connected"})
 	}
+	for _, name := range cfg.ExtraInitMCPServers {
+		servers = append(servers, map[string]any{"name": name, "status": "connected"})
+	}
+	plugins := []map[string]any{{"name": "cc-plugin-agents-md", "path": "builtin", "source": "cc-plugin-agents-md@builtin"}}
+	plugins = append(plugins, cfg.ExtraInitPlugins...)
 	reported := currentMode()
 	if cfg.PermissionMode != "" {
 		reported = cfg.PermissionMode
@@ -477,7 +503,7 @@ func (r *runner) initFrame() {
 	}
 	emit(map[string]any{"type": "system", "subtype": "init", "session_id": session, "cwd": mustCwd(),
 		"apiKeySource": keySource, "permissionMode": reported, "tools": tools,
-		"mcp_servers": servers, "plugins": []any{}, "claude_code_version": "2.1.280", "model": "fake-model"})
+		"mcp_servers": servers, "plugins": plugins, "claude_code_version": "2.1.299", "model": "fake-model"})
 }
 
 func mustCwd() string { d, _ := os.Getwd(); return d }

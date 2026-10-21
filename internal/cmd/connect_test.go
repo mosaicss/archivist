@@ -74,12 +74,13 @@ func stubClaude(t *testing.T) {
 	skipShellStubs(t)
 	t.Helper()
 	dir := t.TempDir()
-	script := "#!/bin/sh\ncase \"$1\" in\n--version) echo '2.1.280 (Claude Code)';;\n" +
+	script := "#!/bin/sh\ncase \"$1\" in\n--version) echo '2.1.299 (Claude Code)';;\n" +
 		"auth) echo '{\"loggedIn\":true,\"authMethod\":\"claude.ai\",\"subscriptionType\":\"max\"}';;\n" +
 		"*) exit 2;;\nesac\n"
 	if err := os.WriteFile(filepath.Join(dir, "claude"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	sandboxToolStubs(t, dir)
 	t.Setenv("PATH", dir+":/usr/bin:/bin")
 }
 

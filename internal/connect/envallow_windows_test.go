@@ -40,7 +40,7 @@ func TestWindowsEnvCaseInsensitive(t *testing.T) {
 
 // Codex commands see the Windows core keys and run in the unelevated sandbox.
 func TestWindowsCodexArgs(t *testing.T) {
-	args := strings.Join(codexArgs(CodexConfig{Bin: `C:\codex.exe`, Executable: `C:\archivist.exe`}, `C:\t`, nil), "\n")
+	args := strings.Join(codexArgs(CodexConfig{Bin: `C:\codex.exe`, Executable: `C:\archivist.exe`}, `C:\t`, nil, nil), "\n")
 	if !strings.Contains(args, `windows.sandbox="unelevated"`) || strings.Contains(args, `windows.sandbox="elevated"`) {
 		t.Fatalf("no unelevated sandbox:\n%s", args)
 	}

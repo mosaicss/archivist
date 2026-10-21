@@ -1,6 +1,8 @@
 package cmd_test
 
 import (
+	"os"
+	"path/filepath"
 	"runtime"
 	"testing"
 )
@@ -20,5 +22,16 @@ func skipShellStubs(t *testing.T) {
 	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("Unix only: the harness stand-ins are shell scripts")
+	}
+}
+
+// sandboxToolStubs puts stand-ins for bwrap and socat in dir, the two
+// programs a Linux Claude Code needs on PATH (Story 94.5).
+func sandboxToolStubs(t *testing.T, dir string) {
+	t.Helper()
+	for _, tool := range []string{"bwrap", "socat"} {
+		if err := os.WriteFile(filepath.Join(dir, tool), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
 }

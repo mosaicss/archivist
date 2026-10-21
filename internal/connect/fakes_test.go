@@ -75,6 +75,15 @@ func testBinaries(t *testing.T) (claudeBin, archivistBin string) {
 				return
 			}
 		}
+		// Story 94.5: a Linux Claude Code needs bwrap and socat on PATH;
+		// stand-ins sit next to the fakes for runs that put them on PATH.
+		if runtime.GOOS != "windows" {
+			for _, tool := range []string{"bwrap", "socat"} {
+				if binErr = os.WriteFile(filepath.Join(binDir, tool), []byte("#!/bin/sh\nexit 0\n"), 0o755); binErr != nil {
+					return
+				}
+			}
+		}
 	})
 	if binErr != nil {
 		t.Fatal(binErr)
@@ -512,6 +521,8 @@ type fakeRun struct {
 	PID     int      `json:"pid"`
 	// AppendSystemPrompt is the --append-system-prompt-file content (78.31).
 	AppendSystemPrompt *string `json:"appendSystemPrompt"`
+	// Settings is the --settings JSON as read (inline or the file, 94.5).
+	Settings string `json:"settings"`
 }
 
 func fakeRuns(t *testing.T, home string) []fakeRun {

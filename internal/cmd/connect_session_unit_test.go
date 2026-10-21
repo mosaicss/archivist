@@ -24,17 +24,17 @@ func TestSessionHarnessAndConfigs(t *testing.T) {
 		login       connect.ClaudeLogin
 		exit        int
 	}{
-		{"claude logged out", "claude", detectWith([]string{"claude"}, "2.1.285", loggedOut, ""), "claude", 0, 0},
-		{"claude usable", "claude", detectWith([]string{"claude"}, "2.1.285", sub, ""), "", 0, 0},
-		{"claude console key", "claude", detectWith([]string{"claude"}, "2.1.285", `{"loggedIn":true,"authMethod":"api_key"}`, ""), "",
+		{"claude logged out", "claude", detectWith([]string{"claude"}, "2.1.301", loggedOut, ""), "claude", 0, 0},
+		{"claude usable", "claude", detectWith([]string{"claude"}, "2.1.301", sub, ""), "", 0, 0},
+		{"claude console key", "claude", detectWith([]string{"claude"}, "2.1.301", `{"loggedIn":true,"authMethod":"api_key"}`, ""), "",
 			connect.ClaudeLoginConsole, 0},
 		{"claude missing", "claude", detectWith(nil, "", "", ""), "", 0, ExitNotFound},
 		{"claude below floor", "claude", detectWith([]string{"claude"}, "2.0.1", loggedOut, ""), "", 0, ExitGenericError},
-		{"codex logged out", "codex", connect.Detection{Codex: connect.CodexInfo{Path: "/opt/codex", Version: "0.160.0",
+		{"codex logged out", "codex", connect.Detection{Codex: connect.CodexInfo{Path: "/opt/codex", Version: "0.163.0",
 			VersionOK: true, Home: "/h/.codex", Problem: "Codex is not logged in"}}, "codex", 0, 0},
-		{"codex no auth.json", "codex", connect.Detection{Codex: connect.CodexInfo{Path: "/opt/codex", Version: "0.160.0",
+		{"codex no auth.json", "codex", connect.Detection{Codex: connect.CodexInfo{Path: "/opt/codex", Version: "0.163.0",
 			VersionOK: true, LoggedIn: true, Home: "/h/.codex", Problem: "no auth.json"}}, "codex", 0, 0},
-		{"codex api key", "codex", connect.Detection{Codex: connect.CodexInfo{Path: "/opt/codex", Version: "0.160.0",
+		{"codex api key", "codex", connect.Detection{Codex: connect.CodexInfo{Path: "/opt/codex", Version: "0.163.0",
 			VersionOK: true, APILogin: true, Home: "/h/.codex", Problem: "api key"}}, "", 0, ExitAuthError},
 		{"codex missing", "codex", connect.Detection{}, "", 0, ExitNotFound},
 	}
@@ -46,7 +46,7 @@ func TestSessionHarnessAndConfigs(t *testing.T) {
 	}
 	det := connect.Detection{
 		Claude: connect.ClaudeInfo{Path: "/opt/claude", Problem: "not logged in", ProblemCode: "auth"},
-		Codex:  connect.CodexInfo{Path: "/opt/codex", Version: "0.160.0", Home: "/h/.codex", Problem: "not logged in"},
+		Codex:  connect.CodexInfo{Path: "/opt/codex", Version: "0.163.0", Home: "/h/.codex", Problem: "not logged in"},
 	}
 	start := &connect.SessionStart{SessionID: "x", Agent: "codex", Prompt: "p"}
 	cl, cx := sessionConfigs(det, connectFlags{session: start}, "/bin/archivist", "")

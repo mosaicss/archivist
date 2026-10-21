@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -61,9 +63,10 @@ func (r *SessionRecord) MarkHandled(cid string) {
 	}
 }
 
-// Store keeps session records under <dir>/sessions (0700 dirs, 0600 files)
-// and per-session private runtime files (task token, MCP config) under
-// <dir>/run/<session>.
+// Store keeps session records under <dir>/sessions (0700 dirs, 0600 files),
+// per-session private runtime files (task token, MCP config) under
+// <dir>/run/<session>, Codex homes under <dir>/codex-home/<session> and the
+// session folders under <dir>/work (Story 94.5).
 type Store struct {
 	dir string
 	mu  sync.Mutex
@@ -82,7 +85,8 @@ func DefaultStateDir() (string, error) {
 
 // OpenStore creates the state tree with private permissions.
 func OpenStore(dir string) (*Store, error) {
-	for _, d := range []string{dir, filepath.Join(dir, "sessions"), filepath.Join(dir, "run")} {
+	for _, d := range []string{dir, filepath.Join(dir, "sessions"), filepath.Join(dir, "run"),
+		filepath.Join(dir, codexHomeDir), filepath.Join(dir, workDirName)} {
 		if err := os.MkdirAll(d, 0o700); err != nil {
 			return nil, err
 		}
@@ -217,13 +221,36 @@ func (s *Store) RemoveCodexHome(id string) {
 	}
 }
 
-// cwdPrefix is the makeCwd temp directory prefix.
+// cwdPrefix is the session folder name prefix (makeCwd).
 const cwdPrefix = "archivist-connect-"
 
+// workDirName is the parent of the session folders inside the state
+// directory (Story 94.5): <state>/work/archivist-connect-*.
+const workDirName = "work"
+
+// WorkDir is the parent of the session folders (created by OpenStore).
+func (s *Store) WorkDir() string { return filepath.Join(s.dir, workDirName) }
+
+// cwdParents are the directories a session folder may sit in: the work
+// directory and, for records written before Story 94.5, the OS temp
+// directory, each as written and resolved.
+func (s *Store) cwdParents() []string {
+	var out []string
+	for _, d := range []string{s.WorkDir(), os.TempDir()} {
+		d = filepath.Clean(d)
+		out = append(out, d)
+		if r, err := filepath.EvalSymlinks(d); err == nil && r != d {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
 // sessionCwdOK reports a working directory path read from a record that
-// makeCwd could have created: absolute, base name with cwdPrefix, never the
-// home directory or a filesystem root.
-func sessionCwdOK(dir string) bool {
+// makeCwd could have created: absolute, base name with cwdPrefix, directly
+// inside the work directory (or, for an older record, the OS temp
+// directory), never the home directory or a filesystem root.
+func (s *Store) sessionCwdOK(dir string) bool {
 	if dir == "" || !filepath.IsAbs(dir) {
 		return false
 	}
@@ -234,13 +261,100 @@ func sessionCwdOK(dir string) bool {
 	if home, err := os.UserHomeDir(); err == nil && filepath.Clean(home) == clean {
 		return false
 	}
-	return true
+	parent := filepath.Dir(clean)
+	for _, p := range s.cwdParents() {
+		if samePathName(parent, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// samePathName compares two cleaned paths (any case on Windows).
+func samePathName(a, b string) bool {
+	return fenceNameEqual(runtime.GOOS, a, b)
+}
+
+// errCwdUnusable marks a session folder that fails checkSessionCwd.
+var errCwdUnusable = errors.New("no usable working directory")
+
+// checkSessionCwd checks an existing session folder before a harness runs
+// in it (Lstat, never following a link): exactly a directory (not a
+// symbolic link, a Windows junction or any other irregular entry), in a
+// session folder parent, and on Unix owned by this user with mode 0700
+// exactly. A missing folder passes (the spawn creates it); every
+// other failure wraps errCwdUnusable.
+func (s *Store) checkSessionCwd(dir string) error {
+	if !s.sessionCwdOK(dir) {
+		return fmt.Errorf("%w: %s is not a session folder", errCwdUnusable, dir)
+	}
+	st, err := os.Lstat(dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return fmt.Errorf("%w: %v", errCwdUnusable, err)
+	}
+	switch {
+	case st.Mode()&os.ModeSymlink != 0:
+		return fmt.Errorf("%w: %s is a symbolic link", errCwdUnusable, dir)
+	case st.Mode().Type() != fs.ModeDir:
+		return fmt.Errorf("%w: %s is not a plain directory", errCwdUnusable, dir)
+	}
+	if problem := cwdOwnerProblem(st); problem != "" {
+		return fmt.Errorf("%w: %s %s", errCwdUnusable, dir, problem)
+	}
+	return nil
+}
+
+// ensureSessionCwd checks the session folder, creating a missing one
+// (0700) in its parent; the result passes checkSessionCwd. Only a folder
+// its own Mkdir created is chmodded: an entry that appeared meanwhile
+// (ErrExist) goes straight to the check.
+func (s *Store) ensureSessionCwd(dir string) error {
+	err := s.checkSessionCwd(dir)
+	if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	switch err := os.Mkdir(dir, 0o700); {
+	case err == nil:
+		if err := os.Chmod(dir, 0o700); err != nil {
+			return fmt.Errorf("%w: %v", errCwdUnusable, err)
+		}
+	case !errors.Is(err, os.ErrExist):
+		return fmt.Errorf("%w: %v", errCwdUnusable, err)
+	}
+	return s.checkSessionCwd(dir)
+}
+
+// sweepWork removes the session folders in the work directory that no
+// active record names (keep: their cwds), as the system temp directory
+// used to be cleared at reboot: leftovers would otherwise grow every
+// launch's locked list.
+func (s *Store) sweepWork(keep []string) {
+	entries, err := os.ReadDir(s.WorkDir())
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if !strings.HasPrefix(e.Name(), cwdPrefix) {
+			continue
+		}
+		p := filepath.Join(s.WorkDir(), e.Name())
+		kept := false
+		for _, k := range keep {
+			kept = kept || fencePathEqual(runtime.GOOS, p, k)
+		}
+		if !kept {
+			_ = fsutil.RemoveAll(p) // a link is removed, never its target
+		}
+	}
 }
 
 // removeSessionCwd deletes a session working directory read from a record,
 // but only one makeCwd could have created (sessionCwdOK).
-func removeSessionCwd(dir string) bool {
-	if !sessionCwdOK(dir) {
+func (s *Store) removeSessionCwd(dir string) bool {
+	if !s.sessionCwdOK(dir) {
 		return false
 	}
 	return fsutil.RemoveAll(filepath.Clean(dir)) == nil

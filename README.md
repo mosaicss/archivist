@@ -577,10 +577,12 @@ archivist connect --web-search  # sessions here may search the web (provider sid
 ```
 
 Requirements: an `ak_` API key (`archivist auth login`) on a Pro account, and
-at least one of: Claude Code 2.1.280 or newer logged in with a claude.ai
+at least one of: Claude Code 2.1.299 or newer logged in with a claude.ai
 subscription (`claude auth status` shows `authMethod: claude.ai`), or Codex
-0.160.0 or newer logged in with ChatGPT (`codex login status`). API key logins
-are refused. Newer versions are reported, not blocked; a harness that is not
+0.163.0 or newer logged in with ChatGPT (`codex login status`). API key logins
+are refused. On Linux, Claude Code sessions also need two packages, bubblewrap
+and socat (for example `sudo apt install bubblewrap socat`); `connect --check`
+and the startup log say so when either is missing, and Codex is unaffected. Newer versions are reported, not blocked; a harness that is not
 usable when `archivist connect` starts is reported as unavailable and its
 sessions are refused (restart after logging in).
 
@@ -591,10 +593,14 @@ when it starts and changeable while it runs. Low to high:
 
 | Mode | Label | What it means | Claude Code | Codex |
 |---|---|---|---|---|
-| `read_only` | Read only | Reads and research run; anything that would change something is denied without asking | `--permission-mode plan` | `never`, `read-only` sandbox |
-| `ask` | Ask every time | Every call that needs permission is a card | `--permission-mode default` | `untrusted`, `workspace-write` sandbox |
-| `auto_edits` | Auto edits | File edits run (Claude Code also runs simple file commands such as mkdir, mv, cp and rm inside the session folder); other commands ask | `--permission-mode acceptEdits` | `untrusted`, `workspace-write` sandbox; the daemon accepts file changes inside the session folder |
-| `full_auto` | Full auto | The harness runs without asking, but anything it still asks about (for example deleting a critical folder) is shown as a card | `--permission-mode bypassPermissions` | `never`, `danger-full-access` (no sandbox, network on) |
+| `read_only` | Read only | Reads and research run; anything that would change something is denied without asking | `--permission-mode plan` | `never`, profile `archivist-read` (read only, no network) |
+| `ask` | Ask every time | Every call that needs permission is a card | `--permission-mode default` | `untrusted`, profile `archivist-write` (writes in the session folder, no network) |
+| `auto_edits` | Auto edits | File edits run (Claude Code also runs simple file commands such as mkdir, mv, cp and rm inside the session folder); other commands ask | `--permission-mode acceptEdits` | `untrusted`, profile `archivist-write`; the daemon accepts file changes inside the session folder |
+| `full_auto` | Full auto | The harness runs without asking, but anything it still asks about (for example deleting a critical folder) is shown as a card | `--permission-mode bypassPermissions` | `never`, profile `archivist-full` (writes in the session folder, network on) |
+
+The Codex profiles apply on macOS and Linux. On Windows Codex keeps the
+sandbox modes of earlier releases (`read-only`, `workspace-write`, and
+`danger-full-access` for `full_auto`) in its unelevated Windows sandbox.
 
 The Mosaic tools (`search`, `companies_search`, `companies_get`,
 `read_passage`, `read_section`, `toc`, `filings`, `find` and
@@ -611,8 +617,64 @@ extra root and every path, resolved through symbolic links, is inside the
 session folder; Codex commands always ask. These rules come before answers
 remembered for the session ("allow for session" does not let a `read_only`
 session change anything). Every Claude Code launch also passes
-`--settings '{"useAutoModeDuringPlan":false}'`, so plan mode never lets the
+`"useAutoModeDuringPlan":false` in `--settings`, so plan mode never lets the
 auto mode classifier approve shell commands.
+
+### What a session can open
+
+Each session works in its own folder,
+`~/.archivist/connect/work/archivist-connect-*` (0700). Before a session
+runs there again (a resume after a restart, or `--resume-from`), the daemon
+checks that the folder is a directory, not a link, that it sits in that
+folder (or, for a session started by an earlier release, in the system
+temporary directory) and, on macOS and Linux, that it belongs to you with
+mode 0700; otherwise the session does not run there. When `archivist
+connect` starts, session folders that no active session uses are removed.
+
+At every launch the daemon computes a list of locations a session does not
+open, and passes it to each harness's own sandbox and permission settings:
+
+- `~/.ssh`, `~/.aws`, `~/.config/gcloud` (and `$XDG_CONFIG_HOME/gcloud`),
+  `~/.azure`, `~/.kube`, `~/.docker/config.json`, `~/.gnupg`, `~/.netrc`,
+  `~/.npmrc`, `~/.pypirc`;
+- the Claude Code and Codex logins: everything in `~/.claude` (and
+  `CLAUDE_CONFIG_DIR`) except the session's own conversation data,
+  `projects/<session folder name>`, where Claude Code keeps large tool
+  results it reads back (for the Read and Edit tools, the other project
+  folders present when the session starts; Claude Code's shell sandbox
+  closes all of `projects` but the session's own, later ones included;
+  Codex sessions lock these folders whole); `~/.claude.json`; `~/.codex` (and your
+  `CODEX_HOME`; when the Codex program itself is installed in there, the
+  folder holding it stays readable);
+- browser profiles and password managers (Chrome, Chromium, Brave, Edge,
+  Firefox, Arc, Safari, 1Password, Bitwarden, KeePassXC, the keychains and
+  keyrings of each OS; on Linux also under `$XDG_CONFIG_HOME`);
+- everything in `~/.archivist` except the session's own folder: the saved
+  key, the session records, task tokens, Codex homes, logs and the other
+  session folders present when the session starts. Claude Code's shell
+  sandbox also closes the whole work folder except the session's own, so
+  its shell commands miss folders created later too.
+
+Claude Code plan files (Read only mode) are written to `.plans` in the
+session folder.
+
+Each entry is listed as written and with symbolic links resolved. Claude
+Code gets it through `--settings`, as a file in the session's private run
+folder (`~/.archivist/connect/run/<session>/claude-settings.json`, 0600;
+`--setting-sources ""` still loads none of your settings files): on macOS and Linux its shell sandbox (`sandbox.enabled`, required,
+no unsandboxed retry, Bash still asks per mode, network as before) denies
+reading the list, and Read and Edit deny rules cover the same paths in every
+mode; on native Windows, which has no Claude Code shell sandbox, the deny
+rules apply and every Bash or PowerShell command asks. Codex on macOS and
+Linux runs in the permission profiles above, each denying the list. The
+daemon also answers any approval whose input names a listed location with a
+deny (Codex: decline), without a card, in every mode. The archivist MCP
+server and the harnesses themselves run outside these sandboxes and read
+their own files as before.
+
+A Claude Code session whose start reports an MCP server other than
+`archivist`, or a plugin that is not one of Claude Code's built in ones,
+ends before anything is sent.
 
 `--max-permission <mode>` is the ceiling on this machine: no session runs
 above it. The default is `auto_edits` (`full_auto` for `connect --session`,
@@ -655,7 +717,7 @@ the web" card with its query.
 
 A mode change applies to Claude Code once Claude confirms it
 (`set_permission_mode`; the daemon's own checks switch then too) and to Codex
-at the next turn (every `turn/start` carries the current policy and sandbox;
+at the next turn (every `turn/start` carries the current policy and profile;
 the daemon's own checks switch at once). A Codex turn already running keeps the
 mode it started with until it ends: lowering a session from `full_auto` in
 the middle of a turn leaves that turn with full access until your next
@@ -693,7 +755,7 @@ exits 1 and the sandbox task fails. Web search is on there unless
 
 For each "My Claude Code" session the daemon:
 
-- runs `claude -p` in stream-json mode in a fresh temporary directory, with
+- runs `claude -p` in stream-json mode in its session folder (above), with
   only `HOME`, `PATH`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `TERM`, `TMPDIR`,
   `LC_*` and `XDG_*` in its environment (provider keys and `CLAUDE_*`,
   `ARCHIVIST_*` variables never pass, except an absolute `CLAUDE_CONFIG_DIR`
@@ -756,8 +818,8 @@ For each "My Claude Code" session the daemon:
 
 For each "My Codex" session the daemon:
 
-- runs one `codex app-server --stdio --strict-config` in a fresh temporary
-  directory, with the same environment allowlist plus `CODEX_HOME` set to a
+- runs one `codex app-server --stdio --strict-config` in its session
+  folder, with the same environment allowlist plus `CODEX_HOME` set to a
   private per-session home, `~/.archivist/connect/codex-home/<session>/`
   (0700). That home holds only `auth.json` as a link to your login
   (`$CODEX_HOME/auth.json` if `CODEX_HOME` is an absolute path, else
@@ -767,22 +829,26 @@ For each "My Codex" session the daemon:
   loaded and never written; parent `OPENAI_*` and `CODEX_*` variables never
   pass;
 - fixes the rest with `-c` overrides: ChatGPT login only, the `openai`
-  provider, a `workspace-write` sandbox (`ask`, `auto_edits`; `read_only`
-  is `read-only`, and `full_auto` runs `danger-full-access`: no sandbox,
-  with network) that can write only the session
-  directory (not `/tmp` or `$TMPDIR`, where other sessions' directories
-  live; `TMPDIR` points at `<session dir>/.tmp`) with no network, a core
+  provider, the three permission profiles of the modes (macOS and Linux:
+  `archivist-read` read only, `archivist-write` writing only the session
+  folder with `/tmp` read only, both without network, and `archivist-full`
+  the same with network; each denies the locked
+  locations above; `TMPDIR` points at `<session dir>/.tmp`; on Windows the
+  `workspace-write` sandbox of earlier releases, `read-only` for `read_only`
+  and `danger-full-access` for `full_auto`), a core
   shell environment for commands, web search off (`web_search="live"` with
   web search on), history off,
   no project root markers, and the archivist MCP server (task mode tools,
   task token as above; Mosaic read tools are approved without asking). The
-  approval policy and sandbox (from the session's mode, reviewed by you)
-  and model are set per thread and on every turn; `--codex-model` defaults
+  approval policy and permission profile (from the session's mode,
+  reviewed by you; on Windows the sandbox) and model are set per thread and
+  on every turn; `--codex-model` defaults
   to Codex's default model and `--codex-effort` to Codex's default effort;
 - refuses the session (error plus a failed status, Codex stopped, nothing
   else sent) unless Codex reports the session home, a ChatGPT account, the
-  `openai` provider, the approval policy and sandbox of the session's mode
-  reviewed by the user (for `workspace-write`: without network, extra roots,
+  `openai` provider, the approval policy of the session's mode reviewed by
+  the user, the mode's permission profile as the active one (on Windows the
+  sandbox of the mode: for `workspace-write` without network, extra roots,
   `/tmp` or `$TMPDIR`, TMPDIR pointing inside the session directory; for
   `read-only`: without network), the launch's `web_search` value set by its
   `-c` flags (`config/read`), no instruction files, and the archivist MCP
@@ -904,7 +970,7 @@ The relay sends only data (session ids, prompts, approval decisions,
 interrupt and stop, and the mode, model and effort ids, each checked against
 the closed set or this machine's own list). Binaries, arguments and flags are fixed on your machine.
 Session ids and working directories are kept in `~/.archivist/connect/`
-(0700); after a restart, the next message resumes the same Claude session.
+(0700), the session folders in `~/.archivist/connect/work/`; after a restart, the next message resumes the same Claude session.
 Each running session's task token and MCP config sit in
 `~/.archivist/connect/run/<session>/` (`task-token`, `mcp.json`, 0600), are
 removed when the session stops or the daemon exits, and the token is revoked

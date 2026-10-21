@@ -164,7 +164,7 @@ func TestCodexCapabilitiesReportUsable(t *testing.T) {
 	h := newCodexHarness(t, nil)
 	h.start()
 	caps := h.relay.lastCaps()
-	if len(caps) != 2 || caps[1] != (Capability{Agent: "codex", Version: "0.160.0", Available: true, LoggedIn: true}) {
+	if len(caps) != 2 || caps[1] != (Capability{Agent: "codex", Version: "0.163.0", Available: true, LoggedIn: true}) {
 		t.Fatalf("capabilities %+v", caps)
 	}
 
@@ -181,10 +181,10 @@ func TestCodexCapabilitiesReportUsable(t *testing.T) {
 		noAuth  bool
 		problem string
 	}{
-		"too old":    {map[string]any{"version": "0.159.2"}, false, "older than the supported floor 0.160.0"},
+		"too old":    {map[string]any{"version": "0.162.1"}, false, "older than the supported floor 0.163.0"},
 		"logged out": {map[string]any{"loggedIn": false}, false, "not logged in"},
 		"no auth":    {nil, true, "no auth.json"},
-		"newer":      {map[string]any{"version": "0.162.1"}, false, ""},
+		"newer":      {map[string]any{"version": "0.164.0"}, false, ""},
 	} {
 		home := t.TempDir()
 		owner := filepath.Join(home, "owner")
@@ -223,7 +223,8 @@ func TestCodexCapabilitiesReportUsable(t *testing.T) {
 
 func TestCodexArgsAreFixed(t *testing.T) {
 	cfg := CodexConfig{Bin: "/usr/bin/codex", Executable: "/opt/archivist"}
-	args := codexArgs(cfg, "/state/run/x/task-token", nil)
+	locked := []string{"/home/u/.ssh", "/home/u/.archivist/credentials"}
+	args := codexArgsFor(cfg, "/state/run/x/task-token", nil, locked, false)
 	if args[0] != "app-server" || args[1] != "--stdio" || args[2] != "--strict-config" {
 		t.Fatalf("args %v", args[:3])
 	}
@@ -251,12 +252,22 @@ func TestCodexArgsAreFixed(t *testing.T) {
 		"shell_environment_policy.include_only": tomlValue(append([]string{"PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "LC_*",
 			"TERM", "TMPDIR", "TZ", "NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE", "SSL_CERT_DIR", "CURL_CA_BUNDLE", "GIT_SSL_CAINFO",
 			"REQUESTS_CA_BUNDLE"}, platformAllowKeys...)),
-		"sandbox_workspace_write.writable_roots": "[]",
-		"sandbox_workspace_write.network_access": "false",
-		"project_root_markers":                   "[]",
-		"mcp_servers.archivist.command":          `"/opt/archivist"`,
-		"mcp_servers.archivist.args":             `["mcp","serve","--token-file","/state/run/x/task-token"]`,
-		"mcp_servers.archivist.enabled_tools":    `["companies_search","filings","find","publish_artifact","read_passage","read_section","search","toc"]`,
+		"project_root_markers":                `[]`,
+		"mcp_servers.archivist.command":       `"/opt/archivist"`,
+		"mcp_servers.archivist.args":          `["mcp","serve","--token-file","/state/run/x/task-token"]`,
+		"mcp_servers.archivist.enabled_tools": `["companies_search","filings","find","publish_artifact","read_passage","read_section","search","toc"]`,
+		// Story 94.5: the three permission profiles, each denying the locked
+		// paths; read only by default.
+		"default_permissions":                         `"archivist-read"`,
+		"permissions.archivist-read.extends":          `":read-only"`,
+		"permissions.archivist-read.filesystem":       `{"/home/u/.ssh"="deny", "/home/u/.archivist/credentials"="deny"}`,
+		"permissions.archivist-read.network.enabled":  "false",
+		"permissions.archivist-write.extends":         `":workspace"`,
+		"permissions.archivist-write.filesystem":      `{"/home/u/.ssh"="deny", "/home/u/.archivist/credentials"="deny", ":slash_tmp"="read"}`,
+		"permissions.archivist-write.network.enabled": "false",
+		"permissions.archivist-full.extends":          `":workspace"`,
+		"permissions.archivist-full.filesystem":       `{"/home/u/.ssh"="deny", "/home/u/.archivist/credentials"="deny", ":slash_tmp"="read"}`,
+		"permissions.archivist-full.network.enabled":  "true",
 		// Story 94.4: Mosaic tools never ask, publish_artifact included.
 		"mcp_servers.archivist.default_tools_approval_mode": `"approve"`,
 	}
@@ -269,26 +280,42 @@ func TestCodexArgsAreFixed(t *testing.T) {
 		if strings.HasPrefix(k, "mcp_servers.archivist.tools.") {
 			t.Errorf("-c %s: no per tool approval override (the server default covers every Mosaic tool)", k)
 		}
-		if strings.HasPrefix(k, "approval_policy") || strings.HasPrefix(k, "model_reasoning") || k == "model" {
+		if strings.HasPrefix(k, "approval_policy") || strings.HasPrefix(k, "model_reasoning") || k == "model" ||
+			strings.HasPrefix(k, "sandbox_workspace_write.") || k == "sandbox_mode" {
 			t.Errorf("-c %s must not be set in argv", k)
+		}
+	}
+	// Windows keeps the legacy workspace write overrides and no profiles.
+	legacy := map[string]string{}
+	for _, kv := range codexArgsFor(cfg, "/t", nil, locked, true) {
+		k, v, _ := strings.Cut(kv, "=")
+		legacy[k] = v
+	}
+	if legacy["sandbox_workspace_write.writable_roots"] != "[]" || legacy["sandbox_workspace_write.network_access"] != "false" ||
+		legacy["sandbox_workspace_write.exclude_slash_tmp"] != "true" || legacy["sandbox_workspace_write.exclude_tmpdir_env_var"] != "true" {
+		t.Errorf("legacy argv %v", legacy)
+	}
+	for k := range legacy {
+		if strings.HasPrefix(k, "permissions.") || k == "default_permissions" {
+			t.Errorf("legacy argv sets %s", k)
 		}
 	}
 	if _, ok := set["mcp_servers.archivist.env"]; ok {
 		t.Error("env set without ARCHIVIST_BASE_URL")
 	}
 	cfg.BaseURL = "http://127.0.0.1:9"
-	if !slices.Contains(codexArgs(cfg, "/t", nil), `mcp_servers.archivist.env={ARCHIVIST_BASE_URL="http://127.0.0.1:9"}`) {
+	if !slices.Contains(codexArgs(cfg, "/t", nil, nil), `mcp_servers.archivist.env={ARCHIVIST_BASE_URL="http://127.0.0.1:9"}`) {
 		t.Error("ARCHIVIST_BASE_URL not passed to the MCP server")
 	}
-	if !slices.Contains(codexArgs(cfg, "/t", []string{"--publish-session", "s1", "--publish-dir", "/cwd"}),
+	if !slices.Contains(codexArgs(cfg, "/t", []string{"--publish-session", "s1", "--publish-dir", "/cwd"}, nil),
 		`mcp_servers.archivist.args=["mcp","serve","--token-file","/t","--publish-session","s1","--publish-dir","/cwd"]`) {
 		t.Error("publish flags not passed to the MCP server")
 	}
 	// Story 78.33: web search on is web_search "live" and nothing else changes; no page
 	// fetch feature and no web search feature flags are ever set.
-	off := codexArgs(cfg, "/t", nil)
+	off := codexArgs(cfg, "/t", nil, nil)
 	cfg.WebSearch = true
-	on := codexArgs(cfg, "/t", nil)
+	on := codexArgs(cfg, "/t", nil, nil)
 	if len(on) != len(off) {
 		t.Fatalf("web search changes the argv length: %d vs %d", len(on), len(off))
 	}
@@ -458,10 +485,14 @@ func TestCodexSessionLifecycle(t *testing.T) {
 	if st, err := os.Stat(run.TmpDir); err != nil || !modeIs(st.Mode(), 0o700) {
 		t.Fatalf("session temp dir %v %v", st, err)
 	}
-	for _, kv := range []string{"sandbox_workspace_write.exclude_slash_tmp=true", "sandbox_workspace_write.exclude_tmpdir_env_var=true"} {
-		if !slices.Contains(run.Args, kv) {
-			t.Errorf("argv lacks -c %s", kv)
+	if codexLegacySandbox {
+		for _, kv := range []string{"sandbox_workspace_write.exclude_slash_tmp=true", "sandbox_workspace_write.exclude_tmpdir_env_var=true"} {
+			if !slices.Contains(run.Args, kv) {
+				t.Errorf("argv lacks -c %s", kv)
+			}
 		}
+	} else if !slices.Contains(run.Args, `default_permissions="archivist-read"`) {
+		t.Errorf("argv lacks the permission profiles: %v", run.Args)
 	}
 	// Session home: 0700 with auth.json linked (never copied) to the owner's.
 	st, err := os.Stat(sessionHome)
@@ -476,7 +507,7 @@ func TestCodexSessionLifecycle(t *testing.T) {
 	b, _ := os.ReadFile(filepath.Join(h.home, ".fakecodex", "thread-start.json"))
 	_ = json.Unmarshal(b, &params)
 	if params["model"] != "fake-default" || params["approvalPolicy"] != "untrusted" || params["approvalsReviewer"] != "user" ||
-		params["sandbox"] != "workspace-write" || params["cwd"] != rec.Cwd ||
+		!threadIsolationIs(params, ModeAsk) || params["cwd"] != rec.Cwd ||
 		params["config"].(map[string]any)["model_reasoning_effort"] != "low" {
 		t.Fatalf("thread/start params %v", params)
 	}
@@ -773,7 +804,7 @@ func TestCodexResumeAfterRestart(t *testing.T) {
 	var params map[string]any
 	b, _ := os.ReadFile(filepath.Join(h.home, ".fakecodex", "thread-resume.json"))
 	_ = json.Unmarshal(b, &params)
-	if params["threadId"] != thread || params["approvalPolicy"] != "untrusted" {
+	if params["threadId"] != thread || params["approvalPolicy"] != "untrusted" || !threadIsolationIs(params, ModeAsk) {
 		t.Fatalf("thread/resume %v", params)
 	}
 	runs := codexRuns(t, h.home)
@@ -812,7 +843,6 @@ func TestCodexProofFailuresFailClosed(t *testing.T) {
 	cases := map[string]map[string]any{
 		"api key account":     {"accountType": "apiKey"},
 		"other codex home":    {"codexHome": "/tmp/not-the-session-home"},
-		"extra writable root": {"extraRoot": "/home/owner/project"},
 		"instruction sources": {"instructionSources": []string{"/home/owner/.codex/AGENTS.md"}},
 		"other provider":      {"modelProvider": "custom"},
 		"other mcp server":    {"extraMCP": true},
@@ -821,6 +851,12 @@ func TestCodexProofFailuresFailClosed(t *testing.T) {
 		"web_search from a layer": {"configReadOrigin": "user"},
 		"web_search not reported": {"configReadMissing": true},
 		"config/read refused":     {"configReadError": "config/read failed"},
+	}
+	if codexLegacySandbox {
+		cases["extra writable root"] = map[string]any{"extraRoot": "/home/owner/project"}
+	} else {
+		// Story 94.5: the thread must run in the mode's permission profile.
+		cases["other permission profile"] = map[string]any{"activeProfile": ":workspace"}
 	}
 	for name, cfg := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -1178,6 +1214,7 @@ func TestCodexOrphanAttributionWithTwoSessions(t *testing.T) {
 
 // ─── coordinator review rows ────────────────────────────────────────────────
 
+// The legacy sandbox proof (Windows, codexLegacySandbox).
 func TestThreadProblemFailsClosed(t *testing.T) {
 	yes, no := true, false
 	good := func() codexThreadResult {
@@ -1191,10 +1228,10 @@ func TestThreadProblemFailsClosed(t *testing.T) {
 		th.Sandbox.NetworkAccess, th.Sandbox.ExcludeSlashTmp, th.Sandbox.ExcludeTmpdirEnvVar = &no, &yes, &yes
 		return th
 	}
-	if p := threadProblem(good(), "/w/session", "", ModeAsk); p != "" {
+	if p := threadProblemFor(good(), "/w/session", "", ModeAsk, true); p != "" {
 		t.Fatalf("compliant thread failed: %s", p)
 	}
-	if p := threadProblem(good(), "/w/session", "th-1", ModeAsk); p != "" {
+	if p := threadProblemFor(good(), "/w/session", "th-1", ModeAsk, true); p != "" {
 		t.Fatalf("compliant resume failed: %s", p)
 	}
 	for name, c := range map[string]struct {
@@ -1223,15 +1260,81 @@ func TestThreadProblemFailsClosed(t *testing.T) {
 	} {
 		th := good()
 		c.mutate(&th)
-		if p := threadProblem(th, "/w/session", c.resumed, ModeAsk); !strings.Contains(p, c.want) {
+		if p := threadProblemFor(th, "/w/session", c.resumed, ModeAsk, true); !strings.Contains(p, c.want) {
 			t.Errorf("%s: problem %q, want %q", name, p, c.want)
 		}
 	}
 	// The cwd itself as a writable root is fine.
 	th := good()
 	th.Sandbox.WritableRoots = []string{"/w/session"}
-	if p := threadProblem(th, "/w/session", "", ModeAsk); p != "" {
+	if p := threadProblemFor(th, "/w/session", "", ModeAsk, true); p != "" {
 		t.Errorf("cwd root: %s", p)
+	}
+}
+
+// Story 94.5: outside Windows the proof is the mode's permission profile;
+// a thread in another profile, or none, fails it.
+func TestThreadProblemPermissionProfile(t *testing.T) {
+	good := func(m Mode) codexThreadResult {
+		var th codexThreadResult
+		th.Thread.ID, th.ModelProvider, th.Cwd, th.ApprovalsReviewer = "th-1", "openai", "/w/session", "user"
+		th.ApprovalPolicy = json.RawMessage(`"` + codexApprovalPolicy(m) + `"`)
+		extends := codexProfileExtends(codexProfile(m))
+		th.ActivePermissionProfile = &codexActiveProfile{ID: codexProfile(m), Extends: &extends}
+		// The legacy sandbox view of the profile, as Codex 0.163.0 reports it.
+		network := m == ModeFullAuto
+		th.Sandbox.Type, th.Sandbox.NetworkAccess = "workspaceWrite", &network
+		if m == ModeReadOnly {
+			th.Sandbox.Type = "readOnly"
+		}
+		return th
+	}
+	for _, m := range Modes {
+		if p := threadProblemFor(good(m), "/w/session", "", m, false); p != "" {
+			t.Errorf("%s: compliant thread failed: %s", m, p)
+		}
+		if p := threadProblemFor(good(m), "/w/session", "th-1", m, false); p != "" {
+			t.Errorf("%s: compliant resume failed: %s", m, p)
+		}
+	}
+	other := ":workspace"
+	for name, c := range map[string]struct {
+		mutate func(*codexThreadResult)
+		mode   Mode
+		want   string
+	}{
+		"no profile":         {func(th *codexThreadResult) { th.ActivePermissionProfile = nil }, ModeAsk, "no active permission profile"},
+		"built-in workspace": {func(th *codexThreadResult) { th.ActivePermissionProfile.ID = ":workspace" }, ModeAsk, `permission profile ":workspace"`},
+		"full in read only": {func(th *codexThreadResult) { th.ActivePermissionProfile.ID = codexProfileFull }, ModeReadOnly,
+			`permission profile "archivist-full", not "archivist-read"`},
+		"write in full auto": {func(th *codexThreadResult) { th.ActivePermissionProfile.ID = codexProfileWrite }, ModeFullAuto,
+			`not "archivist-full"`},
+		"other parent": {func(th *codexThreadResult) { th.ActivePermissionProfile.Extends = &other }, ModeReadOnly,
+			`extends ":workspace", not ":read-only"`},
+		"empty id": {func(th *codexThreadResult) { th.ActivePermissionProfile.ID = "" }, ModeAutoEdits, "permission profile"},
+		// The reported sandbox view must match the profile.
+		"full access view": {func(th *codexThreadResult) { th.Sandbox.Type = "dangerFullAccess" }, ModeReadOnly,
+			`sandbox "dangerFullAccess", not "readOnly"`},
+		"write view in read only": {func(th *codexThreadResult) { th.Sandbox.Type = "workspaceWrite" }, ModeReadOnly,
+			`not "readOnly"`},
+		"network in write": {func(th *codexThreadResult) { on := true; th.Sandbox.NetworkAccess = &on }, ModeAsk,
+			"networkAccess is true"},
+		"no network in full": {func(th *codexThreadResult) { off := false; th.Sandbox.NetworkAccess = &off }, ModeFullAuto,
+			"networkAccess is false"},
+		"network missing": {func(th *codexThreadResult) { th.Sandbox.NetworkAccess = nil }, ModeAutoEdits,
+			"networkAccess not reported"},
+	} {
+		th := good(c.mode)
+		c.mutate(&th)
+		if p := threadProblemFor(th, "/w/session", "", c.mode, false); !strings.Contains(p, c.want) {
+			t.Errorf("%s: %q, want %q", name, p, c.want)
+		}
+	}
+	// The extends field may be absent (the id alone is the proof).
+	th := good(ModeAsk)
+	th.ActivePermissionProfile.Extends = nil
+	if p := threadProblemFor(th, "/w/session", "", ModeAsk, false); p != "" {
+		t.Errorf("profile without extends: %s", p)
 	}
 }
 

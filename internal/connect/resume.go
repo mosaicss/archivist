@@ -46,7 +46,12 @@ func (d *Daemon) resumeSource(from, agent string) (*SessionRecord, string) {
 		return nil, fmt.Sprintf("it ran the %s agent, not %s", rec.Agent, agent)
 	case rec.Status != "active":
 		return nil, "it is " + rec.Status
-	case !sessionCwdOK(rec.Cwd):
+	case !d.store.sessionCwdOK(rec.Cwd):
+		return nil, "it has no usable working directory"
+	}
+	// Story 94.5: an existing folder must be this user's private directory
+	// (a missing one is recreated by the spawn).
+	if err := d.store.checkSessionCwd(rec.Cwd); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, "it has no usable working directory"
 	}
 	if agent == "codex" {

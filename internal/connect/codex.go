@@ -82,12 +82,20 @@ func tomlValue(v any) string {
 
 // codexArgs builds the fixed argv for one session's app-server. Each key
 // was checked on codex-cli 0.160.0 with --strict-config (an unknown key is
-// a startup error). approval_policy never appears here: it travels in
-// thread/start and turn/start, the only places "untrusted" is accepted.
-// Archivist MCP tools, publish_artifact included (Story 94.4), are
-// approved without asking in every mode: the server default approval mode
-// approve applies, with no per tool override.
-func codexArgs(cfg CodexConfig, tokenFile string, publish []string) []string {
+// a startup error; the permission profiles on 0.163.0). approval_policy
+// never appears here: it travels in thread/start and turn/start, the only
+// places "untrusted" is accepted. Archivist MCP tools, publish_artifact
+// included (Story 94.4), are approved without asking in every mode: the
+// server default approval mode approve applies, with no per tool override.
+// locked is the launch's resolved locked path list (Story 94.5): the
+// permission profiles deny each one (outside Windows, codexLegacySandbox).
+func codexArgs(cfg CodexConfig, tokenFile string, publish, locked []string) []string {
+	return codexArgsFor(cfg, tokenFile, publish, locked, codexLegacySandbox)
+}
+
+// codexArgsFor is codexArgs with the sandbox kind given: legacy keeps the
+// sandbox_workspace_write overrides (Windows), else the profiles.
+func codexArgsFor(cfg CodexConfig, tokenFile string, publish, locked []string, legacy bool) []string {
 	set := [][2]string{
 		// Login: the ChatGPT subscription from the linked auth.json only.
 		{"forced_login_method", `"chatgpt"`},
@@ -117,12 +125,6 @@ func codexArgs(cfg CodexConfig, tokenFile string, publish []string) []string {
 		// Commands see only a core environment.
 		{"shell_environment_policy.inherit", `"core"`},
 		{"shell_environment_policy.include_only", tomlValue(codexShellEnv)},
-		// Sandbox: the session cwd only (not /tmp or $TMPDIR, where other
-		// sessions' directories live), no network.
-		{"sandbox_workspace_write.writable_roots", "[]"},
-		{"sandbox_workspace_write.network_access", "false"},
-		{"sandbox_workspace_write.exclude_slash_tmp", "true"},
-		{"sandbox_workspace_write.exclude_tmpdir_env_var", "true"},
 		// No project root detection: no trust entries are ever written.
 		{"project_root_markers", "[]"},
 		// The archivist MCP server under the session task token.
@@ -135,6 +137,19 @@ func codexArgs(cfg CodexConfig, tokenFile string, publish []string) []string {
 	}
 	if cfg.BaseURL != "" {
 		set = append(set, [2]string{"mcp_servers.archivist.env", "{ARCHIVIST_BASE_URL=" + tomlValue(cfg.BaseURL) + "}"})
+	}
+	if legacy {
+		// Legacy sandbox (Windows): the session cwd only (not /tmp or
+		// $TMPDIR), no network.
+		set = append(set, [][2]string{
+			{"sandbox_workspace_write.writable_roots", "[]"},
+			{"sandbox_workspace_write.network_access", "false"},
+			{"sandbox_workspace_write.exclude_slash_tmp", "true"},
+			{"sandbox_workspace_write.exclude_tmpdir_env_var", "true"},
+		}...)
+	} else {
+		// Story 94.5: the permission profiles, each denying the locked paths.
+		set = append(set, codexProfileConfig(locked)...)
 	}
 	set = append(set, codexPlatformConfig...)
 	args := []string{"app-server", "--stdio", "--strict-config"}
@@ -255,7 +270,11 @@ func (s *session) spawnCodex(ctx context.Context, threadID, instructions string)
 	}
 	// The one adapter-set key; BuildChildEnv refuses CODEX_ overrides.
 	env = append(env, "CODEX_HOME="+home)
-	proc, err := StartProc(ProcSpec{Bin: cfg.Bin, Args: codexArgs(cfg, s.tokenFile, s.publishArgsFor(s.token)), Env: env, Dir: s.rec.Cwd, Log: s.log})
+	var locked []string
+	if s.fence != nil {
+		locked = s.fence.real
+	}
+	proc, err := StartProc(ProcSpec{Bin: cfg.Bin, Args: codexArgs(cfg, s.tokenFile, s.publishArgsFor(s.token), locked), Env: env, Dir: s.rec.Cwd, Log: s.log})
 	if err != nil {
 		return fmt.Errorf("start codex: %w", err)
 	}
@@ -335,7 +354,8 @@ func (s *session) codexHandshake(ctx context.Context, home, threadID, instructio
 	}
 	mode := s.mode()
 	params := codexThreadParams{ThreadID: threadID, Model: model, Cwd: s.rec.Cwd, ApprovalPolicy: codexApprovalPolicy(mode),
-		ApprovalsReviewer: "user", Sandbox: codexSandboxMode(mode), DeveloperInstructions: instructions}
+		ApprovalsReviewer: "user", DeveloperInstructions: instructions}
+	params.Sandbox, params.Permissions = codexThreadIsolation(mode, codexLegacySandbox)
 	if effort != "" {
 		params.Config = map[string]any{"model_reasoning_effort": effort}
 	}
@@ -374,12 +394,16 @@ func (s *session) codexHandshake(ctx context.Context, home, threadID, instructio
 	if err := s.codexAwaitMCP(hctx); err != nil {
 		return err
 	}
-	network := "network off"
-	if codexSandboxType(mode) == "dangerFullAccess" {
-		network = "full access, network on"
+	isolation := "permissions " + codexProfile(mode)
+	if codexLegacySandbox {
+		isolation = fmt.Sprintf("sandbox %s, roots %v", codexSandboxType(mode), th.Sandbox.WritableRoots)
 	}
-	s.log.Printf("codex proof ok: home %s, chatgpt account, model %s, provider %s, mode %s (approvals %s/user, sandbox %s, %s, roots %v), web_search %s, no instruction sources, archivist MCP ready",
-		home, th.Model, th.ModelProvider, mode, codexApprovalPolicy(mode), codexSandboxType(mode), network, th.Sandbox.WritableRoots, webSearch)
+	network := "network off"
+	if mode == ModeFullAuto {
+		network = "network on"
+	}
+	s.log.Printf("codex proof ok: home %s, chatgpt account, model %s, provider %s, mode %s (approvals %s/user, %s, %s), web_search %s, no instruction sources, archivist MCP ready",
+		home, th.Model, th.ModelProvider, mode, codexApprovalPolicy(mode), isolation, network, webSearch)
 	return nil
 }
 
@@ -415,10 +439,16 @@ func threadGone(msg string) bool {
 }
 
 // threadProblem checks the thread/start (or resume) response against the
-// isolation the session requires: the approval policy and sandbox mapped
-// from its mode (Story 78.32), and for workspaceWrite and readOnly the
+// isolation the session requires: the approval policy mapped from its mode
+// (Story 78.32) and the permission profile of the mode (Story 94.5), or on
+// Windows the legacy sandbox and, for workspaceWrite and readOnly, its
 // isolation fields. Missing fields fail.
 func threadProblem(th codexThreadResult, cwd, resumed string, mode Mode) string {
+	return threadProblemFor(th, cwd, resumed, mode, codexLegacySandbox)
+}
+
+// threadProblemFor is threadProblem with the sandbox kind given.
+func threadProblemFor(th codexThreadResult, cwd, resumed string, mode Mode, legacy bool) string {
 	var problems []string
 	if th.Thread.ID == "" {
 		problems = append(problems, "no thread id")
@@ -439,6 +469,38 @@ func threadProblem(th codexThreadResult, cwd, resumed string, mode Mode) string 
 	}
 	if !samePath(th.Cwd, cwd) {
 		problems = append(problems, fmt.Sprintf("thread cwd %q, not the session directory", th.Cwd))
+	}
+	if len(th.InstructionSources) > 0 {
+		problems = append(problems, fmt.Sprintf("instruction sources loaded: %v", th.InstructionSources))
+	}
+	if !legacy {
+		// Story 94.5: the profile of the mode, which denies the locked paths.
+		want := codexProfile(mode)
+		switch p := th.ActivePermissionProfile; {
+		case p == nil:
+			problems = append(problems, "no active permission profile reported")
+		case p.ID != want:
+			problems = append(problems, fmt.Sprintf("permission profile %q, not %q", p.ID, want))
+		case p.Extends != nil && *p.Extends != codexProfileExtends(want):
+			problems = append(problems, fmt.Sprintf("permission profile %q extends %q, not %q", p.ID, *p.Extends, codexProfileExtends(want)))
+		}
+		// The legacy sandbox view Codex reports must match the profile:
+		// read only without network, or workspace write with network only
+		// in the full profile.
+		wantType, wantNet := "workspaceWrite", want == codexProfileFull
+		if want == codexProfileRead {
+			wantType = "readOnly"
+		}
+		if th.Sandbox.Type != wantType {
+			problems = append(problems, fmt.Sprintf("sandbox %q, not %q", th.Sandbox.Type, wantType))
+		}
+		switch n := th.Sandbox.NetworkAccess; {
+		case n == nil:
+			problems = append(problems, "sandbox networkAccess not reported")
+		case *n != wantNet:
+			problems = append(problems, fmt.Sprintf("sandbox networkAccess is %v", *n))
+		}
+		return strings.Join(problems, "; ")
 	}
 	if th.Sandbox.Type != wantSandbox {
 		problems = append(problems, fmt.Sprintf("sandbox %q, not %q", th.Sandbox.Type, wantSandbox))
@@ -463,9 +525,6 @@ func threadProblem(th codexThreadResult, cwd, resumed string, mode Mode) string 
 		if !samePath(root, cwd) {
 			problems = append(problems, fmt.Sprintf("extra writable root %q", root))
 		}
-	}
-	if len(th.InstructionSources) > 0 {
-		problems = append(problems, fmt.Sprintf("instruction sources loaded: %v", th.InstructionSources))
 	}
 	return strings.Join(problems, "; ")
 }
@@ -585,10 +644,11 @@ func (s *session) codexSendUser(text string) {
 	// Every turn carries the session's current mode (Story 78.32): Codex
 	// applies it to this turn and the ones after.
 	mode := s.mode()
-	c.rpc.dispatch("turn/start", codexTurnStartParams{ThreadID: c.threadID,
+	params := codexTurnStartParams{ThreadID: c.threadID,
 		Input:          []codexTextInput{{Type: "text", Text: text, TextElements: []any{}}},
-		ApprovalPolicy: codexApprovalPolicy(mode), SandboxPolicy: codexSandboxPolicy(mode),
-		Model: c.model, Effort: c.effort}, "turn/start:"+strconv.Itoa(c.turnSeq))
+		ApprovalPolicy: codexApprovalPolicy(mode), Model: c.model, Effort: c.effort}
+	params.SandboxPolicy, params.Permissions = codexTurnIsolation(mode, codexLegacySandbox)
+	c.rpc.dispatch("turn/start", params, "turn/start:"+strconv.Itoa(c.turnSeq))
 	c.turnID = ""
 	c.interruptWanted = false
 	s.turnActive = true
@@ -778,6 +838,9 @@ func (s *session) codexServerRequest(ev codexEvent) {
 		if !s.running {
 			reply(map[string]any{"decision": "decline"})
 			return
+		}
+		if s.codexFenceDecline(reply, ev.Method, ev.Params) {
+			return // names a locked path (Story 94.5): no card, any mode
 		}
 		inCwd := ev.Method == "item/fileChange/requestApproval" && s.mode() == ModeAutoEdits &&
 			codexFileInCwd(ev.Params, s.ctr.files, s.rec.Cwd)

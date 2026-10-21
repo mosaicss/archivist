@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strconv"
 	"time"
@@ -105,6 +104,9 @@ type session struct {
 	mcpFile    string
 	tokenTimer *time.Timer
 	tokenRetry time.Duration
+
+	// fence is the current launch's locked path list (Story 94.5, fence.go).
+	fence *fence
 
 	// art follows publish_artifact calls (Story 78.18).
 	art *artifactTracker
@@ -397,10 +399,16 @@ func (s *session) spawn(ctx context.Context, resumeID string) (err error) {
 	if s.rec.Cwd == "" {
 		return errors.New("session has no working directory")
 	}
-	if _, err := os.Stat(s.rec.Cwd); err != nil {
-		if err := os.MkdirAll(s.rec.Cwd, 0o700); err != nil {
-			return fmt.Errorf("working directory: %w", err)
-		}
+	// Story 94.5: the folder is this user's private directory in the work
+	// folder (Lstat, owner and mode), recreated when missing; one that is
+	// not a private directory ends the session.
+	if err := s.d.store.ensureSessionCwd(s.rec.Cwd); err != nil {
+		s.log.Printf("working directory refused: %v", err)
+		return &lostError{"the session has no usable working directory."}
+	}
+	// Story 94.5: the locked paths of this launch (spawn and resume alike).
+	if s.fence, err = s.buildFence(); err != nil {
+		return fmt.Errorf("session fence: %w", err)
 	}
 	if s.isCodex() {
 		return s.spawnCodex(ctx, resumeID, g.Body)
@@ -424,6 +432,9 @@ func (s *session) spawn(ctx context.Context, resumeID string) (err error) {
 	guidanceFile, err := s.writeGuidance(g.Body)
 	if err != nil {
 		return fmt.Errorf("research guidance: %w", err)
+	}
+	if cfg.Settings, err = s.writeClaudeSettings(); err != nil {
+		return err
 	}
 	args := claudeArgs(cfg, s.mcpFile, guidanceFile, s.rec.Cwd, resumeID)
 	proc, err := StartProc(ProcSpec{Bin: cfg.Bin, Args: args, Env: env, Dir: s.rec.Cwd, Log: s.log})
@@ -563,7 +574,7 @@ func (s *session) failSession(msg string) {
 	s.save()
 	s.revokeToken()
 	s.d.store.RemoveRunDir(s.id)
-	removeSessionCwd(s.rec.Cwd)
+	s.d.store.removeSessionCwd(s.rec.Cwd)
 	if s.isCodex() {
 		s.d.store.RemoveCodexHome(s.id)
 	}
@@ -765,6 +776,10 @@ func (s *session) handleLine(line []byte) {
 			s.failClosed("Claude Code did not start with the tools archivist connect allows: "+problem, false)
 			return
 		}
+		if problem := initExtensionsProblem(f.MCPServers, f.Plugins); problem != "" { // Story 94.5
+			s.failClosed("Claude Code did not start with the extensions archivist connect allows: "+problem, false)
+			return
+		}
 		if warning != "" && !s.running {
 			s.log.Printf("warning: %s", warning)
 		}
@@ -862,6 +877,9 @@ func (s *session) handleControlRequest(f claudeFrame, line []byte) bool {
 	if !s.running {
 		_ = s.proc.WriteJSON(denyFrame(f.RequestID, "Denied: the session is not verified."))
 		return true
+	}
+	if s.claudeFenceDeny(f.RequestID, req) {
+		return true // names a locked path (Story 94.5): no card, any mode
 	}
 	if s.claudeBackstop(f.RequestID, req) {
 		return true // decided by the permission mode (Story 78.32): no card
@@ -1134,7 +1152,7 @@ func (s *session) stop(emitCompleted bool) {
 	s.rec.Status = "ended"
 	s.save()
 	s.d.store.RemoveRunDir(s.id)
-	removeSessionCwd(s.rec.Cwd)
+	s.d.store.removeSessionCwd(s.rec.Cwd)
 	if s.isCodex() {
 		s.d.store.RemoveCodexHome(s.id)
 	}
@@ -1193,7 +1211,7 @@ func (s *session) linkEnded(err error) {
 			s.log.Printf("session socket stopped: %v", err)
 			s.rec.Status = "failed"
 			s.save()
-			removeSessionCwd(s.rec.Cwd)
+			s.d.store.removeSessionCwd(s.rec.Cwd)
 		}
 		s.stopping = true
 		s.stopProcess(false)

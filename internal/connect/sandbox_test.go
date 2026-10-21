@@ -65,7 +65,6 @@ func (h *harness) runSessionWith(sid, agent, signIn, prompt string, o sessionOpt
 			return Detection{}
 		},
 		Environ:      func() []string { return env },
-		TempDir:      h.tmp,
 		SignIn:       signIn,
 		MaxMode:      h.maxMode,
 		WebSearch:    h.webSearch,
@@ -75,7 +74,7 @@ func (h *harness) runSessionWith(sid, agent, signIn, prompt string, o sessionOpt
 		cfg.Claude = ClaudeConfig{Bin: claudeBin, SettingSources: DefaultSettingSources, Executable: archivistBin,
 			BaseURL: h.api.srv.URL, Login: o.login, SignInFile: o.signinFile}
 	} else {
-		cfg.Codex = CodexConfig{Bin: testCodexBinary(h.t), Version: "0.160.0", OwnerHome: h.codexOwner(),
+		cfg.Codex = CodexConfig{Bin: testCodexBinary(h.t), Version: "0.163.0", OwnerHome: h.codexOwner(),
 			Executable: archivistBin, BaseURL: h.api.srv.URL}
 	}
 	d, err := New(cfg)
@@ -651,7 +650,7 @@ func TestCACertEnvAllowlist(t *testing.T) {
 			t.Errorf("%s allowed", bad)
 		}
 	}
-	args := strings.Join(codexArgs(CodexConfig{Executable: "/a"}, "/t", nil), " ")
+	args := strings.Join(codexArgs(CodexConfig{Executable: "/a"}, "/t", nil, nil), " ")
 	for _, k := range CACertKeys {
 		if !strings.Contains(args, `shell_environment_policy.include_only=`) || !strings.Contains(args, `"`+k+`"`) {
 			t.Errorf("codex include_only lacks %s", k)

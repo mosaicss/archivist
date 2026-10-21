@@ -51,6 +51,8 @@ var codexSchemaDefs = []string{
 	// Story 78.33: the config/read web search proof and webSearch items.
 	"ConfigReadParams", "ConfigReadResponse", "Config", "ConfigLayerMetadata", "ConfigLayerSource",
 	"WebSearchMode", "WebSearchAction",
+	// Story 94.5: the permission profile a thread reports.
+	"ActivePermissionProfile",
 }
 
 var codexMethodUnions = []string{"ClientRequest", "ClientNotification", "ServerRequest", "ServerNotification"}
@@ -249,7 +251,7 @@ func TestCodexProtoMatchesSchema(t *testing.T) {
 		nested map[string]string   // field -> definition of its struct ("" = open JSON, unchecked)
 		only   map[string][]string // definition -> the only fields sent to it (shared structs)
 	}
-	threadFields := []string{"model", "cwd", "approvalPolicy", "approvalsReviewer", "sandbox", "config", "developerInstructions"}
+	threadFields := []string{"model", "cwd", "approvalPolicy", "approvalsReviewer", "permissions", "sandbox", "config", "developerInstructions"}
 	for _, m := range []structMap{
 		{v: codexInitializeParams{}, defs: []string{"InitializeParams"},
 			nested: map[string]string{"clientInfo": "ClientInfo", "capabilities": "InitializeCapabilities"}},
@@ -262,7 +264,7 @@ func TestCodexProtoMatchesSchema(t *testing.T) {
 			"ThreadStartParams":  append([]string{"ephemeral"}, threadFields...),
 			"ThreadResumeParams": append([]string{"threadId", "excludeTurns"}, threadFields...)}},
 		{v: codexThreadResult{}, defs: []string{"ThreadStartResponse", "ThreadResumeResponse"},
-			nested: map[string]string{"thread": "Thread", "sandbox": "SandboxPolicy"}},
+			nested: map[string]string{"thread": "Thread", "sandbox": "SandboxPolicy", "activePermissionProfile": "ActivePermissionProfile"}},
 		{v: codexTurnStartParams{}, defs: []string{"TurnStartParams"}, nested: map[string]string{"input": "UserInput"}},
 		{v: codexTurnRef{}, defs: []string{"TurnInterruptParams"}},
 		{v: codexThreadRef{}, defs: []string{"ThreadBackgroundTerminalsCleanParams"}},
