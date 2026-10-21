@@ -45,11 +45,12 @@ func TestTaskModeToolSet(t *testing.T) {
 	if strings.Join(taskscope.Tools(), ",") != "companies_search,filings,find,publish_artifact,read_passage,read_section,search,toc" {
 		t.Fatalf("taskscope.Tools() = %v", taskscope.Tools())
 	}
-	if strings.Join(taskscope.AutoAllowedTools(), ",") != strings.Join(expectedTaskToolNames, ",") {
+	// Story 94.4: every task tool, publish_artifact included, runs without asking.
+	if strings.Join(taskscope.AutoAllowedTools(), ",") != strings.Join(taskscope.Tools(), ",") {
 		t.Fatalf("taskscope.AutoAllowedTools() = %v", taskscope.AutoAllowedTools())
 	}
-	if !taskscope.ApprovalRequired("publish_artifact") || taskscope.ApprovalRequired("search") {
-		t.Fatal("only publish_artifact requires approval")
+	if !taskscope.IsMosaicTool("publish_artifact") || !taskscope.IsMosaicTool("search") || taskscope.IsMosaicTool("version") {
+		t.Fatal("publish_artifact and search are Mosaic tools; version is not")
 	}
 	if taskscope.ToolAllowedFor("publish_artifact", []string{"search", "read"}) || !taskscope.ToolAllowedFor("publish_artifact", []string{"publish"}) {
 		t.Fatal("publish_artifact must need the publish scope")
@@ -62,7 +63,7 @@ func TestTaskModeToolSet(t *testing.T) {
 		t.Fatal("tools without known routes must fail closed")
 	}
 	// Story 81.4: the admin verbs left ToolRoutes; filings and find are read
-	// tools, so Claude and Codex task sessions auto allow them.
+	// tools, which Claude and Codex task sessions auto allow.
 	for _, admin := range []string{"auth_status", "auth_whoami", "doctor", "usage", "version"} {
 		if _, ok := taskscope.ToolRoutes[admin]; ok {
 			t.Errorf("admin verb %s still has task routes", admin)

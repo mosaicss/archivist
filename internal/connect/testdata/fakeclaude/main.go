@@ -10,6 +10,8 @@
 //	echo <text>     stream <text> back
 //	bash <cmd>      ask can_use_tool for Bash and report the decision
 //	write <path>    ask can_use_tool for Write and report the decision
+//	bigwrite <n>    ask can_use_tool for Write of <n> bytes to big.txt in
+//	                the working directory and report the decision
 //	mcp             list the archivist MCP tools and call search
 //	publish <path>  call publish_artifact; asks can_use_tool unless the tool
 //	                is in --allowedTools (as Claude Code does)
@@ -508,6 +510,9 @@ func (r *runner) turn(text string) bool {
 		return r.ask("Edit", map[string]any{"file_path": arg, "old_string": "a", "new_string": "b"})
 	case "write":
 		return r.ask("Write", map[string]any{"file_path": arg, "content": "x"})
+	case "bigwrite":
+		n, _ := strconv.Atoi(arg)
+		return r.ask("Write", map[string]any{"file_path": filepath.Join(mustCwd(), "big.txt"), "content": strings.Repeat("x", n)})
 	case "websearch":
 		return r.webSearch(arg)
 	case "askweb":

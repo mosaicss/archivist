@@ -100,32 +100,33 @@ func TestHarnessMappingTable(t *testing.T) {
 
 func TestBackstopTable(t *testing.T) {
 	want := map[Mode][3]verdict{ // read tool, publish_artifact, any other tool
-		ModeReadOnly:  {verdictAllow, verdictDeny, verdictDeny},
-		ModeAsk:       {verdictAllow, verdictCard, verdictCard},
-		ModeAutoEdits: {verdictAllow, verdictCard, verdictCard},
+		// Story 94.4: Mosaic tools never ask, Read only included.
+		ModeReadOnly:  {verdictAllow, verdictAllow, verdictDeny},
+		ModeAsk:       {verdictAllow, verdictAllow, verdictCard},
+		ModeAutoEdits: {verdictAllow, verdictAllow, verdictCard},
 		// full_auto: anything the harness still asks is a card, never allowed silently.
-		ModeFullAuto: {verdictAllow, verdictCard, verdictCard},
+		ModeFullAuto: {verdictAllow, verdictAllow, verdictCard},
 	}
 	for m, w := range want {
-		got := [3]verdict{backstop(m, claudeMosaicRead("mcp__archivist__search")),
-			backstop(m, claudeMosaicRead("mcp__archivist__publish_artifact")), backstop(m, claudeMosaicRead("Bash"))}
+		got := [3]verdict{backstop(m, claudeMosaicTool("mcp__archivist__search")),
+			backstop(m, claudeMosaicTool("mcp__archivist__publish_artifact")), backstop(m, claudeMosaicTool("Bash"))}
 		if got != w {
 			t.Errorf("%s: %v, want %v", m, got, w)
 		}
 	}
-	for name, read := range map[string]bool{
+	for name, mosaic := range map[string]bool{
 		"mcp__archivist__search": true, "mcp__archivist__companies_search": true, "mcp__archivist__companies_get": true,
 		"mcp__archivist__read_passage": true, "mcp__archivist__read_section": true, "mcp__archivist__toc": true,
 		"mcp__archivist__filings": true, "mcp__archivist__find": true, "mcp__archivist__doctor": false, "mcp__archivist__version": false,
-		"mcp__archivist__publish_artifact": false, "mcp__archivist__usage": false, "mcp__other__search": false,
+		"mcp__archivist__publish_artifact": true, "mcp__archivist__usage": false, "mcp__other__search": false,
 		"search": false, "Read": false, "mcp__archivist__": false,
 	} {
-		if claudeMosaicRead(name) != read {
-			t.Errorf("claudeMosaicRead(%q) != %v", name, read)
+		if claudeMosaicTool(name) != mosaic {
+			t.Errorf("claudeMosaicTool(%q) != %v", name, mosaic)
 		}
 	}
-	if taskscope.IsReadTool(taskscope.PublishTool) {
-		t.Error("publish_artifact is not a read tool")
+	if !taskscope.IsMosaicTool(taskscope.PublishTool) {
+		t.Error("publish_artifact is a Mosaic tool")
 	}
 	if strings.ContainsAny(readOnlyDenied, "-—") {
 		t.Errorf("denial %q has a hyphen or em dash", readOnlyDenied)
@@ -635,7 +636,8 @@ func TestControlsBadStartValues(t *testing.T) {
 }
 
 // Rows "Read tool, any mode", "publish_artifact" and "Non read tool" for
-// Claude in read_only (acceptance 3): plan mode, denials without cards.
+// Claude in read_only (acceptance 3): plan mode, denials without cards; a
+// Mosaic tool, publish_artifact included, runs (Story 94.4).
 func TestControlsClaudeReadOnly(t *testing.T) {
 	h := newHarness(t, nil)
 	h.start()
@@ -653,17 +655,18 @@ func TestControlsClaudeReadOnly(t *testing.T) {
 		t.Fatalf("read_only produced %d cards", n)
 	}
 	text := h.relay.text(sid)
-	if strings.Count(text, "denied: "+readOnlyDenied) != 3 || !strings.Contains(text, "publish denied") || !strings.Contains(text, "allowed") {
+	if strings.Count(text, "denied: "+readOnlyDenied) != 3 || !strings.Contains(text, "published") || !strings.Contains(text, "allowed") {
 		t.Fatalf("text %q", text)
 	}
-	if ups, _ := h.api.uploads(); len(ups) != 0 {
-		t.Fatal("read_only published an artifact")
+	if ups, _ := h.api.uploads(); len(ups) != 1 {
+		t.Fatalf("read_only publish uploads %d, want 1", len(ups))
 	}
 }
 
 // Rows "publish_artifact" and "Non read tool" for Claude in full_auto: the
 // allow flag at a full_auto ceiling, bypassPermissions; a prompt Claude
 // still raises (the fake always asks) is a card, never allowed silently.
+// publish_artifact is pre-allowed and raises no card (Story 94.4).
 func TestControlsClaudeFullAuto(t *testing.T) {
 	h := newHarness(t, nil)
 	h.maxMode = ModeFullAuto
@@ -686,12 +689,11 @@ func TestControlsClaudeFullAuto(t *testing.T) {
 	h.waitFinishes(sid, 2)
 	h.writeCwd(sid, "report.md", []byte("# report\n"))
 	h.message(sid, "publish report.md")
-	h.approve(sid, 3, "allow", "user", "")
 	h.waitFinishes(sid, 3)
 	h.message(sid, "askmcp search")
 	h.waitFinishes(sid, 4)
-	if n := h.cards(sid); n != 3 {
-		t.Fatalf("full_auto cards %d, want 3 (read tools never ask)", n)
+	if n := h.cards(sid); n != 2 {
+		t.Fatalf("full_auto cards %d, want 2 (Mosaic tools never ask)", n)
 	}
 	if text := h.relay.text(sid); !strings.Contains(text, "allowed") || !strings.Contains(text, "published") || !h.toolOutput(sid, "ran: touch x") {
 		t.Fatalf("text %q", text)
@@ -891,15 +893,17 @@ func TestControlsCodexModes(t *testing.T) {
 	if n := h.cards(sid); n != 0 {
 		t.Fatalf("read_only produced %d cards", n)
 	}
+	// Story 94.4: publish_artifact follows the server default (approve), so
+	// it runs in read_only without an MCP approval.
 	if text := h.relay.text(sid); !strings.Contains(text, "declined ls") || !strings.Contains(text, "file declined") ||
-		!strings.Contains(text, "tools: ") || !strings.Contains(text, "publish declined") {
+		!strings.Contains(text, "tools: ") || !strings.Contains(text, "published") {
 		t.Fatalf("text %q", text)
 	}
-	if b, _ := os.ReadFile(filepath.Join(h.home, ".fakecodex", "elicitation-reply.json")); !strings.Contains(string(b), `"action":"decline"`) {
-		t.Fatalf("read_only publish reply %s", b)
+	if _, err := os.Stat(filepath.Join(h.home, ".fakecodex", "elicitation-reply.json")); !os.IsNotExist(err) {
+		t.Fatalf("read_only publish asked an MCP approval (%v)", err)
 	}
-	if ups, _ := h.api.uploads(); len(ups) != 0 {
-		t.Fatal("read_only published an artifact")
+	if ups, _ := h.api.uploads(); len(ups) != 1 {
+		t.Fatalf("read_only publish uploads %d, want 1", len(ups))
 	}
 	starts := h.turnStarts()
 	if len(starts) != 4 {
@@ -920,10 +924,9 @@ func TestControlsCodexModes(t *testing.T) {
 	h.approve(sid, 1, "allow", "user", "")
 	h.waitFinishes(sid, 5)
 	h.message(sid, "publish a.md")
-	h.approve(sid, 2, "allow", "user", "")
 	h.waitFinishes(sid, 6)
-	if n := h.cards(sid); n != 2 {
-		t.Fatalf("full_auto cards %d, want 2", n)
+	if n := h.cards(sid); n != 1 {
+		t.Fatalf("full_auto cards %d, want 1 (publish_artifact never asks)", n)
 	}
 	if text := h.relay.text(sid); !strings.Contains(text, "ran touch b") || !strings.Contains(text, "published") {
 		t.Fatalf("text %q", text)
@@ -935,7 +938,7 @@ func TestControlsCodexModes(t *testing.T) {
 	// set_mode ask: untrusted/workspaceWrite with the isolation fields, cards again.
 	h.setMode(sid, ModeAsk)
 	h.message(sid, "cmd rm c")
-	h.approve(sid, 3, "deny", "user", "")
+	h.approve(sid, 2, "deny", "user", "")
 	h.waitFinishes(sid, 7)
 	p := h.turnStarts()[6]
 	sp := p["sandboxPolicy"].(map[string]any)
@@ -1159,8 +1162,10 @@ func TestControlsClaudeReadOnlyDeniesPendingCards(t *testing.T) {
 
 // Row "Lower to read_only with cards open", Codex: command and MCP cards
 // are declined when read_only commits; another change leaves them open.
+// mcpApproval with elicitTool: an MCP approval for a tool that is not a
+// Mosaic tool (a Mosaic tool approval never becomes a card).
 func TestControlsCodexReadOnlyDeniesPendingCards(t *testing.T) {
-	h := newCodexHarness(t, nil)
+	h := newCodexHarness(t, map[string]any{"mcpApproval": true, "elicitTool": "other_tool"})
 	h.start()
 	sid := h.startCodexSession("cmd rm a")
 	waitFor(t, 10*time.Second, "card", func() bool { return h.cards(sid) == 1 })
@@ -1198,17 +1203,28 @@ func TestControlsCodexReadOnlyDeniesPendingCards(t *testing.T) {
 	}
 }
 
-// Overlapping MCP calls: a publish_artifact approval while a search call
-// started later is never taken for a read tool: card in ask and auto_edits.
+// Overlapping MCP calls: the approval is read from the request itself, not
+// from the latest started item. A Mosaic tool approval (publish_artifact
+// while a search call started later) is accepted without a card; one
+// naming another tool is a card in ask and auto_edits.
 func TestControlsCodexOverlappingMCPCallsCard(t *testing.T) {
 	h := newCodexHarness(t, nil)
 	h.start()
-	for i, mode := range []string{"ask", "auto_edits"} {
+	for i, mode := range []string{"read_only", "ask", "auto_edits"} {
 		sid := h.startWith("codex", "overlap", map[string]any{"mode": mode})
-		h.approve(sid, 1, "deny", "user", "")
 		h.waitFinishes(sid, 1)
-		if !strings.Contains(h.relay.text(sid), "overlap: decline") {
-			t.Fatalf("%d %s: text %q", i, mode, h.relay.text(sid))
+		if !strings.Contains(h.relay.text(sid), "overlap: accept") || h.cards(sid) != 0 {
+			t.Fatalf("%d %s: cards %d text %q", i, mode, h.cards(sid), h.relay.text(sid))
+		}
+	}
+	h2 := newCodexHarness(t, map[string]any{"elicitTool": "other_tool"})
+	h2.start()
+	for i, mode := range []string{"ask", "auto_edits"} {
+		sid := h2.startWith("codex", "overlap", map[string]any{"mode": mode})
+		h2.approve(sid, 1, "deny", "user", "")
+		h2.waitFinishes(sid, 1)
+		if !strings.Contains(h2.relay.text(sid), "overlap: decline") {
+			t.Fatalf("%d %s: text %q", i, mode, h2.relay.text(sid))
 		}
 	}
 }
@@ -1428,9 +1444,11 @@ func TestControlsPre7832RecordResumesAsk(t *testing.T) {
 // ─── review pass 2 rows ─────────────────────────────────────────────────────
 
 // Codex MCP "allow for session" is kept by the daemon: later publishes in
-// ask are accepted without a card, and after read_only they are declined.
+// ask are accepted without a card, and after read_only they are declined
+// (mcpApproval with elicitTool: an MCP approval for a tool that is not a
+// Mosaic tool; a Mosaic tool approval is accepted without a card).
 func TestControlsCodexMCPSessionAllowYieldsToReadOnly(t *testing.T) {
-	h := newCodexHarness(t, nil)
+	h := newCodexHarness(t, map[string]any{"mcpApproval": true, "elicitTool": "other_tool"})
 	h.start()
 	sid := h.startCodexSession("echo one")
 	h.waitFinishes(sid, 1)
@@ -1479,14 +1497,14 @@ func TestControlsInvalidFrameAfterWindowIsNotARefusal(t *testing.T) {
 func TestControlsReadOnlyOverridesRememberedAllow(t *testing.T) {
 	h := newHarness(t, nil)
 	h.start()
-	sid := h.startSession("bash touch a")
+	sid := h.startSession("bash touch a.txt")
 	h.approve(sid, 1, "allow", "user", "allow_always")
 	h.waitFinishes(sid, 1)
 	h.setMode(sid, ModeReadOnly)
 	waitFor(t, 10*time.Second, "read_only committed", func() bool { return h.record(sid).Mode == "read_only" })
-	h.message(sid, "bash touch b")
+	h.message(sid, "bash touch b.txt") // under the remembered "touch" prefix
 	h.waitFinishes(sid, 2)
-	if h.cards(sid) != 1 || h.toolOutput(sid, "ran: touch b") || !strings.Contains(h.relay.text(sid), "denied: "+readOnlyDenied) {
+	if h.cards(sid) != 1 || h.toolOutput(sid, "ran: touch b.txt") || !strings.Contains(h.relay.text(sid), "denied: "+readOnlyDenied) {
 		t.Fatalf("cards %d, text %q", h.cards(sid), h.relay.text(sid))
 	}
 }

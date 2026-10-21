@@ -50,7 +50,9 @@ func replayClaude(t *testing.T, name string) []Chunk {
 }
 
 // TestTranslatorMatchesGoldens is the 78.13 contract: the Claude raw
-// captures, replayed through the Go translator, equal the canonical goldens.
+// captures, replayed through the Go translator, equal the canonical goldens
+// once the daemon's own approval descriptor key (archivist_session_scope,
+// Story 94.4; the descriptor is free form) is set aside.
 func TestTranslatorMatchesGoldens(t *testing.T) {
 	parser, err := mosaicevent.New()
 	if err != nil {
@@ -76,6 +78,17 @@ func TestTranslatorMatchesGoldens(t *testing.T) {
 			}
 			if len(gotV) != len(wantV) {
 				t.Fatalf("chunk count %d, golden %d\n got: %s", len(gotV), len(wantV), gotJSON)
+			}
+			for i, c := range gotV {
+				m, _ := c.(map[string]any)
+				if m["type"] != "tool-approval-request" {
+					continue
+				}
+				d := m["approvalDescriptor"].(map[string]any)
+				if scope, ok := d[sessionScopeKey].(map[string]any); !ok || scope["kind"] == "" {
+					t.Errorf("chunk %d: no session scope in %v", i, d)
+				}
+				delete(d, sessionScopeKey)
 			}
 			for i := range wantV {
 				if !reflect.DeepEqual(gotV[i], wantV[i]) {

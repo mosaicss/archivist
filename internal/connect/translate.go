@@ -209,12 +209,8 @@ func (t *Translator) In(line []byte) []Chunk {
 			t.Skipped++
 			break
 		}
-		toolCallID, _ := request["tool_use_id"].(string)
 		reqID, _ := f["request_id"].(string)
-		if toolCallID == "" {
-			toolCallID = reqID
-		}
-		emit(Chunk{"type": "tool-approval-request", "approvalId": reqID, "toolCallId": toolCallID, "approvalDescriptor": request})
+		emit(claudeApprovalCard(reqID, request)) // approvalcard.go
 	case "user":
 		m, _ := f["message"].(map[string]any)
 		content, ok := m["content"].([]any)

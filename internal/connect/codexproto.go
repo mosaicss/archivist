@@ -209,6 +209,9 @@ type codexElicitation struct {
 	Mode       string  `json:"mode"`
 	Meta       *struct {
 		ApprovalKind string `json:"codex_approval_kind"`
+		// ToolName is optional: codex-rs 0.160.0 sends tool_title,
+		// tool_description and tool_params, not tool_name.
+		ToolName string `json:"tool_name"`
 	} `json:"_meta"`
 }
 

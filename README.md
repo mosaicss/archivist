@@ -382,11 +382,13 @@ when it starts and changeable while it runs. Low to high:
 | `auto_edits` | Auto edits | File edits run (Claude Code also runs simple file commands such as mkdir, mv, cp and rm inside the session folder); other commands ask | `--permission-mode acceptEdits` | `untrusted`, `workspace-write` sandbox; the daemon accepts file changes inside the session folder |
 | `full_auto` | Full auto | The harness runs without asking, but anything it still asks about (for example deleting a critical folder) is shown as a card | `--permission-mode bypassPermissions` | `never`, `danger-full-access` (no sandbox, network on) |
 
-The Mosaic search and read tools (`search`, `companies_search`,
-`companies_get`, `read_passage`, `read_section`, `toc`, `filings`, `find`) never ask, in any
-mode and on both harnesses. `publish_artifact` follows the mode. The daemon
+The Mosaic tools (`search`, `companies_search`, `companies_get`,
+`read_passage`, `read_section`, `toc`, `filings`, `find` and
+`publish_artifact`) never ask, in any mode (`read_only` included) and on both
+harnesses: the mode governs only the tools that touch your computer (shell
+commands, file edits and writes). The daemon
 enforces the mode itself on every approval request that reaches it,
-whatever the harness version does: Mosaic read tools are allowed, `read_only`
+whatever the harness version does: Mosaic tools are allowed, `read_only`
 denies everything else without a card, and every other mode shows a card,
 `full_auto` included (Claude Code keeps some prompts even in bypass
 permissions, such as removing a critical directory). In `auto_edits` the
@@ -495,9 +497,28 @@ For each "My Claude Code" session the daemon:
   mode leaves to you becomes an approval card in the workspace (allow once,
   allow for session, deny once, deny for session; no answer within 60
   seconds denies).
-  "Allow for session" and "deny for session" apply to every later call of that
-  tool in the session, whatever its input, without another card; they live in
-  the daemon's memory, so restarting `archivist connect` clears them;
+  "Allow for session" is kept as a narrow rule in Claude Code's own rule
+  style, and the card says what it covers: for Bash, the command prefix (the
+  program and its subcommand word, such as `ls` for `ls -la` or `git status`
+  for `git status`, matched on whole words, so `ls` never covers `lsof`), or
+  the exact command when it has shell operators, redirections, substitutions
+  or an environment assignment, starts with a wrapper, interpreter or a
+  command that edits files or reaches the network (such as `sudo`, `bash`,
+  `python3`, `xargs`, `sed`, `rm`, `curl`), or has a runner word such as
+  `run`, `exec` or `x` after the program; a prefix never covers a `find` that
+  runs commands, deletes or writes files, or an option that runs another
+  program (such as `git -c`, `tar -I`, `rsync -e`, in any spelling). For Edit
+  and Write it is the absolute file path (one rule for both tools; a path with
+  a `..` element is kept as that exact call; letter case is compared as
+  written), and for Read, Glob,
+  Grep and any other tool every later call of that tool. "Deny for session"
+  applies to every later call of that tool. Both live in the daemon's memory,
+  so restarting `archivist connect` clears them;
+- denies, without a card, an approval whose card would have to be cut down to
+  be sent: a shell command over 16000 bytes, or a call too large for one relay
+  message. Claude is told to run it in smaller steps. The daemon never sends a
+  cut down approval card, so an answer never covers input the card's data
+  left out;
 - streams the session as `mosaic-event/1` events, each validated before it is
   sent, with three exceptions stamped per event type: the session-bound
   mode's sign-in prompt, a `mosaic-event/2` `data-auth-prompt` that adds the
@@ -553,13 +574,13 @@ For each "My Codex" session the daemon:
   `-c` flags (`config/read`), no instruction files, and the archivist MCP
   server ready with no other MCP server. A later
   switch away from the ChatGPT login ends the session the same way;
-- turns command, file change and archivist tool approvals into workspace
-  cards. Your answer maps one to one onto Codex's choices: allow once is
-  accept, allow for session is Codex's accept for session (the identical
-  command, or the same file, runs again without asking for the rest of the
-  session), deny once (or no answer within 60 seconds) is decline, and deny
-  for session is cancel (deny and end the turn); for an archivist tool, allow
-  for session uses Codex's session-only persistence. archivist connect never
+- turns command and file change approvals into workspace cards. Your answer
+  maps one to one onto Codex's choices: allow once is accept, allow for
+  session is Codex's accept for session (the identical command, or the same
+  file, runs again without asking for the rest of the session), deny once (or
+  no answer within 60 seconds) is decline, and deny for session is cancel
+  (deny and end the turn). An archivist tool approval, should Codex ask for
+  one, is accepted without a card in every mode. archivist connect never
   sends Codex's rule amendments or "always" approvals, so no approval is
   written to your config;
 - interrupts with `turn/interrupt` and then cleans the thread's background
@@ -573,12 +594,10 @@ For each "My Codex" session the daemon:
 
 Both harnesses also get `publish_artifact`, which publishes one file from the
 session directory to the workspace, where it opens beside the conversation.
-It is never pre-allowed: in `ask` and `auto_edits` each call asks for
-approval through the card (Claude's permission prompt, Codex's
-`approval_mode = "prompt"` for that tool) unless you chose "allow for
-session" for it; `read_only` denies it, and in `full_auto` the harness
-approves it itself (a card if it still asks). It refuses, and
-uploads nothing, for a path outside the session directory or containing
+Like the other Mosaic tools it never asks, in any mode (pre-allowed in
+Claude's `--allowedTools`; Codex's archivist server default `approve` with no
+per tool override), and it stays confined to the session directory: it
+refuses, and uploads nothing, for a path outside the session directory or containing
 `..`, any symbolic link, a file that is not regular, empty or over 10 MiB, and
 anything but `.pdf`, `.txt`, `.md`, `.csv` and `.json` whose content matches
 (a PDF header; UTF-8 text without NUL; JSON that parses). A successful call

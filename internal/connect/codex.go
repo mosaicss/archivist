@@ -84,9 +84,9 @@ func tomlValue(v any) string {
 // was checked on codex-cli 0.160.0 with --strict-config (an unknown key is
 // a startup error). approval_policy never appears here: it travels in
 // thread/start and turn/start, the only places "untrusted" is accepted.
-// Archivist MCP tools are approved without asking (Mosaic read tools in
-// every mode), except the approval-required ones (publish_artifact), which
-// prompt and so follow the session's mode.
+// Archivist MCP tools, publish_artifact included (Story 94.4), are
+// approved without asking in every mode: the server default approval mode
+// approve applies, with no per tool override.
 func codexArgs(cfg CodexConfig, tokenFile string, publish []string) []string {
 	set := [][2]string{
 		// Login: the ChatGPT subscription from the linked auth.json only.
@@ -132,14 +132,6 @@ func codexArgs(cfg CodexConfig, tokenFile string, publish []string) []string {
 		{"mcp_servers.archivist.default_tools_approval_mode", `"approve"`},
 		{"mcp_servers.archivist.startup_timeout_sec", "20"},
 		{"mcp_servers.archivist.tool_timeout_sec", "120"},
-	}
-	// Approval-required tools (publish_artifact) always ask: the per-tool
-	// override wins over the server default (Codex config reference,
-	// mcp_servers.<id>.tools.<tool>.approval_mode).
-	for _, tool := range taskscope.Tools() {
-		if taskscope.ApprovalRequired(tool) {
-			set = append(set, [2]string{"mcp_servers.archivist.tools." + tool + ".approval_mode", `"prompt"`})
-		}
 	}
 	if cfg.BaseURL != "" {
 		set = append(set, [2]string{"mcp_servers.archivist.env", "{ARCHIVIST_BASE_URL=" + tomlValue(cfg.BaseURL) + "}"})
@@ -817,8 +809,14 @@ func (s *session) codexServerRequest(ev codexEvent) {
 			reply(map[string]any{"action": "decline", "content": nil, "_meta": nil})
 			return
 		}
-		// Never a read tool: Codex approves those itself (approve mode), and
-		// with overlapping calls the latest item need not be this call.
+		if codexMosaicToolApproval(e) {
+			// Story 94.4: Mosaic tools never ask, in every mode (approvalcard.go).
+			s.log.Printf("codex MCP approval for an archivist tool accepted: Mosaic tools never ask")
+			reply(map[string]any{"action": "accept", "content": map[string]any{}, "_meta": nil})
+			return
+		}
+		// Any other tool approval: the mode decides, and with overlapping
+		// calls the latest item need not be this call.
 		if s.codexBackstop(reply, true, false) {
 			return // decided by the permission mode (Story 78.32): no card
 		}
@@ -918,11 +916,16 @@ func (s *session) codexAnswerApproval(in *Inbound) {
 	}
 }
 
-// emitApproval queues an approval card; false means the card could not be
-// sent (it does not fit a relay frame even reduced), so the request is
-// declined instead of waiting for an answer that cannot come.
+// emitApproval queues an approval card; false means the card was not sent,
+// so the request is declined instead of waiting for an answer that cannot
+// come: a card that cannot be shown whole (Story 94.4, approvalcard.go) or
+// one the outbox dropped.
 func (s *session) emitApproval(c Chunk) bool {
 	s.flushCoalesced()
+	if cardRefusal(c, s.outbox.Fits) != "" {
+		s.log.Printf("approval card %v cannot be shown whole; declined", c["approvalId"])
+		return false
+	}
 	if s.outbox.Emit(c) == 0 {
 		s.log.Printf("approval card %v could not be sent; declined", c["approvalId"])
 		return false

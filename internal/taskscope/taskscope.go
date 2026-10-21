@@ -57,18 +57,23 @@ var ToolRoutes = map[string][]string{
 	PublishTool:        {"POST /artifacts"},
 }
 
-// ApprovalRequired reports a task tool that must never be pre-allowed: every
-// call goes through the harness's permission prompt (the approval card).
-func ApprovalRequired(name string) bool { return name == PublishTool }
+// IsMosaicTool reports a Mosaic tool (by its MCP tool name): any task tool
+// with routes, publish_artifact included. Since Story 94.4 a session
+// answers every Mosaic tool allow in every permission mode, on both
+// harnesses, without an approval card; the mode governs only the tools that
+// touch the computer (shell, edit, write).
+func IsMosaicTool(name string) bool {
+	_, ok := ToolRoutes[name]
+	return ok
+}
 
-// ReadTools are the Mosaic read tools (Story 78.32): a session answers them
-// allow in every permission mode, on both harnesses, without an approval
-// card. They only search and read filings; publish_artifact is not one.
-// filings and find joined in Story 81.4.
+// ReadTools are the Mosaic read tools (Story 78.32): they only search and
+// read filings; publish_artifact is not one. filings and find joined in
+// Story 81.4.
 var ReadTools = []string{"search", "companies_search", "companies_get", "read_passage", "read_section", "toc", "filings", "find"}
 
 // IsReadTool reports a Mosaic read tool (by its MCP tool name).
-func IsReadTool(name string) bool { return contains(ReadTools, name) && !ApprovalRequired(name) }
+func IsReadTool(name string) bool { return contains(ReadTools, name) }
 
 // ToolAllowed reports whether every route the tool calls is allowed under
 // the minted scopes.
@@ -102,17 +107,9 @@ func Tools() []string {
 	return out
 }
 
-// AutoAllowedTools are the task mode tools a harness may run without asking:
-// Tools() without the approval-required ones.
-func AutoAllowedTools() []string {
-	var out []string
-	for _, name := range Tools() {
-		if !ApprovalRequired(name) {
-			out = append(out, name)
-		}
-	}
-	return out
-}
+// AutoAllowedTools are the task mode tools a harness runs without asking:
+// every one of Tools() (Story 94.4: Mosaic tools never ask).
+func AutoAllowedTools() []string { return Tools() }
 
 // Granted reports whether scope is among the granted scopes.
 func Granted(granted []string, scope string) bool { return contains(granted, scope) }

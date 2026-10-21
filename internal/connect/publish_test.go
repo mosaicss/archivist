@@ -124,15 +124,9 @@ func TestClaudePublishArtifact(t *testing.T) {
 		h.writeCwd(sid, f.name, []byte(f.body))
 	}
 	h.writeCwd(sid, "../outside.txt", []byte("outside"))
-	turns, approvals := 1, 0
+	turns := 1
 	for i, f := range publishFiles {
 		h.message(sid, "publish "+f.name)
-		approvals++
-		req := h.approve(sid, approvals, "allow", "user", "allow_once")
-		desc, _ := req["approvalDescriptor"].(map[string]any)
-		if desc["tool_name"] != "mcp__archivist__publish_artifact" {
-			t.Fatalf("approval for %v", desc["tool_name"])
-		}
 		turns++
 		h.waitFinishes(sid, turns)
 		arts := h.artifacts(sid)
@@ -159,18 +153,11 @@ func TestClaudePublishArtifact(t *testing.T) {
 		}
 	}
 
-	// Denied, refused (outside, symlink) and unknown: no upload, no artifact.
+	// Refused (outside, symlink) and unknown: no upload, no artifact.
 	_ = os.Symlink(filepath.Join(h.record(sid).Cwd, "notes.txt"), filepath.Join(h.record(sid).Cwd, "link.txt"))
 	_, before := h.api.uploads()
-	h.message(sid, "publish notes.txt")
-	approvals++
-	h.approve(sid, approvals, "deny", "user", "reject_once")
-	turns++
-	h.waitFinishes(sid, turns)
 	for _, p := range []string{"../outside.txt", "link.txt", "missing.pdf"} {
 		h.message(sid, "publish "+p)
-		approvals++
-		h.approve(sid, approvals, "allow", "user", "allow_once")
 		turns++
 		h.waitFinishes(sid, turns)
 	}
@@ -180,36 +167,44 @@ func TestClaudePublishArtifact(t *testing.T) {
 	if n := len(h.artifacts(sid)); n != len(publishFiles) {
 		t.Fatalf("%d data-artifact events after refusals", n)
 	}
-	if errs := h.relay.eventsOf(sid, "tool-output-error"); len(errs) != 4 {
+	if errs := h.relay.eventsOf(sid, "tool-output-error"); len(errs) != 3 {
 		t.Fatalf("%d tool errors", len(errs))
+	}
+	if n := h.cards(sid); n != 0 {
+		t.Fatalf("publish_artifact raised %d approval cards", n)
 	}
 	if len(h.relay.invalid) != 0 {
 		t.Fatalf("relay saw invalid events: %v", h.relay.invalid)
 	}
 }
 
-// "Allow for session" remembers publish_artifact like any tool, but nothing
-// pre-allows it: the first call of a session always asks.
-func TestClaudePublishNeedsApproval(t *testing.T) {
+// Story 94.4: publish_artifact is pre-allowed and never raises a card, in
+// every mode (Read only included); it still publishes only from the
+// session folder.
+func TestClaudePublishNeverAsks(t *testing.T) {
 	h := newHarness(t, nil)
+	h.maxMode = ModeFullAuto
 	h.start()
-	sid := h.startSession("echo hi")
-	h.waitFinishes(sid, 1)
-	runs := fakeRuns(t, h.home)
-	if args := strings.Join(runs[0].Args, " "); strings.Contains(args, "publish_artifact") {
-		t.Fatalf("publish_artifact pre-allowed: %s", args)
+	for i, mode := range []Mode{ModeReadOnly, ModeAsk, ModeAutoEdits, ModeFullAuto} {
+		sid := h.startWith("claude", "echo hi", map[string]any{"mode": string(mode)})
+		h.waitFinishes(sid, 1)
+		h.writeCwd(sid, "a.txt", []byte("a"))
+		h.message(sid, "publish a.txt")
+		h.waitFinishes(sid, 2)
+		if n := h.cards(sid); n != 0 {
+			t.Fatalf("%s: %d approval cards", mode, n)
+		}
+		if len(h.artifacts(sid)) != 1 || !strings.Contains(h.relay.text(sid), "published") {
+			t.Fatalf("%s: artifacts %d text %q", mode, len(h.artifacts(sid)), h.relay.text(sid))
+		}
+		if ups, n := h.api.uploads(); len(ups) != i+1 || n != i+1 {
+			t.Fatalf("%s: uploads %d", mode, n)
+		}
 	}
-	h.writeCwd(sid, "a.txt", []byte("a"))
-	h.message(sid, "publish a.txt")
-	waitFor(t, 20*time.Second, "approval request", func() bool { return len(h.relay.eventsOf(sid, "tool-approval-request")) == 1 })
-	time.Sleep(300 * time.Millisecond)
-	if ups, n := h.api.uploads(); n != 0 || len(ups) != 0 {
-		t.Fatal("uploaded before approval")
-	}
-	h.approve(sid, 1, "allow", "user", "allow_once")
-	h.waitFinishes(sid, 2)
-	if len(h.artifacts(sid)) != 1 {
-		t.Fatal("no artifact after approval")
+	for _, r := range fakeRuns(t, h.home) {
+		if args := strings.Join(r.Args, " "); !strings.Contains(args, "mcp__archivist__publish_artifact") {
+			t.Fatalf("publish_artifact not pre-allowed: %s", args)
+		}
 	}
 }
 
@@ -226,7 +221,6 @@ func TestClaudePublishWithoutScope(t *testing.T) {
 	}
 	h.writeCwd(sid, "a.txt", []byte("a"))
 	h.message(sid, "publish a.txt")
-	h.approve(sid, 1, "allow", "user", "allow_once")
 	h.waitFinishes(sid, 2)
 	if _, n := h.api.uploads(); n != 0 || len(h.artifacts(sid)) != 0 || !strings.Contains(h.relay.text(sid), "publish failed") {
 		t.Fatalf("uploads %d artifacts %d text %q", n, len(h.artifacts(sid)), h.relay.text(sid))
@@ -241,12 +235,6 @@ func TestCodexPublishArtifact(t *testing.T) {
 	h.writeCwd(sid, "report.pdf", []byte("%PDF-1.4\n"))
 	h.writeCwd(sid, "bad.json", []byte("{nope"))
 	h.message(sid, "publish report.pdf")
-	req := h.approve(sid, 1, "allow", "user", "allow_once")
-	desc, _ := req["approvalDescriptor"].(map[string]any)
-	meta, _ := desc["_meta"].(map[string]any)
-	if meta["tool_name"] != "publish_artifact" {
-		t.Fatalf("approval descriptor %v", desc)
-	}
 	h.waitFinishes(sid, 2)
 	arts := h.artifacts(sid)
 	ups, _ := h.api.uploads()
@@ -256,22 +244,47 @@ func TestCodexPublishArtifact(t *testing.T) {
 	}
 	// Refused content: a tool error, nothing uploaded, no artifact.
 	h.message(sid, "publish bad.json")
-	h.approve(sid, 2, "allow", "user", "allow_once")
 	h.waitFinishes(sid, 3)
-	// Denied: nothing either.
-	h.message(sid, "publish report.pdf")
-	h.approve(sid, 3, "deny", "user", "reject_once")
-	h.waitFinishes(sid, 4)
 	if ups, n := h.api.uploads(); len(ups) != 1 || n != 1 || len(h.artifacts(sid)) != 1 {
 		t.Fatalf("uploads %d/%d artifacts %d", len(ups), n, len(h.artifacts(sid)))
 	}
+	if n := h.cards(sid); n != 0 {
+		t.Fatalf("publish_artifact raised %d approval cards", n)
+	}
 	runs := codexRuns(t, h.home)
-	if args := strings.Join(runs[0].Args, " "); !strings.Contains(args, `mcp_servers.archivist.tools.publish_artifact.approval_mode="prompt"`) ||
+	if args := strings.Join(runs[0].Args, " "); strings.Contains(args, "mcp_servers.archivist.tools.publish_artifact.approval_mode") ||
 		!strings.Contains(args, `"--publish-session","`+sid+`","--publish-dir"`) {
 		t.Fatalf("codex args %s", args)
 	}
 	if len(h.relay.invalid) != 0 {
 		t.Fatalf("relay saw invalid events: %v", h.relay.invalid)
+	}
+}
+
+// Story 94.4: Codex runs publish_artifact without an MCP approval in every
+// mode (the server default approve, no per tool override).
+func TestCodexPublishNeverAsks(t *testing.T) {
+	h := newCodexHarness(t, nil)
+	h.maxMode = ModeFullAuto
+	h.start()
+	for i, mode := range []Mode{ModeReadOnly, ModeAsk, ModeAutoEdits, ModeFullAuto} {
+		sid := h.startWith("codex", "echo hi", map[string]any{"mode": string(mode)})
+		h.waitFinishes(sid, 1)
+		h.writeCwd(sid, "a.md", []byte("# a\n"))
+		h.message(sid, "publish a.md")
+		h.waitFinishes(sid, 2)
+		if n := h.cards(sid); n != 0 {
+			t.Fatalf("%s: %d approval cards", mode, n)
+		}
+		if len(h.artifacts(sid)) != 1 || !strings.Contains(h.relay.text(sid), "published") {
+			t.Fatalf("%s: artifacts %d text %q", mode, len(h.artifacts(sid)), h.relay.text(sid))
+		}
+		if _, n := h.api.uploads(); n != i+1 {
+			t.Fatalf("%s: uploads %d", mode, n)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(h.home, ".fakecodex", "elicitation-reply.json")); !os.IsNotExist(err) {
+		t.Fatalf("an MCP approval was asked (%v)", err)
 	}
 }
 

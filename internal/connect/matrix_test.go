@@ -177,17 +177,18 @@ func TestMatrixResumeWithoutStateFails(t *testing.T) {
 	}
 }
 
-// Approval row: allow_always is remembered per tool name; a later ask for
-// that tool is answered locally (no new tool-approval-request reaches the
-// relay) while another tool still asks.
-func TestMatrixAllowAlwaysRememberedPerTool(t *testing.T) {
+// Approval row: allow_always is remembered as a narrow rule (Story 94.4:
+// the Bash command prefix); a later command under that prefix is answered
+// locally (no new tool-approval-request reaches the relay) while another
+// tool still asks.
+func TestMatrixAllowAlwaysRememberedAsRule(t *testing.T) {
 	h := newHarness(t, nil)
 	h.start()
-	sid := h.startSession("bash touch one")
+	sid := h.startSession("bash touch one.txt")
 	h.approve(sid, 1, "allow", "user", "allow_always")
 	h.waitFinishes(sid, 1)
 
-	h.message(sid, "bash touch two")
+	h.message(sid, "bash touch two.txt")
 	h.waitFinishes(sid, 2)
 	if n := len(h.relay.eventsOf(sid, "tool-approval-request")); n != 1 {
 		t.Fatalf("approval requests %d after a remembered allow", n)
@@ -196,7 +197,7 @@ func TestMatrixAllowAlwaysRememberedPerTool(t *testing.T) {
 	for _, e := range h.relay.eventsOf(sid, "tool-output-available") {
 		outputs = append(outputs, e["payload"].(map[string]any)["output"])
 	}
-	if len(outputs) != 2 || outputs[1] != "ran: touch two" {
+	if len(outputs) != 2 || outputs[1] != "ran: touch two.txt" {
 		t.Fatalf("outputs %v", outputs)
 	}
 	responses := h.relay.eventsOf(sid, "tool-approval-response")
@@ -208,7 +209,7 @@ func TestMatrixAllowAlwaysRememberedPerTool(t *testing.T) {
 		t.Fatalf("scope events %v", scopes)
 	}
 
-	// Another tool is not covered by the Bash rule.
+	// Another tool is not covered by the Bash "touch" rule.
 	h.message(sid, "write notes.txt")
 	h.approve(sid, 2, "deny", "user", "")
 	h.waitFinishes(sid, 3)

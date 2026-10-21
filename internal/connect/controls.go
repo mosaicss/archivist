@@ -189,15 +189,16 @@ const (
 const readOnlyDenied = "Denied: Read only mode lets reads and research run and denies anything that would change something."
 
 // backstop decides an approval request before any session remembered
-// rule: Mosaic read tools are allowed in every mode; anything else is
-// denied in read_only and shown as a card in every other mode, full_auto
-// included (a prompt the harness still raises there, such as Claude Code's
-// bypass immune critical path rm, is never silently allowed). Codex
-// auto_edits file changes inside the session directory are accepted apart
+// rule: Mosaic tools (every archivist task tool, publish_artifact included
+// since Story 94.4) are allowed in every mode; anything else is denied in
+// read_only and shown as a card in every other mode, full_auto included (a
+// prompt the harness still raises there, such as Claude Code's bypass
+// immune critical path rm, is never silently allowed). Codex auto_edits
+// file changes inside the session directory are accepted apart
 // (codexFileInCwd).
-func backstop(m Mode, mosaicRead bool) verdict {
+func backstop(m Mode, mosaicTool bool) verdict {
 	switch {
-	case mosaicRead:
+	case mosaicTool:
 		return verdictAllow
 	case m == ModeReadOnly:
 		return verdictDeny
@@ -205,10 +206,10 @@ func backstop(m Mode, mosaicRead bool) verdict {
 	return verdictCard
 }
 
-// claudeMosaicRead reports a Claude Code tool name of an archivist read tool.
-func claudeMosaicRead(toolName string) bool {
+// claudeMosaicTool reports a Claude Code tool name of an archivist task tool.
+func claudeMosaicTool(toolName string) bool {
 	name, ok := strings.CutPrefix(toolName, "mcp__archivist__")
-	return ok && taskscope.IsReadTool(name)
+	return ok && taskscope.IsMosaicTool(name)
 }
 
 // ─── model catalogue ────────────────────────────────────────────────────────
@@ -762,18 +763,18 @@ func (s *session) emitControls() {
 }
 
 // claudeWebSearch reports Claude Code's WebSearch on a session with web
-// search (Story 78.33): a read, allowed like the Mosaic read tools in every
+// search (Story 78.33): a read, allowed like the Mosaic tools in every
 // mode. With web search off it is not a read here and the mode decides.
 func (s *session) claudeWebSearch(toolName string) bool {
 	return s.d.webSearch && toolName == ClaudeWebSearchTool
 }
 
 // claudeBackstop answers a can_use_tool request the mode decides (Mosaic
-// read tools, WebSearch with web search on, read_only) without a card;
-// true when answered.
+// tools, WebSearch with web search on, read_only) without a card; true
+// when answered.
 func (s *session) claudeBackstop(requestID string, req controlRequest) bool {
 	var frame map[string]any
-	switch backstop(s.mode(), claudeMosaicRead(req.ToolName) || s.claudeWebSearch(req.ToolName)) {
+	switch backstop(s.mode(), claudeMosaicTool(req.ToolName) || s.claudeWebSearch(req.ToolName)) {
 	case verdictAllow:
 		frame = allowFrame(requestID, req.Input)
 	case verdictDeny:
@@ -788,9 +789,8 @@ func (s *session) claudeBackstop(requestID string, req controlRequest) bool {
 }
 
 // codexBackstop answers a command, file or MCP approval the mode decides
-// without a card; true when answered. Codex never asks for Mosaic read
-// tools (their approval mode is approve), so an MCP elicitation is never
-// treated as one. inCwd marks a file change inside the session directory
+// without a card; true when answered. An MCP approval for a Mosaic tool
+// never reaches it: it is accepted first (codexMosaicToolApproval). inCwd marks a file change inside the session directory
 // (codexFileInCwd), which auto_edits accepts.
 func (s *session) codexBackstop(reply codexReplyFunc, mcp, inCwd bool) bool {
 	m := s.mode()

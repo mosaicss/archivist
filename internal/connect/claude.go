@@ -68,9 +68,10 @@ type ClaudeConfig struct {
 	SignInFile string
 }
 
-// archivistAllowedTools pre-allows the task mode archivist tools, except
-// the approval-required ones (publish_artifact): those reach the
-// permission prompt tool (can_use_tool) on every call.
+// archivistAllowedTools pre-allows every task mode archivist tool,
+// publish_artifact included (Story 94.4): Mosaic tools never ask, in any
+// mode. publish_artifact stays confined to the session folder by
+// internal/artifact.
 func archivistAllowedTools() string {
 	tools := taskscope.AutoAllowedTools()
 	out := make([]string, len(tools))
@@ -89,7 +90,7 @@ func claudeTools(cfg ClaudeConfig) string {
 	return ClaudeBuiltinTools
 }
 
-// claudeAllowedTools is the --allowedTools value: the archivist read tools,
+// claudeAllowedTools is the --allowedTools value: the archivist tools,
 // plus WebSearch when the session has web search, so Claude Code never
 // asks for it (verified on 2.1.285: without the entry, default mode raises
 // can_use_tool for WebSearch).

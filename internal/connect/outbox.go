@@ -125,6 +125,16 @@ func (o *Outbox) Emit(c Chunk) int {
 	return queued
 }
 
+// Fits reports whether one chunk fits a relay frame as it is, without the
+// splitting or truncation Emit would apply (Story 94.4: approval cards).
+func (o *Outbox) Fits(c Chunk) bool {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	typ, _ := c["type"].(string)
+	raw, err := json.Marshal(o.envelope(typ, 1<<52, c))
+	return err == nil && len(raw) <= maxFrameBytes && bounded(c)
+}
+
 // eventVersion is the contract version a chunk is stamped with:
 // mosaic-event/3 for data-session-controls and for a data-usage that carries
 // contextTokens or contextWindow (Story 78.32; a data-usage without them stays
