@@ -24,8 +24,8 @@ Please do not open public GitHub issues for security reports.
 
 | Version | Supported |
 |---|---|
-| 0.2.35 and later | Yes |
-| 0.2.34 and older | No, update with the install command |
+| Latest 0.2.x release | Yes |
+| Older releases | No, update with the install command |
 
 ## Scope
 

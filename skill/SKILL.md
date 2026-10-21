@@ -1,6 +1,6 @@
 ---
 name: archivist
-description: Research global public company filings (SEC, SEDAR+, KAP and expanding) with the Archivist CLI. Use when the user invokes /archivist or asks to research filings, financials, risk factors, or management commentary from the terminal and wants answers cited to the source passage. Requires the archivist binary on PATH and an authenticated Mosaic Pro account.
+description: Research global public company filings (SEC, SEDAR+, KAP and expanding) with the Archivist CLI. Use when the user invokes /archivist or asks to research filings, financials, risk factors, or management commentary, or to screen companies by ratios, size and returns, from the terminal and wants answers cited to the source passage. Requires the archivist binary on PATH and an authenticated Mosaic Pro account.
 ---
 <!-- version: 0.0.0 -->
 # Archivist CLI: Claude Code skill
@@ -229,6 +229,7 @@ archivist read passage  Read a passage with its neighbours
 archivist read section  Read a whole filing section
 archivist toc           List a filing's section headers
 archivist filings       List a company's filings, newest first
+archivist screen        Screen companies by ratios, size and returns
 archivist find          Check whether one filing mentions a term
 archivist companies     Find a company and its symbol
 archivist doctor        Diagnose credentials, connectivity and version
@@ -237,8 +238,8 @@ archivist update        Upgrade the binary and this skill
 archivist version       Print binary version and platform
 ```
 
-`archivist mcp serve` exposes the research verbs as MCP tools over stdio
-(`search`, `read_passage`, `read_section`, `toc`, `filings`, `find`,
+`archivist mcp serve` exposes the research verbs as 9 MCP tools over stdio
+(`search`, `read_passage`, `read_section`, `toc`, `filings`, `screen`, `find`,
 `companies_search`, `companies_get`), every result in the compact format. The
 account verbs (`auth`, `doctor`, `usage`, `version`) are shell only.
 
