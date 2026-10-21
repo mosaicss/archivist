@@ -253,6 +253,10 @@ type codexPending struct {
 // spawnCodex starts the app-server and runs the handshake and the
 // subscription proof; nothing reaches the relay before it passes.
 func (s *session) spawnCodex(ctx context.Context, threadID, instructions string) error {
+	if s.fence == nil {
+		// Story 94.5: never start Codex without the launch's locked paths.
+		return errors.New("session fence: the locked paths of this launch are unknown")
+	}
 	cfg := s.d.codex
 	cfg.WebSearch = s.d.webSearch
 	home, err := s.codexHome(threadID != "")
@@ -270,11 +274,7 @@ func (s *session) spawnCodex(ctx context.Context, threadID, instructions string)
 	}
 	// The one adapter-set key; BuildChildEnv refuses CODEX_ overrides.
 	env = append(env, "CODEX_HOME="+home)
-	var locked []string
-	if s.fence != nil {
-		locked = s.fence.real
-	}
-	proc, err := StartProc(ProcSpec{Bin: cfg.Bin, Args: codexArgs(cfg, s.tokenFile, s.publishArgsFor(s.token), locked), Env: env, Dir: s.rec.Cwd, Log: s.log})
+	proc, err := StartProc(ProcSpec{Bin: cfg.Bin, Args: codexArgs(cfg, s.tokenFile, s.publishArgsFor(s.token), s.fence.real), Env: env, Dir: s.rec.Cwd, Log: s.log})
 	if err != nil {
 		return fmt.Errorf("start codex: %w", err)
 	}

@@ -1,6 +1,7 @@
 package connect
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -1038,5 +1039,118 @@ func TestFenceBackstopDotSegments(t *testing.T) {
 	b, _ := json.Marshal(map[string]string{"command": `type C:\Users\U\Documents\..\.SSH\id_rsa`})
 	if !w.fenceRefusal(b) {
 		t.Error("windows dot segments not refused")
+	}
+}
+
+// The backstop reads home forms as the home folder and relative paths
+// against the session folder before resolving "." and "..": a path that
+// climbs above the home form, or one relative to the session folder, into
+// a locked folder is refused; a relative path to an open one is not.
+func TestFenceBackstopHomeAndRelativeForms(t *testing.T) {
+	user := "u" + "x"
+	home := "/home/" + user
+	own := home + "/.archivist/connect/work/" + cwdPrefix + "own"
+	f := &fence{goos: "linux", home: home, cwd: own,
+		paths: []string{home + "/.ssh", home + "/.archivist/credentials", home + "/.archivist/connect/work/" + cwdPrefix + "other"}}
+	refuse := func(in string) bool {
+		b, _ := json.Marshal(map[string]string{"command": in})
+		return f.fenceRefusal(b)
+	}
+	for _, in := range []string{
+		"cat $HOME/../" + user + "/.ssh/id_rsa",
+		"cat ~/../" + user + "/.archivist/credentials",
+		"cat ${HOME}/../../home/" + user + "/.ssh/config",
+		"cat ../../../credentials",
+		"cat ./../../../credentials",
+		"ls ../" + cwdPrefix + "other/notes.md",
+		"tail -n 5 docs/../../../../../.ssh/id_rsa",
+	} {
+		if !refuse(in) {
+			t.Errorf("%q not refused", in)
+		}
+	}
+	for _, in := range []string{"cat notes/a.md", "cat ./report.md", "ls ../", "cat ../../../../docs/a.txt", "cat $HOME/docs/a.txt"} {
+		if refuse(in) {
+			t.Errorf("%q refused", in)
+		}
+	}
+	w := &fence{goos: "windows", home: `C:\Users\` + user, cwd: `C:\Users\` + user + `\.archivist\connect\work\` + cwdPrefix + "own",
+		paths: []string{`C:\Users\` + user + `\.archivist\credentials`}}
+	for _, in := range []string{`type %USERPROFILE%\..\` + user + `\.archivist\credentials`, `type ..\..\..\CREDENTIALS`,
+		`Get-Content $env:USERPROFILE/../` + user + `/.archivist/credentials`} {
+		b, _ := json.Marshal(map[string]string{"command": in})
+		if !w.fenceRefusal(b) {
+			t.Errorf("windows %q not refused", in)
+		}
+	}
+}
+
+// Session folders an earlier release left in the OS temp directory are
+// locked, except the session's own.
+func TestFenceLocksLegacyTempFolders(t *testing.T) {
+	f := newFenceFixture(t)
+	other, err := os.MkdirTemp(os.TempDir(), cwdPrefix+"*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.RemoveAll(other) }()
+	ownLegacy, err := os.MkdirTemp(os.TempDir(), cwdPrefix+"*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.RemoveAll(ownLegacy) }()
+	fe, err := newFence(fenceSpec{Home: f.home, StateDir: f.state, Cwd: f.cwd})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{other, ownLegacy} {
+		if !slices.Contains(fe.paths, p) || !slices.Contains(fe.real, resolvePath(p)) {
+			t.Errorf("legacy folder %s not locked", p)
+		}
+	}
+	fe2, err := newFence(fenceSpec{Home: f.home, StateDir: f.state, Cwd: ownLegacy})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(fe2.paths, other) || slices.Contains(fe2.paths, ownLegacy) || slices.Contains(fe2.real, resolvePath(ownLegacy)) {
+		t.Errorf("legacy session: own %s or other %s wrong in %v", ownLegacy, other, fe2.paths)
+	}
+}
+
+// A record from an earlier release whose folder is a private 0700 folder
+// in the OS temp directory still resumes.
+func TestFenceLegacyTempFolderResumes(t *testing.T) {
+	skipOnWindows(t, "owner and mode checks are Unix only")
+	st, err := OpenStore(filepath.Join(t.TempDir(), "connect"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, err := os.MkdirTemp(os.TempDir(), cwdPrefix+"*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+	cwd, err := filepath.EvalSymlinks(dir) // as makeCwd records it
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.ensureSessionCwd(cwd); err != nil {
+		t.Fatalf("ensureSessionCwd: %v", err)
+	}
+	id := randomUUID()
+	if err := st.Save(&SessionRecord{SessionID: id, Agent: "claude", ClaudeSessionID: randomUUID(), Cwd: cwd,
+		Status: "active", ExpiresAt: time.Now().Add(time.Hour).UnixMilli()}); err != nil {
+		t.Fatal(err)
+	}
+	if rec, why := (&Daemon{store: st}).resumeSource(id, "claude"); rec == nil || rec.Cwd != cwd {
+		t.Fatalf("legacy record not resumable: %q", why)
+	}
+}
+
+// Codex never starts without the launch's fence.
+func TestFenceCodexNeedsFence(t *testing.T) {
+	s := &session{d: &Daemon{codex: CodexConfig{Bin: "/nonexistent/codex"}}}
+	if err := s.spawnCodex(context.Background(), "", ""); err == nil || !strings.Contains(err.Error(), "locked paths") {
+		t.Fatalf("spawn without a fence: %v", err)
 	}
 }

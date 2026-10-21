@@ -113,6 +113,9 @@ type fence struct {
 	// written and resolved): Read and Edit deny rules only, since the
 	// sandbox's projects deny covers shell commands (Claude launches).
 	ruleOnly []string
+	// cwd is this session's folder: the backstop reads relative paths
+	// against it.
+	cwd string
 	// projectsDir and projectCount name the projects folder with the most
 	// entries, for the settings size error.
 	projectsDir  string
@@ -204,10 +207,19 @@ func newFence(spec fenceSpec) (*fence, error) {
 		}
 	}
 
+	// Session folders of earlier releases in the OS temp directory: every
+	// one but this session's own.
+	tmp := os.TempDir()
+	for _, name := range entryNames(tmp, nil) {
+		if p := filepath.Join(tmp, name); strings.HasPrefix(name, cwdPrefix) && !fencePathEqual(goos, p, spec.Cwd) {
+			add(p)
+		}
+	}
+
 	written = splitAroundKeep(goos, written, spec.Keep)
 	cwd := filepath.Clean(spec.Cwd)
 	realCwd := resolvePath(cwd)
-	f := &fence{goos: goos, home: home}
+	f := &fence{goos: goos, home: home, cwd: cwd}
 	for _, p := range written {
 		r := resolvePath(p)
 		// Never an entry that holds the session folder: it would hide the
@@ -654,7 +666,8 @@ const fenceDenied = "Denied: archivist connect sessions do not open this locatio
 
 // fenceRefusal reports an approval input (a JSON value, or plain text)
 // whose string arguments name a locked path: absolute, as ~/rel, $HOME/rel
-// or ${HOME}/rel, and on Windows also %USERPROFILE%\rel (either slash). On
+// or ${HOME}/rel, relative to the session folder, through "." and ".."
+// segments, and on Windows also %USERPROFILE%\rel (either slash). On
 // Windows and macOS, whose file systems ignore case by default, any case
 // matches. A longer sibling name (~/.sshx) is not a match.
 func (f *fence) fenceRefusal(input json.RawMessage) bool {
@@ -664,11 +677,11 @@ func (f *fence) fenceRefusal(input json.RawMessage) bool {
 	needles := f.needles()
 	var v any
 	if json.Unmarshal(input, &v) != nil {
-		return fenceMatch(f.goos, string(input), needles)
+		return f.fenceMatch(string(input), needles)
 	}
 	found := false
 	walkStrings(v, func(s string) {
-		found = found || fenceMatch(f.goos, s, needles)
+		found = found || f.fenceMatch(s, needles)
 	})
 	return found
 }
@@ -691,24 +704,20 @@ func walkStrings(v any, fn func(string)) {
 
 // needles are the normalized forms of every locked path.
 func (f *fence) needles() []string {
-	home := fenceNormalize(f.goos, f.home)
 	var out []string
 	for _, p := range append(append([]string(nil), f.paths...), f.ruleOnly...) {
-		n := fenceNormalize(f.goos, p)
-		out = append(out, n)
-		rel, ok := strings.CutPrefix(n, strings.TrimSuffix(home, "/")+"/")
-		if !ok || rel == "" {
-			continue
-		}
-		forms := []string{"~", "$HOME", "${HOME}"}
-		if f.goos == "windows" {
-			forms = append(forms, "%USERPROFILE%", "$env:USERPROFILE")
-		}
-		for _, h := range forms {
-			out = append(out, fenceNormalize(f.goos, h)+"/"+rel)
-		}
+		out = append(out, fenceNormalize(f.goos, p))
 	}
 	return out
+}
+
+// homeForms are the spellings of the home folder the backstop expands.
+func homeForms(goos string) []string {
+	forms := []string{"~", "$HOME", "${HOME}"}
+	if goos == "windows" {
+		forms = append(forms, "%USERPROFILE%", "$env:USERPROFILE")
+	}
+	return forms
 }
 
 // fenceNormalize prepares text for matching: quotes (and shell escapes)
@@ -736,24 +745,50 @@ func fenceNormalize(goos, s string) string {
 // fenceMatch reports a needle in text that ends at a name boundary, after
 // each path-like token is lexically cleaned ("." and ".." segments
 // resolved).
-func fenceMatch(goos, text string, needles []string) bool {
-	return fenceMatchNormalized(fenceCleanTokens(fenceNormalize(goos, text)), needles)
+func (f *fence) fenceMatch(text string, needles []string) bool {
+	return fenceMatchNormalized(f.cleanTokens(fenceNormalize(f.goos, text)), needles)
 }
 
-// fenceCleanTokens cleans every token holding a "/" lexically (path.Clean);
-// tokens end at whitespace and shell or JSON delimiters.
-func fenceCleanTokens(text string) string {
+// cleanTokens makes every path-like token absolute and clean: a leading
+// home form (~, $HOME, ${HOME}, on Windows %USERPROFILE% and
+// $env:USERPROFILE) becomes the home folder, a relative path (one with a
+// "/" or starting with ".") is read against the session folder, and "."
+// and ".." segments are resolved lexically (path.Clean). Tokens end at
+// whitespace and shell delimiters (not braces: ${HOME}); text is
+// normalized.
+func (f *fence) cleanTokens(text string) string {
+	home := strings.TrimSuffix(fenceNormalize(f.goos, f.home), "/")
+	cwd := strings.TrimSuffix(fenceNormalize(f.goos, f.cwd), "/")
+	var forms []string
+	for _, h := range homeForms(f.goos) {
+		forms = append(forms, fenceNormalize(f.goos, h))
+	}
+	abs := func(tok string) bool {
+		return strings.HasPrefix(tok, "/") || len(tok) >= 3 && tok[1] == ':' && tok[2] == '/'
+	}
 	var b strings.Builder
 	start := 0
 	flush := func(end int) {
-		if tok := text[start:end]; strings.Contains(tok, "/") && strings.Contains(tok, "/.") {
-			b.WriteString(path.Clean(tok))
-		} else {
-			b.WriteString(tok)
+		tok := text[start:end]
+		expanded := false
+		if f.home != "" {
+			for _, h := range forms {
+				if rest, ok := strings.CutPrefix(tok, h); ok && (rest == "" || rest[0] == '/') {
+					tok, expanded = home+rest, true
+					break
+				}
+			}
 		}
+		if !expanded && cwd != "" && tok != "" && !abs(tok) && (strings.Contains(tok, "/") || tok[0] == '.') {
+			tok = cwd + "/" + tok
+		}
+		if strings.Contains(tok, "/") {
+			tok = path.Clean(tok)
+		}
+		b.WriteString(tok)
 	}
 	for i := 0; i < len(text); i++ {
-		if strings.IndexByte(" \t\n\r;|&<>()=,{}[]", text[i]) >= 0 {
+		if strings.IndexByte(" \t\n\r;|&<>()=,[]", text[i]) >= 0 {
 			flush(i)
 			b.WriteByte(text[i])
 			start = i + 1
