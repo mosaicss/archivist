@@ -8,6 +8,8 @@ Email **security@mosaic-finance.com** with:
 - Reproduction steps or a proof of concept if you have one.
 - Any impact assessment you can offer (what an attacker gains).
 
+You can also report privately through GitHub: open the repository's **Security** tab and choose **Report a vulnerability** (private vulnerability reporting).
+
 Please do not open public GitHub issues for security reports.
 
 ## Response SLA
