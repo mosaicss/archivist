@@ -63,8 +63,12 @@ func fenceHomeNames(goos string) []string {
 // entry but connect) and inside the state directory (besides every entry
 // but work).
 var (
-	fenceArchivistNames = []string{"credentials", "install-channel"}
-	fenceStateNames     = []string{"sessions", "run", codexHomeDir, "connect.log", "service.pid", "service.env"}
+	// keychain: the marker of a key kept in the OS keychain (Story 94.6).
+	fenceArchivistNames = []string{"credentials", "install-channel", "keychain"}
+	// BrowsersFile: the trusted browser list (Story 94.7); paused: the
+	// pause marker (Story 94.6).
+	fenceStateNames = []string{"sessions", "run", codexHomeDir, "connect.log", "service.pid", "service.env",
+		BrowsersFile, "paused"}
 )
 
 // fenceSpec is the input of one fence computation.

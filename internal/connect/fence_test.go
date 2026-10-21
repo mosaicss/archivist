@@ -95,10 +95,11 @@ func TestFenceListShape(t *testing.T) {
 		filepath.Join(xdg, "gcloud"), codexDir,
 		// ~/.archivist: every entry but connect, plus the fixed names even
 		// when absent.
-		j(".archivist", "credentials"), j(".archivist", "install-channel"), j(".archivist", "cache"),
+		j(".archivist", "credentials"), j(".archivist", "install-channel"), j(".archivist", "keychain"), j(".archivist", "cache"),
 		// connect: every entry but work, plus its fixed names.
 		filepath.Join(f.state, "sessions"), filepath.Join(f.state, "run"), filepath.Join(f.state, "codex-home"),
 		filepath.Join(f.state, "connect.log"), filepath.Join(f.state, "service.pid"), filepath.Join(f.state, "service.env"),
+		filepath.Join(f.state, BrowsersFile), filepath.Join(f.state, "paused"),
 		filepath.Join(f.state, "connect.log.1"), filepath.Join(f.state, "MosaicArchivistConnect.xml"),
 		// work: every session folder but this one.
 		f.other,
