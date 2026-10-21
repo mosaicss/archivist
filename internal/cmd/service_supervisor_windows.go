@@ -32,7 +32,7 @@ func serviceBinary(stable string) string {
 }
 
 // checkServiceBinary refuses --install when archivistw.exe is missing (an
-// npm install copies only archivist.exe).
+// install that copied only archivist.exe).
 func checkServiceBinary(stderr io.Writer) error {
 	stable, err := stableBinary()
 	if err != nil {

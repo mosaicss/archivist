@@ -1,14 +1,32 @@
 package cmd
 
 import (
+	"archive/tar"
 	"archive/zip"
 	"bytes"
+	"compress/gzip"
+	"crypto"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/sha256"
+	"crypto/x509"
+	"encoding/hex"
+	"encoding/json"
+	"encoding/pem"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
+	"sync"
 	"testing"
 
+	"github.com/mosaicss/archivist/internal/release"
 	"github.com/mosaicss/archivist/internal/service"
 	"github.com/spf13/cobra"
 )
@@ -32,21 +50,16 @@ func TestUpdateChannelRoutingBrew(t *testing.T) {
 	}
 }
 
-// TestUpdateChannelRoutingNPM verifies that the npm channel prints the upgrade instruction.
-func TestUpdateChannelRoutingNPM(t *testing.T) {
+// Any channel value other than brew self-updates, an old "npm" value
+// included, and prints no other upgrade command.
+func TestUpdateChannelNPMSelfUpdates(t *testing.T) {
 	tmpHome := t.TempDir()
 	writeChannelFile(t, tmpHome, "npm")
 	setHome(t, tmpHome)
-
-	cmd := NewUpdateCmd("0.2.0")
-	var out bytes.Buffer
-	cmd.SetOut(&out)
-	cmd.SetErr(&bytes.Buffer{})
-
-	_ = cmd.Execute()
-
-	if !strings.Contains(out.String(), "npx -y @mosaic-finance/archivist@latest install") {
-		t.Errorf("npm channel: expected upgrade instruction in stdout, got: %q", out.String())
+	rel := newFakeRelease(t, "v9.9.9", releaseGood)
+	_, stdout, _, code := rel.run(t, "9.9.9")
+	if code != ExitNotFound || !strings.Contains(stdout, "Already up to date: v9.9.9") || strings.Contains(stdout, "npx") {
+		t.Fatalf("npm channel: code %d, stdout %q", code, stdout)
 	}
 }
 
@@ -343,5 +356,525 @@ func TestStageWindowsBinaries(t *testing.T) {
 	writeZip(t, none, map[string]string{"archivistw.exe": "w"})
 	if _, err := stageWindowsBinaries(none, "archivist.exe", t.TempDir()); err == nil {
 		t.Fatal("an archive without archivist.exe staged")
+	}
+}
+
+// --- end to end: a local release server signed by a test key ---------------
+
+var (
+	updateTestKeysOnce sync.Once
+	updateTestKey      *rsa.PrivateKey
+	updateOtherKey     *rsa.PrivateKey
+)
+
+// updateTestKeys returns the key the fake releases are trusted under and
+// one that is not trusted (3072 bit throwaway keys, made once per run).
+func updateTestKeys() (*rsa.PrivateKey, *rsa.PrivateKey) {
+	updateTestKeysOnce.Do(func() {
+		var err error
+		if updateTestKey, err = rsa.GenerateKey(rand.Reader, 3072); err != nil {
+			panic(err)
+		}
+		if updateOtherKey, err = rsa.GenerateKey(rand.Reader, 3072); err != nil {
+			panic(err)
+		}
+	})
+	return updateTestKey, updateOtherKey
+}
+
+func signSums(t *testing.T, key *rsa.PrivateKey, sums []byte) []byte {
+	t.Helper()
+	d := sha256.Sum256(sums)
+	sig, err := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, d[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sig
+}
+
+type releaseMode int
+
+const (
+	releaseGood              releaseMode = iota
+	releaseArchiveMismatch               // the archive does not match SHA256SUMS
+	releaseUnsignedSums                  // SHA256SUMS (matching the archive) differs from what was signed
+	releaseNoSig                         // no SHA256SUMS.sig asset
+	releaseOtherKey                      // signed by a key that is not trusted
+	releaseSkillMismatch                 // the skill bundle does not match SHA256SUMS
+	releaseSkillUnsignedSums             // SHA256SUMS (matching the bundle) differs from what was signed
+)
+
+// newBinary is the released "binary": a script on POSIX that prints a
+// marker, so a test can run the replaced file.
+const newBinary = "#!/bin/sh\necho archivist-new-binary-ran\n"
+
+type fakeRelease struct {
+	tag      string
+	files    map[string][]byte
+	mu       sync.Mutex
+	requests []string
+}
+
+func tarGz(t *testing.T, files map[string]string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	names := make([]string, 0, len(files))
+	for n := range files {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		if err := tw.WriteHeader(&tar.Header{Name: n, Mode: 0o755, Size: int64(len(files[n])), Typeflag: tar.TypeReg}); err != nil {
+			t.Fatal(err)
+		}
+		_, _ = tw.Write([]byte(files[n]))
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+func zipBytes(t *testing.T, files map[string]string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	for n, body := range files {
+		w, err := zw.Create(n)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = w.Write([]byte(body))
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+func sumsFor(files map[string][]byte, names ...string) []byte {
+	var b strings.Builder
+	for _, n := range names {
+		h := sha256.Sum256(files[n])
+		fmt.Fprintf(&b, "%s  %s\n", hex.EncodeToString(h[:]), n)
+	}
+	return []byte(b.String())
+}
+
+// releaseArchive is this platform's archive of the released binary, holding
+// body plus the extra files.
+func releaseArchive(t *testing.T, ver, body string, extra map[string]string) (string, []byte) {
+	t.Helper()
+	files := map[string]string{"LICENSE": "license"}
+	for k, v := range extra {
+		files[k] = v
+	}
+	platform := releasePlatform(runtime.GOOS, runtime.GOARCH)
+	if runtime.GOOS == "windows" {
+		files["archivist.exe"] = body
+		return fmt.Sprintf("archivist_v%s_%s.zip", ver, platform), zipBytes(t, files)
+	}
+	files["archivist"] = body
+	return fmt.Sprintf("archivist_v%s_%s.tar.gz", ver, platform), tarGz(t, files)
+}
+
+// newFakeRelease serves release tag (mode decides what is wrong with it) on
+// 127.0.0.1 and points update's release URLs and verifier at it.
+func newFakeRelease(t *testing.T, tag string, mode releaseMode) *fakeRelease {
+	t.Helper()
+	trusted, other := updateTestKeys()
+	ver := strings.TrimPrefix(tag, "v")
+	archive, archiveBody := releaseArchive(t, ver, newBinary, nil)
+	skill := fmt.Sprintf("archivist_v%s_skill-bundle.tar.gz", ver)
+	sumsName := fmt.Sprintf("archivist_v%s_SHA256SUMS", ver)
+	r := &fakeRelease{tag: tag, files: map[string][]byte{
+		archive: archiveBody,
+		skill:   tarGz(t, map[string]string{"SKILL.md": "---\nname: archivist\n---\n"}),
+	}}
+	r.files[sumsName] = sumsFor(r.files, archive, skill)
+	key := trusted
+	if mode == releaseOtherKey {
+		key = other
+	}
+	if mode != releaseNoSig {
+		r.files[sumsName+".sig"] = signSums(t, key, r.files[sumsName])
+	}
+	switch mode {
+	case releaseArchiveMismatch:
+		r.files[archive] = append(append([]byte(nil), r.files[archive]...), "changed"...)
+	case releaseSkillMismatch:
+		r.files[skill] = append(append([]byte(nil), r.files[skill]...), "changed"...)
+	case releaseUnsignedSums:
+		_, r.files[archive] = releaseArchive(t, ver, newBinary, map[string]string{"EXTRA": "extra"})
+		r.files[sumsName] = sumsFor(r.files, archive, skill)
+	case releaseSkillUnsignedSums:
+		r.files[skill] = tarGz(t, map[string]string{"SKILL.md": "---\nname: archivist\n---\nother\n"})
+		r.files[sumsName] = sumsFor(r.files, archive, skill)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		r.mu.Lock()
+		r.requests = append(r.requests, req.URL.Path)
+		r.mu.Unlock()
+		if req.URL.Path == "/api/latest" {
+			_ = json.NewEncoder(w).Encode(map[string]string{"tag_name": r.tag})
+			return
+		}
+		name, ok := strings.CutPrefix(req.URL.Path, "/download/"+r.tag+"/")
+		body, found := r.files[name]
+		if !ok || !found {
+			http.NotFound(w, req)
+			return
+		}
+		_, _ = w.Write(body)
+	}))
+	t.Cleanup(srv.Close)
+
+	verifier, err := release.NewVerifier(pemPublicKey(t, &trusted.PublicKey))
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldAPI, oldBase, oldVerify, oldExe := releaseAPIURL, releaseDownloadBase, releaseVerifier, executablePath
+	t.Cleanup(func() {
+		releaseAPIURL, releaseDownloadBase, releaseVerifier, executablePath = oldAPI, oldBase, oldVerify, oldExe
+	})
+	releaseAPIURL = srv.URL + "/api/latest"
+	releaseDownloadBase = srv.URL + "/download"
+	releaseVerifier = verifier.Verify
+	return r
+}
+
+func pemPublicKey(t *testing.T, key *rsa.PublicKey) []byte {
+	t.Helper()
+	der, err := x509.MarshalPKIXPublicKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der})
+}
+
+// downloads lists the asset paths the server was asked for.
+func (r *fakeRelease) downloads() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []string
+	for _, p := range r.requests {
+		if strings.HasPrefix(p, "/download/") {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// run runs `archivist update args...` as build version current against a
+// stand-in installed binary (content "old"); it returns that binary's path,
+// stdout, stderr and the exit code.
+func (r *fakeRelease) run(t *testing.T, current string, args ...string) (string, string, string, int) {
+	t.Helper()
+	name := "archivist"
+	if runtime.GOOS == "windows" {
+		name = "archivist.exe"
+	}
+	bin := filepath.Join(t.TempDir(), name)
+	if err := os.WriteFile(bin, []byte("old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	executablePath = func() (string, error) { return bin, nil }
+	cmd := NewUpdateCmd(current)
+	var stdout, stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+	cmd.SetArgs(append([]string{}, args...))
+	err := cmd.Execute()
+	code := 0
+	if err != nil {
+		var exitErr *ExitError
+		if !errors.As(err, &exitErr) {
+			t.Fatalf("update: %v", err)
+		}
+		code = exitErr.Code
+	}
+	return bin, stdout.String(), stderr.String(), code
+}
+
+func assertUnchanged(t *testing.T, bin string) {
+	t.Helper()
+	if b, err := os.ReadFile(bin); err != nil || string(b) != "old" {
+		t.Fatalf("the installed binary changed: %q %v", b, err)
+	}
+	if _, err := os.Stat(bin + ".new"); !os.IsNotExist(err) {
+		t.Fatalf("a staged binary was left: %v", err)
+	}
+}
+
+// A genuine newer release replaces the binary with an executable file that
+// runs (POSIX; Windows renames and copies, covered by TestSwapBinaries).
+func TestUpdateReplacesBinaryAndItRuns(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX self update")
+	}
+	setHome(t, t.TempDir())
+	for _, current := range []string{"0.2.0", "dev", "0.2.35-snapshot"} {
+		rel := newFakeRelease(t, "v9.9.9", releaseGood)
+		bin, stdout, stderr, code := rel.run(t, current)
+		if code != 0 {
+			t.Fatalf("%s: exit %d\nstdout %s\nstderr %s", current, code, stdout, stderr)
+		}
+		if !strings.Contains(stdout, "Updated from v"+strings.TrimPrefix(current, "v")+" to v9.9.9") {
+			t.Fatalf("%s: stdout %q", current, stdout)
+		}
+		info, err := os.Stat(bin)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0o755 {
+			t.Fatalf("%s: replaced binary mode %v, want 0755", current, info.Mode().Perm())
+		}
+		out, err := exec.Command(bin).CombinedOutput()
+		if err != nil || strings.TrimSpace(string(out)) != "archivist-new-binary-ran" {
+			t.Fatalf("%s: the replaced binary does not run: %q %v", current, out, err)
+		}
+		if _, err := os.Stat(bin + ".new"); !os.IsNotExist(err) {
+			t.Fatalf("%s: staged .new left: %v", current, err)
+		}
+	}
+}
+
+// Every release whose checksums are not signed by a trusted key, or whose
+// archive does not match them, is refused before anything is replaced.
+func TestUpdateRefusesUnverifiedReleases(t *testing.T) {
+	setHome(t, t.TempDir())
+	for name, c := range map[string]struct {
+		mode releaseMode
+		want string
+	}{
+		"checksums without a valid signature": {releaseUnsignedSums, "could not be verified"},
+		"missing signature":                   {releaseNoSig, "SHA256SUMS signature"},
+		"signed by another key":               {releaseOtherKey, "could not be verified"},
+		"an archive that does not match":      {releaseArchiveMismatch, "SHA256 mismatch"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			rel := newFakeRelease(t, "v9.9.9", c.mode)
+			bin, stdout, stderr, code := rel.run(t, "0.2.0")
+			if code == 0 || !strings.Contains(stderr, c.want) {
+				t.Fatalf("exit %d, want refusal with %q\nstdout %s\nstderr %s", code, c.want, stdout, stderr)
+			}
+			assertUnchanged(t, bin)
+			if c.mode != releaseArchiveMismatch {
+				for _, p := range rel.downloads() {
+					if strings.HasSuffix(p, ".tar.gz") || strings.HasSuffix(p, ".zip") {
+						t.Fatalf("the archive was downloaded before the checksums verified: %s", p)
+					}
+				}
+			}
+		})
+	}
+}
+
+// The latest release older than this build: nothing is downloaded or
+// replaced, and --check does not suggest updating.
+func TestUpdateRefusesDowngrade(t *testing.T) {
+	setHome(t, t.TempDir())
+	rel := newFakeRelease(t, "v9.9.8", releaseGood)
+	bin, stdout, stderr, code := rel.run(t, "9.9.9")
+	if code == 0 || !strings.Contains(stderr, "newer than the latest release (v9.9.8)") {
+		t.Fatalf("downgrade: exit %d\nstdout %s\nstderr %s", code, stdout, stderr)
+	}
+	assertUnchanged(t, bin)
+	if d := rel.downloads(); len(d) != 0 {
+		t.Fatalf("downgrade downloaded %v", d)
+	}
+	// A prerelease of the next version is newer than the release before it.
+	_, _, stderr, code = rel.run(t, "9.9.9-rc.1")
+	if code == 0 || !strings.Contains(stderr, "newer") {
+		t.Fatalf("prerelease build: exit %d, stderr %s", code, stderr)
+	}
+
+	_, stdout, _, code = rel.run(t, "9.9.9", "--check")
+	if code != ExitNotFound || strings.Contains(stdout, "run 'archivist update'") || !strings.Contains(stdout, "newer than the latest release") {
+		t.Fatalf("--check on a newer build: exit %d, stdout %q", code, stdout)
+	}
+	_, stdout, _, code = rel.run(t, "9.9.7", "--check")
+	if code != 0 || !strings.Contains(stdout, "run 'archivist update'") {
+		t.Fatalf("--check on an older build: exit %d, stdout %q", code, stdout)
+	}
+
+	same := newFakeRelease(t, "v9.9.9", releaseGood)
+	bin, stdout, _, code = same.run(t, "v9.9.9")
+	if code != ExitNotFound || !strings.Contains(stdout, "Already up to date: v9.9.9") {
+		t.Fatalf("same version: exit %d, stdout %q", code, stdout)
+	}
+	assertUnchanged(t, bin)
+}
+
+// A latest tag that is not a release tag is refused.
+func TestUpdateRefusesMalformedTag(t *testing.T) {
+	setHome(t, t.TempDir())
+	for _, tag := range []string{"latest", "v1.2", "v1.2.3/../../x", "1.2.3"} {
+		rel := newFakeRelease(t, "v9.9.9", releaseGood)
+		rel.tag = tag
+		bin, _, stderr, code := rel.run(t, "0.2.0")
+		if code == 0 || !strings.Contains(stderr, "unexpected release tag") {
+			t.Fatalf("tag %q: exit %d, stderr %s", tag, code, stderr)
+		}
+		assertUnchanged(t, bin)
+	}
+}
+
+// update --skill unpacks the bundle only when the signed SHA256SUMS
+// verifies and the bundle matches it.
+func TestUpdateSkillVerifiesTheBundle(t *testing.T) {
+	for name, c := range map[string]struct {
+		mode releaseMode
+		want string
+	}{
+		"good":                                {releaseGood, ""},
+		"a bundle that does not match":        {releaseSkillMismatch, "SHA256 mismatch"},
+		"checksums without a valid signature": {releaseSkillUnsignedSums, "could not be verified"},
+		"missing signature":                   {releaseNoSig, "SHA256SUMS signature"},
+		"signed by another key":               {releaseOtherKey, "could not be verified"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			home := t.TempDir()
+			setHome(t, home)
+			if err := os.MkdirAll(filepath.Join(home, ".claude", "skills"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			rel := newFakeRelease(t, "v9.9.9", c.mode)
+			_, stdout, stderr, code := rel.run(t, "0.2.0", "--skill")
+			skill := filepath.Join(home, ".claude", "skills", "archivist", "SKILL.md")
+			if c.want == "" {
+				if code != 0 || !strings.Contains(stdout, "Skill updated to v9.9.9") {
+					t.Fatalf("exit %d\nstdout %s\nstderr %s", code, stdout, stderr)
+				}
+				if _, err := os.Stat(skill); err != nil {
+					t.Fatalf("SKILL.md not installed: %v", err)
+				}
+				return
+			}
+			if code == 0 || !strings.Contains(stderr, c.want) {
+				t.Fatalf("exit %d, want refusal with %q\nstdout %s\nstderr %s", code, c.want, stdout, stderr)
+			}
+			if _, err := os.Stat(filepath.Dir(skill)); !os.IsNotExist(err) {
+				t.Fatalf("the skill directory was written: %v", err)
+			}
+		})
+	}
+}
+
+// Extracted and copied binaries are 0755 whatever the archive or umask says.
+func TestExtractedBinaryIsExecutable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX file modes")
+	}
+	dir := t.TempDir()
+	archive := filepath.Join(dir, "a.tar.gz")
+	if err := os.WriteFile(archive, tarGz(t, map[string]string{"archivist": newBinary}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(dir, "out")
+	if err := extractBinaryFromTarGz(archive, "archivist", out); err != nil {
+		t.Fatal(err)
+	}
+	zipPath := filepath.Join(dir, "a.zip")
+	writeZip(t, zipPath, map[string]string{"archivist.exe": "exe"})
+	outZip := filepath.Join(dir, "out.exe")
+	if err := extractBinaryFromZip(zipPath, "archivist.exe", outZip); err != nil {
+		t.Fatal(err)
+	}
+	copied := filepath.Join(dir, "copied")
+	if err := copyFile(out, copied); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{out, outZip, copied} {
+		info, err := os.Stat(p)
+		if err != nil || info.Mode().Perm() != 0o755 {
+			t.Fatalf("%s: mode %v %v", p, info.Mode(), err)
+		}
+	}
+}
+
+// Release downloads follow redirects only to https:// or loopback http://.
+func TestFetchBytesRedirectPolicy(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("redirected body"))
+	}))
+	t.Cleanup(target.Close)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/plain":
+			http.Redirect(w, r, "http://example.invalid/x", http.StatusFound)
+		case "/loopback":
+			http.Redirect(w, r, target.URL+"/x", http.StatusFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	if _, err := fetchBytes(t.Context(), srv.URL+"/plain"); err == nil || !strings.Contains(err.Error(), "redirect to http:// refused") {
+		t.Fatalf("redirect to a non loopback http:// URL: %v", err)
+	}
+	body, err := fetchBytes(t.Context(), srv.URL+"/loopback")
+	if err != nil || string(body) != "redirected body" {
+		t.Fatalf("redirect to a loopback http:// URL: %q %v", body, err)
+	}
+}
+
+// tarGzEntries builds a .tar.gz from headers and bodies, in order.
+func tarGzEntries(t *testing.T, entries []tar.Header, bodies []string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	for i := range entries {
+		hdr := entries[i]
+		if hdr.Typeflag == tar.TypeReg {
+			hdr.Size = int64(len(bodies[i]))
+		}
+		if err := tw.WriteHeader(&hdr); err != nil {
+			t.Fatal(err)
+		}
+		if hdr.Typeflag == tar.TypeReg {
+			_, _ = tw.Write([]byte(bodies[i]))
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+// Only a regular file named archivist is extracted; a link of that name is
+// skipped.
+func TestExtractBinarySkipsNonRegularEntries(t *testing.T) {
+	dir := t.TempDir()
+	link := tar.Header{Name: "archivist", Typeflag: tar.TypeSymlink, Linkname: "/bin/sh", Mode: 0o777}
+	reg := tar.Header{Name: "archivist", Typeflag: tar.TypeReg, Mode: 0o755}
+
+	onlyLink := filepath.Join(dir, "link.tar.gz")
+	if err := os.WriteFile(onlyLink, tarGzEntries(t, []tar.Header{link}, []string{""}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := extractBinaryFromTarGz(onlyLink, "archivist", filepath.Join(dir, "out1")); err == nil || !strings.Contains(err.Error(), "not found in archive") {
+		t.Fatalf("an archive whose archivist is a link: %v", err)
+	}
+
+	both := filepath.Join(dir, "both.tar.gz")
+	if err := os.WriteFile(both, tarGzEntries(t, []tar.Header{link, reg}, []string{"", "regular-binary"}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(dir, "out2")
+	if err := extractBinaryFromTarGz(both, "archivist", out); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := os.ReadFile(out); err != nil || string(b) != "regular-binary" {
+		t.Fatalf("extracted %q %v", b, err)
 	}
 }

@@ -29,7 +29,9 @@ Please do not open public GitHub issues for security reports.
 
 ## Scope
 
-This policy covers the Archivist CLI binary, its install scripts, and the distribution channels in this repository (curl installer, npm package, Homebrew tap, GitHub Releases, `go install`). Reports about the Mosaic web platform and its APIs are welcome at the same address.
+This policy covers the Archivist CLI binary, its install scripts, and the distribution channels in this repository (install scripts, Homebrew tap, GitHub Releases, `go install`). Reports about the Mosaic web platform and its APIs are welcome at the same address.
+
+Release integrity: every release publishes `archivist_v<version>_SHA256SUMS` and its signature `archivist_v<version>_SHA256SUMS.sig`, made by the release workflow with the Archivist release key. The public key is in `internal/release/keys/` and is built into `install.sh`, `install.ps1` and the binary; the install scripts, `archivist update` and `archivist update --skill` install nothing unless the signature verifies and each download matches `SHA256SUMS`. To check a download by hand: `openssl dgst -sha256 -verify archivist-release-1.pem -signature archivist_v<version>_SHA256SUMS.sig archivist_v<version>_SHA256SUMS`, then `sha256sum -c` against that file. GitHub build provenance stays available with `gh attestation verify <file> -R mosaicss/archivist`. The download and API URL overrides (`ARCHIVIST_RELEASE_BASE_URL`, `ARCHIVIST_BASE_URL`) accept `https://` only, or `http://` to a loopback host for local testing.
 
 A note on tokens: Archivist API keys (`ak_` prefix) are stored at `~/.archivist/credentials` with permissions 0600. If you believe a token has leaked, revoke it immediately from your account settings at mosaic-finance.com (Manage account, API keys) and mint a fresh one.
 

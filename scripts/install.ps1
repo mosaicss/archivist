@@ -9,8 +9,10 @@
 # connect (archivist connect --install: a per-user scheduled task that
 # starts at every login, designed to need no admin rights; it requests no
 # elevation) and reports it (archivist connect
-# --status). Every download is checked against the release's
-# archivist_v<ver>_SHA256SUMS before anything is installed.
+# --status). Every download is checked before anything is installed: the
+# release's archivist_v<ver>_SHA256SUMS must carry a valid signature
+# (archivist_v<ver>_SHA256SUMS.sig, checked with .NET RSA against the
+# release key below), and each archive must match its line in it.
 #
 # Options:
 #   -Pair CODE    pair this computer with the code shown in Mosaic
@@ -20,11 +22,16 @@
 # Environment:
 #   ARCHIVIST_INSTALL_DIR       install directory (default
 #                               %LOCALAPPDATA%\Programs\archivist)
-#   ARCHIVIST_INSTALL_VERSION   install this tag (e.g. v0.2.29) instead of the
-#                               version this script was released with
+#   ARCHIVIST_INSTALL_VERSION   install this tag (v0.2.35 or later, e.g.
+#                               v0.2.35) instead of the version this script
+#                               was released with; earlier tags have no
+#                               SHA256SUMS.sig, so use that release's own
+#                               .../releases/download/<tag>/install.ps1
 #   ARCHIVIST_RELEASE_BASE_URL  release base URL (default
 #                               https://github.com/mosaicss/archivist/releases);
-#                               for local testing against a fake release
+#                               for local testing against a fake release. It
+#                               must be https://, or http:// to 127.0.0.1,
+#                               ::1 or localhost
 #   ARCHIVIST_INSTALL_NO_PATH   1 leaves the user PATH unchanged (tests)
 #
 # archivist is not code signed yet: SmartScreen or Smart App Control may
@@ -46,8 +53,30 @@ $ProgressPreference = 'SilentlyContinue'
 # installs the latest release.
 $StampedVersion = '__ARCHIVIST_VERSION__'
 
+# The release signing public key (internal/release/keys/ in the archivist
+# repository) as .NET RSAParameters: big endian modulus and exponent,
+# base64. archivist_v<ver>_SHA256SUMS.sig must verify with it.
+# BEGIN ARCHIVIST RELEASE KEY
+$ReleaseModulus = '24JUQPGXSMAjvWXAA1FXl6AbLkIKZm37+4d0UFV8mnaqmA7RH0fTwljB+lGJnQH9IuTpX78vcGzklcUAtwnuj0AbGpSm0X9Tt9FdTXddhcaDqLVgczGY+yvDAgGnTGZJ8P8X3gdDprhMmRgPhkLMpky+9Q97wO+/gnlP56CzEvmy/8fWBGa2UyqL5r7WDdPiRcQky0DL1igzfn1unfRpt2AuWx+ESToLmYcOrJv8pJVtHkj+BIbLg5/fJxtyRcDyYMpFLNoZIPMst70/lhYZctj9fsiUIxqq1mxh2VW7XwqpJKUbT1m8JiYngfnXf3yVKrRE/YerMMhOZcTO8DvrMSrfxpEvSVIeCfirl/UFh3WyUbX103CgWxeSraFDrTqW9Rx/gM6PEz4dS4AiLE3eCh7+fuw//hJITDtZCXSYJwXs7KFzf0mMLholKMb6h5tOU5uidlHX0jU35MhxFNaDBWv83CrGWMUq/XESPMS7ck5qkHO8er6ASNKAtN88prwS1FVYyipdNOYypOBWrrO3i1ndsweLQUbZWTAJQIb33XkMmxNKRRZwuby8TubCkx3SJplUWHJBpkmdJMgBxxHkV3qHbZdexrqVN1QudVPQaLhPC1wrrlA48fqY4snH8swyq1RlOunPUfotZhp51SiU79cGp1UbOABChqsxhL4DthM='
+$ReleaseExponent = 'AQAB'
+# END ARCHIVIST RELEASE KEY
+
 $ReleaseBase = 'https://github.com/mosaicss/archivist/releases'
 if ($env:ARCHIVIST_RELEASE_BASE_URL) { $ReleaseBase = $env:ARCHIVIST_RELEASE_BASE_URL.TrimEnd('/') }
+
+# The release base must be https:// with a host and no user info, or
+# http:// to a loopback host (127.0.0.1, ::1, localhost). Checked before any
+# download.
+function Assert-ReleaseBase([string]$Base) {
+    $u = $null
+    if (-not [Uri]::TryCreate($Base, [UriKind]::Absolute, [ref]$u) -or -not $u.Host -or $u.UserInfo) {
+        throw "archivist install: ARCHIVIST_RELEASE_BASE_URL must be an https:// URL with a host, without user info"
+    }
+    if ($u.Scheme -eq 'https') { return }
+    if ($u.Scheme -eq 'http' -and @('127.0.0.1', 'localhost', '[::1]', '::1') -contains $u.Host) { return }
+    throw 'archivist install: ARCHIVIST_RELEASE_BASE_URL must start with https:// (http:// is only for 127.0.0.1, ::1 or localhost)'
+}
+Assert-ReleaseBase $ReleaseBase
 
 # Windows PowerShell 5.1 may default to TLS 1.0; GitHub needs 1.2.
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
@@ -79,6 +108,33 @@ function Get-ExpectedHash([string]$SumsPath, [string]$Name) {
         }
     }
     throw "archivist install: no checksum for $Name in the release SHA256SUMS"
+}
+
+# Assert-Signature: the SHA256SUMS file must carry a valid RSA PKCS#1 v1.5
+# SHA-256 signature by the release key. Works on .NET Framework 4.6+
+# (Windows PowerShell 5.1) and .NET (PowerShell 7).
+function Assert-Signature([string]$SumsPath, [string]$SigPath, [string]$SigName) {
+    $ok = $false
+    try {
+        $params = New-Object System.Security.Cryptography.RSAParameters
+        $params.Modulus = [Convert]::FromBase64String($ReleaseModulus)
+        $params.Exponent = [Convert]::FromBase64String($ReleaseExponent)
+        $data = [System.IO.File]::ReadAllBytes($SumsPath)
+        $sig = [System.IO.File]::ReadAllBytes($SigPath)
+        if ($sig.Length -eq $params.Modulus.Length) {
+            $rsa = [System.Security.Cryptography.RSA]::Create()
+            try {
+                $rsa.ImportParameters($params)
+                $ok = $rsa.VerifyData($data, $sig, [System.Security.Cryptography.HashAlgorithmName]::SHA256,
+                    [System.Security.Cryptography.RSASignaturePadding]::Pkcs1)
+            } finally { $rsa.Dispose() }
+        }
+    } catch {
+        $ok = $false
+    }
+    if ($ok -ne $true) {
+        throw "archivist install: the release checksums could not be verified ($SigName). Nothing was installed."
+    }
 }
 
 function Assert-Hash([string]$Path, [string]$SumsPath, [string]$Name) {
@@ -119,6 +175,7 @@ $ver = $version.Substring(1)
 # Only windows_amd64 is released; Windows on ARM runs it under emulation.
 $archive = "archivist_v${ver}_windows_amd64.zip"
 $sums = "archivist_v${ver}_SHA256SUMS"
+$sumsSig = "$sums.sig"
 $skillArchive = "archivist_v${ver}_skill-bundle.tar.gz"
 $base = "$ReleaseBase/download/$version"
 $skillsDir = Join-Path $HOME '.claude\skills'
@@ -128,6 +185,8 @@ New-Item -ItemType Directory -Path $tmp | Out-Null
 try {
     Write-Host "Downloading archivist $version (windows_amd64)..."
     Invoke-WebRequest -UseBasicParsing -Uri "$base/$sums" -OutFile (Join-Path $tmp $sums)
+    Invoke-WebRequest -UseBasicParsing -Uri "$base/$sumsSig" -OutFile (Join-Path $tmp $sumsSig)
+    Assert-Signature (Join-Path $tmp $sums) (Join-Path $tmp $sumsSig) $sumsSig
     Invoke-WebRequest -UseBasicParsing -Uri "$base/$archive" -OutFile (Join-Path $tmp $archive)
     Assert-Hash (Join-Path $tmp $archive) (Join-Path $tmp $sums) $archive
 
@@ -141,7 +200,7 @@ try {
         }
         if ($haveSkill) { Assert-Hash (Join-Path $tmp $skillArchive) (Join-Path $tmp $sums) $skillArchive }
     }
-    Write-Host 'Checksums verified.'
+    Write-Host 'Download verified.'
 
     $extract = Join-Path $tmp 'x'
     Expand-Archive -LiteralPath (Join-Path $tmp $archive) -DestinationPath $extract -Force

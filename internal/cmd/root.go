@@ -15,6 +15,7 @@
 package cmd
 
 import (
+	"github.com/mosaicss/archivist/internal/client"
 	"github.com/spf13/cobra"
 )
 
@@ -50,6 +51,15 @@ func NewRootCmd(version, commit, date string) *cobra.Command {
 		},
 		SilenceErrors: true,
 		SilenceUsage:  true,
+		// One early check of the chat-api URL override, before any command
+		// makes a request; the error is a usage error (exit 2).
+		// 'archivist version' makes no request and stays usable.
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			if cmd.Name() == "version" && cmd.Parent() == cmd.Root() {
+				return nil
+			}
+			return client.CheckBaseURLEnv()
+		},
 	}
 	root.CompletionOptions.DisableDefaultCmd = true
 

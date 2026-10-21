@@ -10,6 +10,7 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"runtime"
 	"strconv"
@@ -27,7 +28,47 @@ const AccountURL = "https://mosaic-finance.com/en/pricing/"
 // maxErrorBody caps how much of an error response body is read.
 const maxErrorBody = 64 * 1024
 
+// BaseURLEnv names the chat-api base URL override.
+const BaseURLEnv = "ARCHIVIST_BASE_URL"
+
+// CheckBaseURL reports whether raw may be used as the chat-api base URL:
+// https:// with a host and no user info, or plain http:// to a loopback host
+// (127.0.0.0/8, ::1 or localhost: local test servers). The error names
+// ARCHIVIST_BASE_URL.
+func CheckBaseURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil || u.Hostname() == "" || u.Opaque != "" {
+		return fmt.Errorf("%s %q is not a URL with a host", BaseURLEnv, raw)
+	}
+	if u.User != nil {
+		return fmt.Errorf("%s must not carry user info", BaseURLEnv)
+	}
+	switch u.Scheme {
+	case "https":
+		return nil
+	case "http":
+		if host := u.Hostname(); host == "localhost" {
+			return nil
+		} else if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+			return nil
+		}
+		return fmt.Errorf("%s must use https:// (http:// is allowed only for a loopback host)", BaseURLEnv)
+	}
+	return fmt.Errorf("%s must use https://, not %q", BaseURLEnv, u.Scheme)
+}
+
+// CheckBaseURLEnv checks ARCHIVIST_BASE_URL when it is set (see
+// CheckBaseURL). Commands call it before any request.
+func CheckBaseURLEnv() error {
+	if raw := os.Getenv(BaseURLEnv); raw != "" {
+		return CheckBaseURL(raw)
+	}
+	return nil
+}
+
 // ResolveBaseURL returns ARCHIVIST_BASE_URL when set, else DefaultBaseURL.
+// The root command refuses an override that fails CheckBaseURL before any
+// command runs.
 func ResolveBaseURL() string {
 	if baseURL := os.Getenv("ARCHIVIST_BASE_URL"); baseURL != "" {
 		return baseURL

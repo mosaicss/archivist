@@ -4,20 +4,30 @@
 #   scripts/test-install.sh [path/to/archivist]
 #
 # Builds archivist from this checkout (or takes the given binary), lays out
-# a fake release <base>/download/<tag>/ (archive plus SHA256SUMS), serves it
-# on 127.0.0.1 together with fake pairing routes, and runs install.sh under a
-# throwaway HOME with stub systemctl and loginctl first on PATH. Its output
-# is captured, so pairing picks the browser confirmation on its own (BROWSER
-# is a stand in that confirms the pending pairing) and the replay needs no
-# terminal. Nothing touches the real ~/.archivist, ~/.config or service
-# manager.
+# fake releases <base>/download/<tag>/ (archive, skill bundle, SHA256SUMS and
+# its signature by a throwaway test key), serves them on 127.0.0.1 together
+# with fake pairing routes, and runs a copy of install.sh whose release key
+# block holds the test key, under a throwaway HOME with stub systemctl and
+# loginctl first on PATH. Its output is captured, so pairing picks the
+# browser confirmation on its own (BROWSER is a stand in that confirms the
+# pending pairing) and the replay needs no terminal. Nothing touches the real
+# ~/.archivist, ~/.config or service manager.
 #
 # Asserts: install + pair + unit written; a re-pair saves the new key and
 # revokes the earlier one (masked only), and --no-service still reinstalls a
 # service that is already installed; an update without --pair reinstalls the
 # service; a stale brew channel with no installed cask installs directly; a
 # failed service install after pairing prints the resume step and exits
-# non-zero; a tampered archive exits 1 with nothing installed.
+# non-zero; the skill bundle is installed when ~/.claude/skills exists. Each
+# of these exits non-zero with nothing installed and no temporary directory
+# left: an archive that does not match its checksum; checksums without a
+# valid signature; a release without the signature; one
+# signed by another key; the unmodified install.sh (release key) against the
+# test signed release; a skill bundle that does not match; a plain http://
+# release URL that is not loopback (refused before any download); and no
+# openssl on PATH. On Linux without bwrap or socat the install prints one
+# line naming the missing packages and the apt-get command (both missing, or
+# only socat), none when both are present, and the exit code stays 0.
 
 set -euo pipefail
 
@@ -45,6 +55,7 @@ case "$(uname -m)" in
   *) fail "unsupported architecture $(uname -m)" ;;
 esac
 command -v python3 >/dev/null 2>&1 || fail "python3 is required"
+command -v openssl >/dev/null 2>&1 || fail "openssl is required"
 
 # --- binary ------------------------------------------------------------------
 mkdir -p "$WORK/build"
@@ -55,22 +66,74 @@ else
 fi
 chmod 0755 "$WORK/build/archivist"
 
+# --- test keys and the installer under test -------------------------------------
+# Throwaway keys: test.key signs the fake releases, other.key is not trusted.
+mkdir -p "$WORK/keys"
+for k in test other; do
+  openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out "$WORK/keys/$k.key" 2>/dev/null \
+    || fail "openssl could not create a test key"
+done
+openssl pkey -in "$WORK/keys/test.key" -pubout -out "$WORK/keys/test.pub" 2>/dev/null
+
+# install.sh with the lines between its release key markers replaced by
+# RELEASE_KEY='<test public key>'.
+if [ "$(grep -cx '# BEGIN ARCHIVIST RELEASE KEY' "$ROOT/scripts/install.sh")" != 1 ] \
+  || [ "$(grep -cx '# END ARCHIVIST RELEASE KEY' "$ROOT/scripts/install.sh")" != 1 ]; then
+  fail "install.sh has no single release key block"
+fi
+awk -v keyfile="$WORK/keys/test.pub" '
+  $0 == "# BEGIN ARCHIVIST RELEASE KEY" {
+    print
+    key = ""
+    while ((getline line < keyfile) > 0) { key = key (key == "" ? "" : "\n") line }
+    printf "RELEASE_KEY=\047%s\047\n", key
+    skip = 1
+    next
+  }
+  $0 == "# END ARCHIVIST RELEASE KEY" { skip = 0 }
+  !skip { print }
+' "$ROOT/scripts/install.sh" > "$WORK/install.sh"
+grep -qF "$(sed -n 2p "$WORK/keys/test.pub")" "$WORK/install.sh" || fail "the test key was not patched in"
+INSTALLER="$WORK/install.sh"
+
 # --- fake releases -------------------------------------------------------------
-# v9.9.9 is good; v9.9.8's archive does not match its SHA256SUMS.
+# make_release TAG MODE. MODE good: archive, skill bundle, SHA256SUMS and its
+# signature by the test key. mismatch: the archive does not match
+# SHA256SUMS. unsigned: SHA256SUMS (matching the archive) differs from the
+# signed one. nosig: no signature. otherkey: signed by other.key.
+# badskill: the skill bundle does not match SHA256SUMS.
 make_release() {
-  local tag="$1" tamper="$2" ver dir archive
+  local tag="$1" mode="$2" ver dir archive sums skill
   ver="${tag#v}"
   dir="$WORK/rel/download/$tag"
   archive="archivist_v${ver}_linux_${ARCH}.tar.gz"
-  mkdir -p "$dir"
+  sums="archivist_v${ver}_SHA256SUMS"
+  skill="archivist_v${ver}_skill-bundle.tar.gz"
+  mkdir -p "$dir" "$WORK/skill-$tag"
   tar -czf "$dir/$archive" -C "$WORK/build" archivist
-  (cd "$dir" && sha256sum "$archive" > "archivist_v${ver}_SHA256SUMS")
-  if [ "$tamper" = 1 ]; then
-    printf 'tampered' >> "$dir/$archive"
-  fi
+  printf -- '---\nname: archivist\n---\n' > "$WORK/skill-$tag/SKILL.md"
+  tar -czf "$dir/$skill" -C "$WORK/skill-$tag" SKILL.md
+  (cd "$dir" && sha256sum "$archive" "$skill" > "$sums")
+  local key="$WORK/keys/test.key"
+  [ "$mode" = otherkey ] && key="$WORK/keys/other.key"
+  [ "$mode" = nosig ] || openssl dgst -sha256 -sign "$key" -out "$dir/$sums.sig" "$dir/$sums"
+  case "$mode" in
+    mismatch) printf 'changed' >> "$dir/$archive" ;;
+    badskill) printf 'changed' >> "$dir/$skill" ;;
+    unsigned)
+      printf 'extra\n' > "$WORK/build/EXTRA"
+      tar -czf "$dir/$archive" -C "$WORK/build" archivist EXTRA
+      rm -f "$WORK/build/EXTRA"
+      (cd "$dir" && sha256sum "$archive" "$skill" > "$sums")
+      ;;
+  esac
 }
-make_release v9.9.9 0
-make_release v9.9.8 1
+make_release v9.9.9 good
+make_release v9.9.8 mismatch
+make_release v9.9.7 unsigned
+make_release v9.9.6 nosig
+make_release v9.9.5 otherkey
+make_release v9.9.4 badskill
 
 # --- fake server: static release files plus the pairing routes ----------------
 # Story 94.3: a browser mode redeem answers 202 pending; the BROWSER stand in
@@ -203,23 +266,39 @@ urllib.request.urlopen(req, timeout=10).read()
 SH
 chmod 0755 "$WORK/stubs/systemctl" "$WORK/stubs/loginctl" "$WORK/stubs/browser-confirm"
 
-# run_install HOME VERSION ARGS...: install.sh in a clean environment.
+# run_install HOME VERSION ARGS...: the installer under test in a clean
+# environment. RUN_PATH replaces PATH, RELEASE_URL the release base URL and
+# RUN_INSTALLER the script.
 run_install() {
   local home="$1" version="$2"
   shift 2
   mkdir -p "$home"
   env -i \
     HOME="$home" \
-    PATH="${EXTRA_PATH:+$EXTRA_PATH:}$WORK/stubs:/usr/local/bin:/usr/bin:/bin" \
+    PATH="${RUN_PATH:-${EXTRA_PATH:+$EXTRA_PATH:}$WORK/stubs:/usr/local/bin:/usr/bin:/bin}" \
     TMPDIR="$WORK" \
     LANG=C.UTF-8 \
     STUB_LOG="$WORK/calls.log" \
     STUB_FAIL_ENABLE="${STUB_FAIL_ENABLE:-0}" \
-    ARCHIVIST_RELEASE_BASE_URL="$BASE" \
+    ARCHIVIST_RELEASE_BASE_URL="${RELEASE_URL:-$BASE}" \
     ARCHIVIST_INSTALL_VERSION="$version" \
     ARCHIVIST_BASE_URL="$BASE" \
     BROWSER="$WORK/stubs/browser-confirm" \
-    bash "$ROOT/scripts/install.sh" "$@"
+    "$BASH" "${RUN_INSTALLER:-$INSTALLER}" "$@"
+}
+
+# assert_refused CASE HOME CODE OUT MESSAGE: exit 1, MESSAGE printed, nothing
+# installed and no temporary directory left.
+assert_refused() {
+  local name="$1" home="$2" code="$3" out="$4" message="$5"
+  [ "$code" = 1 ] || fail "${name} exited ${code}:
+${out}"
+  case "$out" in *"$message"*) ;; *) fail "${name}: no '${message}' message:
+${out}" ;; esac
+  [ ! -e "$home/.local" ] || fail "${name} left ~/.local"
+  [ ! -e "$home/.archivist" ] || fail "${name} left ~/.archivist"
+  [ ! -e "$home/.claude/skills/archivist" ] || fail "${name} installed the skill"
+  if ls "$WORK"/archivist-install.* >/dev/null 2>&1; then fail "${name} left a temporary directory"; fi
 }
 
 # --- 1. install + pair + unit --------------------------------------------------
@@ -248,6 +327,8 @@ grep -q '^/connect/confirm$' "$WORK/stubs/browser-confirm.log" || fail "the conf
 if grep '"path": "/agent-pairing/' "$WORK/redeem.log" | grep -q '"auth": "'; then fail "pairing sent Authorization"; fi
 case "$OUT" in *ak_replay_abcde12345x*) fail "the key was printed" ;; esac
 case "$OUT" in *"Paired as archivist replay"*) ;; *) fail "no pairing line:
+$OUT" ;; esac
+case "$OUT" in *"Download verified."*) ;; *) fail "no verified line:
 $OUT" ;; esac
 pass "install, pair and unit written"
 
@@ -326,19 +407,161 @@ case "$OUT" in *"connect --install (no new code is needed)"*) ;; *) fail "no res
 $OUT" ;; esac
 pass "failed service install after pairing prints the resume step"
 
-# --- 4. tampered archive: exit 1, nothing installed ---------------------------
+# --- 4. an archive that does not match its checksum: exit 1, nothing installed
 H4="$WORK/home4"
 set +e
 OUT="$(run_install "$H4" v9.9.8 --pair ABCDE12345 2>&1)"
 CODE=$?
 set -e
-[ "$CODE" = 1 ] || fail "tampered archive exited $CODE:
+[ "$CODE" = 1 ] || fail "a mismatched archive exited $CODE:
 $OUT"
 case "$OUT" in *"checksum mismatch"*) ;; *) fail "no checksum mismatch message:
 $OUT" ;; esac
-[ ! -e "$H4/.local" ] || fail "tampered install left ~/.local"
-[ ! -e "$H4/.archivist" ] || fail "tampered install left ~/.archivist"
+[ ! -e "$H4/.local" ] || fail "a mismatched archive left ~/.local"
+[ ! -e "$H4/.archivist" ] || fail "a mismatched archive left ~/.archivist"
 if ls "$WORK"/archivist-install.* >/dev/null 2>&1; then fail "temporary directory left behind"; fi
-pass "tampered archive aborts with nothing installed"
+pass "an archive that does not match its checksum aborts with nothing installed"
+
+# --- 5. the skill bundle lands in ~/.claude/skills/archivist ------------------
+H6="$WORK/home6"
+mkdir -p "$H6/.claude/skills"
+set +e
+OUT="$(run_install "$H6" v9.9.9 2>&1)"
+CODE=$?
+set -e
+[ "$CODE" = 0 ] || fail "install with ~/.claude/skills exited $CODE:
+$OUT"
+[ -f "$H6/.claude/skills/archivist/SKILL.md" ] || fail "SKILL.md not installed:
+$OUT"
+pass "the skill bundle is verified and installed"
+
+# --- 6. refusals: nothing installed, no temporary directory --------------------
+refuse() {
+  local name="$1" version="$2" message="$3" home
+  home="$WORK/refuse-$(printf '%s' "$name" | tr -c 'a-z0-9' '-')"
+  mkdir -p "$home/.claude/skills"
+  set +e
+  OUT="$(run_install "$home" "$version" --pair ABCDE12345 2>&1)"
+  CODE=$?
+  set -e
+  assert_refused "$name" "$home" "$CODE" "$OUT" "$message"
+  pass "$name is refused with nothing installed"
+}
+refuse "a release whose checksums lack a valid signature" v9.9.7 "the release checksums could not be verified"
+refuse "a release without a signature" v9.9.6 "download failed"
+refuse "a release signed by another key" v9.9.5 "the release checksums could not be verified"
+refuse "a skill bundle that does not match" v9.9.4 "checksum mismatch for archivist_v9.9.4_skill-bundle.tar.gz"
+RUN_INSTALLER="$ROOT/scripts/install.sh" refuse "the release key installer against a test signed release" v9.9.9 \
+  "the release checksums could not be verified"
+
+# --- 7. a plain http:// release URL that is not loopback, before any download --
+mkdir -p "$WORK/curlstub"
+cat > "$WORK/curlstub/curl" <<'SH'
+#!/bin/sh
+echo "curl $*" >> "$STUB_LOG"
+exit 7
+SH
+chmod 0755 "$WORK/curlstub/curl"
+for url in http://example.com/releases http://127.0.0.1.example.com http://localhost@example.com \
+  https://user@example.com/releases ftp://example.com HTTP://127.0.0.1 http:///releases; do
+  H7="$WORK/home7"
+  rm -rf "$H7"
+  : > "$WORK/calls.log"
+  set +e
+  OUT="$(EXTRA_PATH="$WORK/curlstub" RELEASE_URL="$url" run_install "$H7" v9.9.9 2>&1)"
+  CODE=$?
+  set -e
+  assert_refused "release URL ${url}" "$H7" "$CODE" "$OUT" "ARCHIVIST_RELEASE_BASE_URL must"
+  if grep -q '^curl' "$WORK/calls.log"; then fail "release URL ${url} reached curl"; fi
+done
+# Loopback http:// stays allowed (every case above uses it).
+pass "non loopback http:// and malformed release URLs are refused before any download"
+
+# --- 7b. an https:// release URL: curl is limited to https, redirects too -----
+H7="$WORK/home7"
+rm -rf "$H7"
+: > "$WORK/calls.log"
+set +e
+OUT="$(EXTRA_PATH="$WORK/curlstub" RELEASE_URL="https://releases.example.invalid/archivist" run_install "$H7" v9.9.9 2>&1)"
+CODE=$?
+set -e
+assert_refused "the stubbed https:// download" "$H7" "$CODE" "$OUT" "download failed"
+grep -q '^curl .*--proto =https --proto-redir =https' "$WORK/calls.log" \
+  || fail "curl was not limited to https:
+$(cat "$WORK/calls.log")"
+if grep -q '=http,https' "$WORK/calls.log"; then fail "curl allowed http for an https:// release URL"; fi
+pass "an https:// release URL limits curl and its redirects to https"
+
+# --- 8. no openssl on PATH --------------------------------------------------------
+mkdir -p "$WORK/noopenssl"
+for tool in uname mktemp rm tr curl awk head sha256sum tar gzip chmod mkdir cp mv dirname cat; do
+  ln -s "$(command -v "$tool")" "$WORK/noopenssl/$tool"
+done
+H8="$WORK/home8"
+set +e
+OUT="$(RUN_PATH="$WORK/stubs:$WORK/noopenssl" run_install "$H8" v9.9.9 2>&1)"
+CODE=$?
+set -e
+assert_refused "no openssl" "$H8" "$CODE" "$OUT" "openssl is needed to check the download"
+pass "no openssl on PATH is refused with nothing installed"
+
+# --- 9. Linux packages for archivist connect: one line when missing ---------
+# A PATH with the install's tools and openssl but no bwrap or socat, plus a
+# logging apt-get stub (never run).
+mkdir -p "$WORK/nopkgs" "$WORK/aptstub" "$WORK/pkgstub"
+for tool in uname mktemp rm tr curl awk head sha256sum tar gzip chmod mkdir cp mv dirname cat openssl id; do
+  ln -s "$(command -v "$tool")" "$WORK/nopkgs/$tool"
+done
+for stub in "$WORK/aptstub/apt-get" "$WORK/pkgstub/bwrap" "$WORK/pkgstub/socat"; do
+  # shellcheck disable=SC2016 # $* and $STUB_LOG expand when the stub runs
+  printf '#!/bin/sh\necho "%s $*" >> "$STUB_LOG"\nexit 0\n' "$(basename "$stub")" > "$stub"
+  chmod 0755 "$stub"
+done
+# install.sh drops sudo when it runs as root.
+SUDO="sudo "
+[ "$(id -u)" = 0 ] && SUDO=""
+PKG_LINE="Archivist connect on Linux also needs bubblewrap and socat. Install with: ${SUDO}apt-get install -y bubblewrap socat"
+H9="$WORK/home9"
+: > "$WORK/calls.log"
+set +e
+OUT="$(RUN_PATH="$WORK/stubs:$WORK/aptstub:$WORK/nopkgs" run_install "$H9" v9.9.9 2>&1)"
+CODE=$?
+set -e
+[ "$CODE" = 0 ] || fail "install without bwrap and socat exited $CODE:
+$OUT"
+[ -x "$H9/.local/bin/archivist" ] || fail "install without bwrap and socat did not install"
+case "$OUT" in *"$PKG_LINE"*) ;; *) fail "no package line:
+$OUT" ;; esac
+[ "$(printf '%s\n' "$OUT" | grep -c 'also needs')" = 1 ] || fail "the package line is not printed once:
+$OUT"
+if grep -q '^apt-get' "$WORK/calls.log"; then fail "apt-get was run"; fi
+pass "missing bwrap and socat print the apt-get line, exit 0"
+
+H10="$WORK/home10"
+set +e
+OUT="$(RUN_PATH="$WORK/stubs:$WORK/aptstub:$WORK/pkgstub:$WORK/nopkgs" run_install "$H10" v9.9.9 2>&1)"
+CODE=$?
+set -e
+[ "$CODE" = 0 ] || fail "install with bwrap and socat exited $CODE:
+$OUT"
+case "$OUT" in *"also needs"*) fail "a package line with bwrap and socat present:
+$OUT" ;; esac
+pass "bwrap and socat present print no package line"
+
+mkdir -p "$WORK/bwrapstub"
+cp "$WORK/pkgstub/bwrap" "$WORK/bwrapstub/bwrap"
+H11="$WORK/home11"
+set +e
+OUT="$(RUN_PATH="$WORK/stubs:$WORK/aptstub:$WORK/bwrapstub:$WORK/nopkgs" run_install "$H11" v9.9.9 2>&1)"
+CODE=$?
+set -e
+[ "$CODE" = 0 ] || fail "install without socat exited $CODE:
+$OUT"
+SOCAT_LINE="Archivist connect on Linux also needs socat. Install with: ${SUDO}apt-get install -y socat"
+[ "$(printf '%s\n' "$OUT" | grep -c 'also needs')" = 1 ] || fail "the package line is not printed once:
+$OUT"
+printf '%s\n' "$OUT" | grep -qxF "$SOCAT_LINE" || fail "no socat only line:
+$OUT"
+pass "only socat missing prints the socat line, exit 0"
 
 echo "install.sh replay: all checks passed"
