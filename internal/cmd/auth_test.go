@@ -3,6 +3,7 @@ package cmd_test
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -11,7 +12,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mosaicss/archivist/internal/auth"
 	"github.com/mosaicss/archivist/internal/cmd"
+	"github.com/mosaicss/archivist/internal/service"
 )
 
 // sandboxAuthHome points os.UserHomeDir at a temp dir so login/logout tests
@@ -461,8 +464,107 @@ func TestAuthLogoutIdempotentWhenNoFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected exit 0 for missing file, got: %v", err)
 	}
-	if !strings.Contains(output, "no credentials file found") {
-		t.Errorf("expected 'no credentials file found', got:\n%s", output)
+	// Story 94.6: the saved key is the keychain item or the credentials file.
+	if !strings.Contains(output, "no saved key found") {
+		t.Errorf("expected 'no saved key found', got:\n%s", output)
+	}
+}
+
+// Story 94.6: auth login on a computer with no credentials file still
+// saves the key in the keychain.
+func TestAuthLoginWithoutAFileUsesTheKeychain(t *testing.T) {
+	home := sandboxAuthHome(t)
+	t.Setenv("ARCHIVIST_TOKEN", "")
+	auth.MockKeychainForTest(t, false)
+	srv := serveCLITokens(t, http.StatusOK)
+	t.Setenv("ARCHIVIST_BASE_URL", srv.URL)
+	output, err := runAuthCmd(t, "auth", "login", "--token", "ak_loginfixture12345")
+	if err != nil || !strings.Contains(output, "Saved:   in the keychain") {
+		t.Fatalf("login: %v\n%s", err, output)
+	}
+	if _, statErr := os.Stat(credPath(home)); !os.IsNotExist(statErr) {
+		t.Fatalf("a credentials file was written: %v", statErr)
+	}
+	if token, source, err := auth.Resolve(""); err != nil || token != "ak_loginfixture12345" || source != auth.SourceKeychain {
+		t.Fatalf("Resolve: %q %v %v", token, source, err)
+	}
+}
+
+// Story 94.6: on a computer that runs connect (its folder exists, or the
+// service is installed) auth login saves to the credentials file even with
+// a usable keychain, and removes an item Archivist left there.
+func TestAuthLoginOnAConnectComputerSavesToTheFile(t *testing.T) {
+	for _, setup := range []string{"connect folder", "service"} {
+		t.Run(setup, func(t *testing.T) {
+			home := sandboxAuthHome(t)
+			t.Setenv("ARCHIVIST_TOKEN", "")
+			auth.MockKeychainForTest(t, false)
+			if _, err := auth.SaveToken("ak_earlierkeychain1"); err != nil {
+				t.Fatal(err)
+			}
+			// auth logout (keychain item gone), then connect is set up.
+			if _, _, err := auth.DeleteCredentials(); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := auth.SaveToken("ak_leftoverkeychain"); err != nil {
+				t.Fatal(err)
+			}
+			dir := filepath.Join(home, ".archivist", "connect")
+			if setup == "service" {
+				// The systemd user unit (the other managers keep theirs elsewhere).
+				if runtime.GOOS != "linux" {
+					t.Skip("systemd unit path")
+				}
+				dir = filepath.Join(home, ".config", "systemd", "user")
+				// The unit is looked up under XDG_CONFIG_HOME when set (CI
+				// runners set it to the runner's own ~/.config).
+				t.Setenv("XDG_CONFIG_HOME", "")
+			}
+			if err := os.MkdirAll(dir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if setup == "service" {
+				if err := os.WriteFile(filepath.Join(dir, service.UnitName), []byte("[Unit]\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			srv := serveCLITokens(t, http.StatusOK)
+			t.Setenv("ARCHIVIST_BASE_URL", srv.URL)
+			output, err := runAuthCmd(t, "auth", "login", "--token", "ak_loginfixture12345")
+			if err != nil || strings.Contains(output, "in the keychain") || !strings.Contains(output, "File:    "+credPath(home)) {
+				t.Fatalf("login: %v\n%s", err, output)
+			}
+			if token, source, err := auth.Resolve(""); err != nil || token != "ak_loginfixture12345" || source != auth.SourceFile {
+				t.Fatalf("Resolve: %q %v %v", token, source, err)
+			}
+			// The leftover item went with its marker.
+			if _, where, _ := auth.DeleteCredentials(); where != credPath(home) {
+				t.Fatalf("keychain item kept: %q", where)
+			}
+			if _, err := os.Stat(filepath.Join(home, ".archivist", "keychain")); !os.IsNotExist(err) {
+				t.Fatalf("marker kept: %v", err)
+			}
+		})
+	}
+}
+
+// Story 94.6: logout of a key saved in the keychain names it plainly.
+func TestAuthLogoutNamesTheKeySavedInTheKeychain(t *testing.T) {
+	sandboxAuthHome(t)
+	t.Setenv("ARCHIVIST_TOKEN", "")
+	auth.MockKeychainForTest(t, false)
+	if _, err := auth.SaveToken("ak_keychainlogout1"); err != nil {
+		t.Fatal(err)
+	}
+	output, err := runAuthCmd(t, "auth", "logout")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(output, "Logged out: deleted the key saved in the keychain\n") {
+		t.Errorf("got:\n%s", output)
+	}
+	if _, err := auth.SavedToken(); !errors.Is(err, auth.ErrNoToken) {
+		t.Errorf("key kept: %v", err)
 	}
 }
 

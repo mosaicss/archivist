@@ -93,6 +93,9 @@ var userShapes = map[string]shape{
 	"approval_response": {required: append(append([]string{}, commonFields...), "approvalId", "decision", "reason", "terminalReceipt"), optional: []string{"scope", "sig"}},
 	"trust_browser":     {required: []string{"kind", "correlationId", "browser", "sig"}},
 	"error":             {required: []string{"kind", "code"}},
+	// Story 94.6: Pause from the workspace, exactly {kind}; only a daemon
+	// that declared the pause feature receives it.
+	"pause": {required: []string{"kind"}},
 }
 
 var sessionShapes = map[string]shape{
@@ -175,6 +178,8 @@ func Decode(socket Socket, raw []byte) (*Inbound, error) {
 		if in.Code == "" {
 			return fail("error code is empty")
 		}
+		return in, nil
+	case "pause":
 		return in, nil
 	case "ack":
 		if json.Unmarshal(fields["seq"], &in.Seq) != nil || in.Seq < 1 {
@@ -318,6 +323,24 @@ func capabilitiesFrame(caps []Capability) []byte {
 		Kind   string       `json:"kind"`
 		Agents []Capability `json:"agents"`
 	}{"capabilities", caps})
+	return b
+}
+
+// FeaturePause is the optional daemon feature a workspace Pause needs (Story
+// 94.6).
+const FeaturePause = "pause"
+
+// featuresFrame declares this daemon's optional features to the relay
+// (Story 94.6): {kind:"features", features:[...]}. An older relay answers it
+// INVALID_FRAME and keeps the socket open.
+func featuresFrame(features ...string) []byte {
+	if features == nil {
+		features = []string{}
+	}
+	b, _ := json.Marshal(struct {
+		Kind     string   `json:"kind"`
+		Features []string `json:"features"`
+	}{"features", features})
 	return b
 }
 

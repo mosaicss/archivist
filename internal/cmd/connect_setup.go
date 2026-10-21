@@ -28,6 +28,7 @@ import (
 	"github.com/mosaicss/archivist/internal/auth"
 	"github.com/mosaicss/archivist/internal/client"
 	"github.com/mosaicss/archivist/internal/connect"
+	"github.com/mosaicss/archivist/internal/fsutil"
 	"github.com/mosaicss/archivist/internal/service"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -104,14 +105,15 @@ const pairPendingMax = 10 * time.Minute
 // accountStatusTimeout bounds the --status account lookup.
 const accountStatusTimeout = 5 * time.Second
 
-// setupMode is which one-step setup flag was given.
+// setupMode is which one-step setup flag was given (Story 94.6 adds
+// --pause and --resume).
 type setupMode struct {
-	pair, trust, install, uninstall, status, service bool
+	pair, trust, install, uninstall, status, service, pause, resume bool
 }
 
 func (m setupMode) count() int {
 	n := 0
-	for _, b := range []bool{m.pair, m.trust, m.install, m.uninstall, m.status, m.service} {
+	for _, b := range []bool{m.pair, m.trust, m.install, m.uninstall, m.status, m.service, m.pause, m.resume} {
 		if b {
 			n++
 		}
@@ -135,10 +137,10 @@ func (m setupMode) validate(stderr io.Writer, args []string, check, session, har
 		return nil
 	}
 	if n > 1 {
-		return usage("--pair, --trust, --install, --uninstall and --status are used one at a time")
+		return usage("--pair, --trust, --install, --uninstall, --status, --pause and --resume are used one at a time")
 	}
 	if check || session {
-		return usage("--pair, --trust, --install, --uninstall, --status and --service cannot be combined with --check, --session, --agent or --prompt-file")
+		return usage("--pair, --trust, --install, --uninstall, --status, --pause, --resume and --service cannot be combined with --check, --session, --agent or --prompt-file")
 	}
 	if harnessFlags && !m.service {
 		return usage("--claude-model, --claude-effort, --codex-model and --codex-effort apply only when connect runs")
@@ -322,7 +324,8 @@ func savePairedKey(cmd *cobra.Command, version string, res *client.PairingResult
 		return pairNotNamed(stderr)
 	}
 	previous, perr := auth.SavedToken()
-	path, err := auth.SaveToken(res.Key)
+	// Connect keeps its key in the credentials file, never the keychain.
+	loc, err := auth.SaveTokenToFile(res.Key)
 	if err != nil {
 		// The new key is unusable without the file: remove it too.
 		_ = revokeKey(cmd.Context(), version, res.Key)
@@ -333,7 +336,11 @@ func savePairedKey(cmd *cobra.Command, version string, res *client.PairingResult
 	if name == "" {
 		name = res.KeyID
 	}
-	_, _ = fmt.Fprintf(stdout, "Paired as %s.\n  Account: %s\n  Key:     %s\n  File:    %s\n", name, email, auth.MaskToken(res.Key), path)
+	_, _ = fmt.Fprintf(stdout, "Paired as %s.\n  Account: %s\n  Key:     %s\n%s", name, email, auth.MaskToken(res.Key), savedLine(loc))
+	// An earlier key may have been in the keychain: the file holds the key
+	// now, so that item goes (best effort, asked only when Archivist saved
+	// one there; a failure is retried at every connect start).
+	_ = auth.DeleteKeychainKey()
 	if err := pairBrowsers(email, browser); err != nil {
 		_, _ = fmt.Fprintf(stderr, "Note: the list of browsers that can use this computer was not updated (%v). In Mosaic, open Connect your computer to add this browser.\n", err)
 	} else if browser != "" {
@@ -351,6 +358,10 @@ func savePairedKey(cmd *cobra.Command, version string, res *client.PairingResult
 		} else {
 			_, _ = fmt.Fprintf(stderr, "Note: the key saved here before (%s) is still active. Revoke it in Mosaic if you no longer need it.\n", auth.MaskToken(previous))
 		}
+	}
+	if errors.Is(perr, auth.ErrKeychainUnavailable) {
+		// The replaced key could not be read, so it was not revoked.
+		_, _ = fmt.Fprintln(stderr, "Note: the key this computer used before could not be read from the keychain, so it may still be active. Remove it in Mosaic settings if you no longer need it.")
 	}
 	if os.Getenv("ARCHIVIST_TOKEN") != "" {
 		_, _ = fmt.Fprintln(stderr, "Warning: ARCHIVIST_TOKEN is set in this environment and takes precedence over the saved key here. Unset it to use the paired key. The background service always uses the saved key.")
@@ -606,9 +617,14 @@ func newServiceManager(cmd *cobra.Command, args []string) (service.Manager, stri
 	return m, home, nil
 }
 
+// serviceLingerDir is systemd-logind's linger directory ("" = the system's);
+// tests replace it.
+var serviceLingerDir = ""
+
 // serviceOptions is this user's service manager configuration.
 func serviceOptions(home string, args []string) service.Options {
-	opts := service.Options{Home: home, Run: serviceRunner, UID: os.Getuid(), Env: service.CaptureEnv(os.Environ()), Args: args}
+	opts := service.Options{Home: home, Run: serviceRunner, UID: os.Getuid(), Env: service.CaptureEnv(os.Environ()), Args: args,
+		LingerDir: serviceLingerDir}
 	if u, err := user.Current(); err == nil {
 		opts.User = u.Username
 	}
@@ -662,12 +678,81 @@ func stableBinary() (string, error) {
 	return resolved, nil
 }
 
+// startQuestion is the installers' one question (Story 94.6, owner D1).
+const startQuestion = "Start Archivist when your computer starts? (recommended) [Y/n] "
+
+// startDeclined is what a "no" to startQuestion prints.
+const startDeclined = "Archivist will not start by itself. Run 'archivist connect' when you want to use your agents from Mosaic."
+
+// askStartAtLogin asks startQuestion the way pairing asks (Story 94.3): only
+// on a terminal that opens while stdout or stderr shows it, with input typed
+// ahead discarded. Enter, y or yes (or the end of input) is yes, n or no is
+// no, anything else asks again (three times, then yes). With no terminal
+// the answer is yes, said in one line. Ctrl-C, SIGTERM or SIGHUP aborts.
+func askStartAtLogin(cmd *cobra.Command) (bool, error) {
+	stdout := cmd.OutOrStdout()
+	tty, err := openConfirmTerminal()
+	if err != nil || !pairOutputVisible() {
+		if err == nil {
+			_ = tty.Close()
+		}
+		_, _ = fmt.Fprintln(stdout, "Starting Archivist when your computer starts (the default).")
+		return true, nil
+	}
+	defer func() { _ = tty.Close() }()
+	ctx, stop := pairInterrupt(cmd.Context())
+	defer stop()
+	flushConfirmInput(tty)
+	lines := make(chan string)
+	ended := make(chan struct{})
+	go func() {
+		r := bufio.NewReader(tty)
+		for {
+			line, err := r.ReadString('\n')
+			if err != nil {
+				close(ended)
+				return
+			}
+			select {
+			case lines <- line:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	for range 3 {
+		_, _ = fmt.Fprint(tty, startQuestion)
+		select {
+		case <-ctx.Done():
+			_, _ = fmt.Fprintln(tty)
+			_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "Install stopped. Run 'archivist connect --install' to set up background connect later.")
+			return false, &ExitError{Code: ExitGenericError}
+		case <-ended:
+			_, _ = fmt.Fprintln(tty)
+			return true, nil
+		case line := <-lines:
+			switch strings.ToLower(strings.TrimSpace(line)) {
+			case "", "y", "yes":
+				return true, nil
+			case "n", "no":
+				return false, nil
+			}
+		}
+	}
+	return true, nil
+}
+
 // runServiceInstall installs and starts the background service, running
 // `connect --service` with --max-permission when one was given. Without
 // the flag, an installed service's own --max-permission is kept, so an
 // update (the install script reinstalls on every update) never changes the
-// ceiling; --max-permission auto_edits returns to the default.
-func runServiceInstall(cmd *cobra.Command, maxPermission string) error {
+// ceiling; --max-permission auto_edits returns to the default. With ask
+// (the installers' first install, Story 94.6) and no service installed yet,
+// it first asks whether to start Archivist when the computer starts; no
+// installs nothing and exits 0. Connect keeps its key in the credentials
+// file: a saved key held in the keychain moves there, and an item left in
+// the keychain is deleted.
+func runServiceInstall(cmd *cobra.Command, maxPermission string, ask bool) error {
 	stderr, stdout := cmd.ErrOrStderr(), cmd.OutOrStdout()
 	if !connect.Supported() {
 		_, _ = fmt.Fprintln(stderr, "archivist connect: Background connect is not available on this system.")
@@ -675,12 +760,33 @@ func runServiceInstall(cmd *cobra.Command, maxPermission string) error {
 	}
 	// The service never sees ARCHIVIST_TOKEN: it needs a saved owner key.
 	token, err := auth.SavedToken()
+	if errors.Is(err, auth.ErrKeychainUnavailable) {
+		_, _ = fmt.Fprintf(stderr, "archivist connect --install: the saved key is in the keychain, which could not be read (%v). Unlock it (log in) and try again.\n", err)
+		return &ExitError{Code: ExitAuthError}
+	}
 	if err != nil || !strings.HasPrefix(token, "ak_") {
 		_, _ = fmt.Fprintln(stderr, "archivist connect --install needs a saved ak_ key. Run 'archivist connect --pair CODE' with a code from Mosaic (or 'archivist auth login --token ak_...') first.")
 		return &ExitError{Code: ExitAuthError}
 	}
 	if err := checkServiceBinary(stderr); err != nil {
 		return err
+	}
+	if ask && !pairServiceInstalled() {
+		start, err := askStartAtLogin(cmd)
+		if err != nil {
+			return err
+		}
+		if !start {
+			_, _ = fmt.Fprintln(stdout, startDeclined)
+			return nil
+		}
+	}
+	// Connect keeps its key in the credentials file (Story 94.6).
+	if moved, err := auth.MoveKeychainKeyToFile(); moved {
+		path, _ := auth.CredentialsPath()
+		_, _ = fmt.Fprintf(stdout, "The saved key moved to %s, where connect keeps it.\n", path)
+	} else if err != nil {
+		_, _ = fmt.Fprintf(stderr, "Note: the key saved in the keychain could not be moved or removed (%v); background connect tries again when it starts.\n", err)
 	}
 	kept := false
 	if maxPermission == "" {
@@ -733,26 +839,137 @@ func runServiceInstall(cmd *cobra.Command, maxPermission string) error {
 	return nil
 }
 
-// runServiceUninstall stops and removes the background service.
-func runServiceUninstall(cmd *cobra.Command) error {
-	m, _, err := newServiceManager(cmd, nil)
+// runServiceUninstall stops and removes the background service, then
+// cleans this computer up (Story 94.6): lingering is turned off when
+// Archivist turned it on (Linux), a saved ak_ key is revoked (DELETE
+// /account/cli-tokens/current with itself) and removed from the keychain
+// and the credentials file, and ~/.archivist/connect and the session work
+// folders are removed. An mc_pat_ login is left alone. The files go even
+// when the revoke fails, which exits 1 and says to remove the key in Mosaic.
+func runServiceUninstall(cmd *cobra.Command, version string) error {
+	stdout, stderr := cmd.OutOrStdout(), cmd.ErrOrStderr()
+	m, home, err := newServiceManager(cmd, nil)
 	if err != nil {
 		return err
 	}
+	unitInstalled := fileExists(m.Path())
 	removed, err := m.Uninstall(cmd.Context())
 	if err != nil && !removed {
-		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "archivist connect: could not remove the background service: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "archivist connect: could not remove the background service: %v\n", err)
 		return &ExitError{Code: ExitGenericError}
 	}
 	if !removed {
-		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Background connect is not installed.")
-		return nil
+		_, _ = fmt.Fprintln(stdout, "Background connect is not installed.")
+	} else {
+		if err != nil {
+			_, _ = fmt.Fprintf(stderr, "Warning: stopping the service reported: %v\n", err)
+		}
+		_, _ = fmt.Fprintf(stdout, "Background connect removed (%s).\n", m.Path())
 	}
-	if err != nil {
-		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Warning: stopping the service reported: %v\n", err)
+	if lr, ok := m.(service.LingerReleaser); ok {
+		released, err := lr.ReleaseLinger(cmd.Context(), unitInstalled)
+		switch {
+		case err != nil:
+			_, _ = fmt.Fprintf(stderr, "Note: lingering stays on: %v\n", err)
+		case released == service.LingerTurnedOff:
+			_, _ = fmt.Fprintln(stdout, "Lingering turned off (Archivist had turned it on).")
+		case released == service.LingerUnknownOwner:
+			_, _ = fmt.Fprintln(stdout, "Lingering stays on. Run 'loginctl disable-linger' if nothing else needs it.")
+		}
 	}
-	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Background connect removed (%s). Your saved key is kept; revoke it in Mosaic if you no longer need it.\n", m.Path())
+	revokeFailed := !removeSavedKey(cmd, version)
+	removeConnectFiles(stdout, stderr, home)
+	if revokeFailed {
+		_, _ = fmt.Fprintln(stderr, "Remove this computer's key in Mosaic settings.")
+		return &ExitError{Code: ExitGenericError}
+	}
 	return nil
+}
+
+// removeSavedKey revokes and removes a saved ak_ key for --uninstall; false
+// when the key could not be revoked (it is removed locally anyway). An
+// mc_pat_ login stays saved and is not revoked.
+func removeSavedKey(cmd *cobra.Command, version string) bool {
+	stdout, stderr := cmd.OutOrStdout(), cmd.ErrOrStderr()
+	token, err := auth.SavedToken()
+	switch {
+	case errors.Is(err, auth.ErrNoToken):
+		return true
+	case err == nil && !strings.HasPrefix(token, "ak_"):
+		return true
+	}
+	revoked := false
+	if err == nil {
+		// A paused computer's relay state goes first, while the key works.
+		clearRelayPause(cmd.Context(), stderr, version, token)
+		rerr := revokeKey(cmd.Context(), version, token)
+		revoked = rerr == nil || errors.Is(rerr, client.ErrUnauthorized)
+		if revoked {
+			_, _ = fmt.Fprintf(stdout, "This computer's key (%s) no longer works.\n", auth.MaskToken(token))
+		} else {
+			_, _ = fmt.Fprintf(stderr, "Note: this computer's key (%s) could not be revoked: %v\n", auth.MaskToken(token), rerr)
+		}
+	} else {
+		_, _ = fmt.Fprintf(stderr, "Note: the saved key could not be read, so it was not revoked: %v\n", err)
+	}
+	// Each store is reported on its own: a file removed while the keychain
+	// copy stays says both.
+	existed, where, derr := auth.DeleteCredentials()
+	if existed {
+		_, _ = fmt.Fprintf(stdout, "Removed the saved key from %s.\n", where)
+	}
+	if derr != nil {
+		for _, line := range strings.Split(derr.Error(), "\n") {
+			_, _ = fmt.Fprintf(stderr, "Note: %s\n", line)
+		}
+	}
+	return revoked
+}
+
+// removeConnectFiles removes ~/.archivist/connect (session records, logs,
+// task tokens, Codex homes, the pause and linger markers) and the session
+// work folders this user left in the temporary directory.
+func removeConnectFiles(stdout, stderr io.Writer, home string) {
+	dir := filepath.Join(home, ".archivist", "connect")
+	if _, err := os.Lstat(dir); err == nil {
+		if err := fsutil.RemoveAll(dir); err != nil {
+			_, _ = fmt.Fprintf(stderr, "Note: could not remove %s: %v\n", dir, err)
+		} else {
+			_, _ = fmt.Fprintf(stdout, "Removed %s.\n", dir)
+		}
+	}
+	n := 0
+	for _, w := range workFolders(os.TempDir()) {
+		if err := fsutil.RemoveAll(w); err != nil {
+			_, _ = fmt.Fprintf(stderr, "Note: could not remove %s: %v\n", w, err)
+			continue
+		}
+		n++
+	}
+	if n > 0 {
+		_, _ = fmt.Fprintf(stdout, "Removed %d session work folder(s).\n", n)
+	}
+}
+
+// workFolders lists this user's session working directories in tmp
+// (archivist-connect-*): directories, never links, owned by this user.
+func workFolders(tmp string) []string {
+	matches, _ := filepath.Glob(filepath.Join(tmp, "archivist-connect-*"))
+	var out []string
+	for _, p := range matches {
+		info, err := os.Lstat(p)
+		if err != nil || !info.IsDir() || !ownedByUser(info) {
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
+// fileExists reports whether path exists.
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 // runServiceStatus reports the service, the saved key and its account
@@ -779,6 +996,9 @@ func runServiceStatus(cmd *cobra.Command, version string) error {
 		state = "installed, not running (run 'archivist connect --install' to start it again)"
 	}
 	_, _ = fmt.Fprintf(out, "Service:  %s (%s: %s)\n", state, m.Name(), m.Path())
+	if stateDir, err := connect.DefaultStateDir(); err == nil && pausedHere(stateDir) {
+		_, _ = fmt.Fprintln(out, "Paused:   yes, on this computer (resume with 'archivist connect --resume' or in Mosaic)")
+	}
 	if st.Installed {
 		if ceiling, _, ok := installedCeiling(st.Args); ok {
 			_, _ = fmt.Fprintf(out, "Ceiling:  %s (%s)\n", ceiling, ceiling.Label())
@@ -791,6 +1011,8 @@ func runServiceStatus(cmd *cobra.Command, version string) error {
 	if keyOK {
 		_, _ = fmt.Fprintf(out, "Key:      saved, %s (fp:%s)\n", auth.MaskToken(token), auth.Fingerprint(token))
 		_, _ = fmt.Fprintf(out, "Account:  %s\n", accountLine(cmd.Context(), version, token))
+	} else if errors.Is(terr, auth.ErrKeychainUnavailable) {
+		_, _ = fmt.Fprintf(out, "Key:      saved in the keychain, which could not be read (%v); unlock it (log in) and run this again\n", terr)
 	} else {
 		_, _ = fmt.Fprintln(out, "Key:      none (run 'archivist connect --pair CODE' with a code from Mosaic)")
 	}
@@ -849,6 +1071,9 @@ func runServiceMode(cmd *cobra.Command, version string, f connectFlags, maxPermi
 	f.maxMode = maxMode
 	log.Printf("permission ceiling %s", f.maxMode)
 	savedKeyOnly(cmd)
+	if err := waitForKeyring(cmd.Context(), log); err != nil {
+		return serviceExit(log, nil)
+	}
 	removePID, err := service.WritePID(home, os.Getpid())
 	if err != nil {
 		log.Printf("warning: could not write %s: %v", service.PIDPath(home), err)
@@ -856,6 +1081,41 @@ func runServiceMode(cmd *cobra.Command, version string, f connectFlags, maxPermi
 		defer removePID()
 	}
 	return serviceExit(log, runConnect(cmd, version, false, f))
+}
+
+// keyringRetry is how often the service asks a keychain that is not
+// readable yet (a var so tests can shorten it).
+var keyringRetry = 10 * time.Second
+
+// waitForKeyring holds the service start while the saved key is in a
+// keychain that cannot be read yet (Story 94.6: on Linux a desktop keyring
+// stays locked until the user logs in, and a lingering service starts at
+// boot). No file is written meanwhile. It returns nil once the key reads
+// (or another outcome takes over), ctx's error when the service is stopped.
+func waitForKeyring(ctx context.Context, log *connect.Logger) error {
+	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	said := false
+	for {
+		_, err := auth.SavedToken()
+		if !errors.Is(err, auth.ErrKeychainUnavailable) {
+			if said {
+				log.Printf("the keyring is available")
+			}
+			return nil
+		}
+		if !said {
+			said = true
+			log.Printf("waiting for the keyring (it opens when you log in): %v", err)
+		}
+		t := time.NewTimer(keyringRetry)
+		select {
+		case <-ctx.Done():
+			t.Stop()
+			return ctx.Err()
+		case <-t.C:
+		}
+	}
 }
 
 // savedKeyOnly makes the credential ladder fall through to the saved

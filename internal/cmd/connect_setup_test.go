@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -50,6 +51,10 @@ func sandbox(t *testing.T) string {
 	setHome(t, home)
 	t.Setenv("ARCHIVIST_TOKEN", "")
 	t.Setenv("XDG_CONFIG_HOME", "")
+	// Story 94.6: never the real /var/lib/systemd/linger.
+	prevLinger := serviceLingerDir
+	serviceLingerDir = t.TempDir()
+	t.Cleanup(func() { serviceLingerDir = prevLinger })
 	prevOpen := openConfirmTerminal
 	openConfirmTerminal = func() (io.ReadWriteCloser, error) { return nil, errors.New("no terminal") }
 	t.Cleanup(func() { openConfirmTerminal = prevOpen })
@@ -266,6 +271,43 @@ func TestConnectPairRefusals(t *testing.T) {
 	})
 }
 
+// revokeServer serves DELETE /account/cli-tokens/current (204) as
+// ARCHIVIST_BASE_URL and returns the keys it was called with.
+func revokeServer(t *testing.T) func() []string {
+	t.Helper()
+	var mu sync.Mutex
+	var keys []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete && r.URL.Path == "/account/cli-tokens/current" {
+			mu.Lock()
+			keys = append(keys, strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
+			mu.Unlock()
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error":"Not found","code":"NOT_FOUND"}`))
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv("ARCHIVIST_BASE_URL", srv.URL)
+	return func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]string(nil), keys...)
+	}
+}
+
+// slicesContain reports whether any entry starts with prefix.
+func slicesContain(entries []string, prefix string) bool {
+	for _, e := range entries {
+		if strings.HasPrefix(e, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 func saveKey(t *testing.T, home, key string) {
 	t.Helper()
 	dir := filepath.Join(home, ".archivist")
@@ -343,12 +385,26 @@ func TestConnectInstallStatusUninstallLinux(t *testing.T) {
 		t.Fatalf("status: exit %d\n%s", code, out)
 	}
 
+	// Story 94.6: uninstall revokes the saved key, turns off the lingering
+	// Archivist turned on and removes the connect files.
+	revoked := revokeServer(t)
 	out, code = runRoot(t, "connect", "--uninstall")
 	if code != 0 || !strings.Contains(out, "Background connect removed") {
 		t.Fatalf("uninstall: exit %d\n%s", code, out)
 	}
 	if _, err := os.Stat(unitPath); err == nil {
 		t.Fatal("unit kept")
+	}
+	if got := revoked(); len(got) != 1 || got[0] != pairedKey {
+		t.Fatalf("revoke calls %v", got)
+	}
+	for _, p := range []string{filepath.Join(home, ".archivist", "credentials"), filepath.Join(home, ".archivist", "connect")} {
+		if _, err := os.Stat(p); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("%s kept after uninstall (%v)\n%s", p, err, out)
+		}
+	}
+	if !strings.Contains(out, "Lingering turned off") || !slicesContain(*calls, "loginctl --no-ask-password disable-linger") {
+		t.Fatalf("linger not turned off: %v\n%s", *calls, out)
 	}
 	out, code = runRoot(t, "connect", "--uninstall")
 	if code != 0 || !strings.Contains(out, "not installed") {
@@ -489,9 +545,11 @@ func TestConnectInstallMaxPermissionLinux(t *testing.T) {
 		t.Fatalf("unit:\n%s", unit)
 	}
 	// Removed, then installed without the flag: the default, no flag written.
+	revokeServer(t)
 	if _, code = runRoot(t, "connect", "--uninstall"); code != 0 {
 		t.Fatal("uninstall")
 	}
+	saveKey(t, home, pairedKey) // uninstall revoked and removed it (Story 94.6)
 	out, code = runRoot(t, "connect", "--install")
 	if code != 0 || !strings.Contains(out, "Permission ceiling: auto_edits (Auto edits), the default") {
 		t.Fatalf("fresh install: exit %d\n%s", code, out)

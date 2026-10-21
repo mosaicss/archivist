@@ -493,6 +493,8 @@ func restoreFile(path string, content []byte, readErr error) {
 
 // Uninstall ends and deletes the task and removes its XML and service.env.
 // A failed delete keeps the files, so the task stays visible to --status.
+// Like Install, it waits about 10 s for the ended run's daemon to exit, so
+// the files it holds open (connect.log) can be removed after it.
 func (s *schtasks) Uninstall(ctx context.Context) (bool, error) {
 	path, env := s.Path(), EnvFilePath(s.opts.Home)
 	was, err := s.registered(ctx)
@@ -502,8 +504,12 @@ func (s *schtasks) Uninstall(ctx context.Context) (bool, error) {
 	if !was && !fileExists(path) && !fileExists(env) {
 		return false, nil
 	}
+	old := readPID(s.opts.Home)
 	if was {
 		_, _ = s.schtasks(ctx, "/end", "/tn", s.task())
+		for i := 0; i < schtasksEndWait && old > 0 && s.opts.alive(old); i++ {
+			s.opts.sleep(launchdPoll)
+		}
 		r, err := s.schtasks(ctx, "/delete", "/tn", s.task(), "/f")
 		if err == nil && !r.OK() {
 			err = commandError("schtasks /delete", r)
@@ -517,6 +523,9 @@ func (s *schtasks) Uninstall(ctx context.Context) (bool, error) {
 		if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return true, err
 		}
+	}
+	if was && old > 0 && s.opts.alive(old) {
+		return true, fmt.Errorf("the background connect run (pid %d) did not stop within 10 s; end it in Task Manager", old)
 	}
 	return true, nil
 }

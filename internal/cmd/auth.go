@@ -12,6 +12,7 @@ import (
 
 	"github.com/mosaicss/archivist/internal/auth"
 	"github.com/mosaicss/archivist/internal/client"
+	"github.com/mosaicss/archivist/internal/connect"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )
@@ -25,7 +26,7 @@ const dashboardURL = client.AccountURL
 func newAuthCmd(version string) *cobra.Command {
 	authCmd := &cobra.Command{
 		Use:   "auth",
-		Short: "Manage credentials (~/.archivist/credentials via auth login; ARCHIVIST_TOKEN and --token override)",
+		Short: "Manage credentials (auth login saves the key in the keychain, or ~/.archivist/credentials; ARCHIVIST_TOKEN and --token override)",
 		Annotations: map[string]string{
 			"pp:typed-exit-codes": "0,1,2,4,5",
 		},
@@ -45,10 +46,10 @@ func newAuthLoginCmd(version string) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "login",
-		Short: "Verify and save your Archivist CLI token to ~/.archivist/credentials",
+		Short: "Verify and save your Archivist CLI token (in the keychain, or ~/.archivist/credentials)",
 		Annotations: map[string]string{
 			"pp:typed-exit-codes": "0,4,5",
-			// No mcp:read-only — login writes local state (the credentials file).
+			// No mcp:read-only — login writes local state (the keychain or the credentials file).
 			// Hidden from MCP: --open launches a browser; token setup is an
 			// operator action, not an agent tool (Story 39.7).
 			"mcp:hidden": "true",
@@ -130,7 +131,17 @@ func loginWithToken(cmd *cobra.Command, version, token string) error {
 		return failErr
 	}
 
-	path, err := auth.SaveToken(token)
+	// Story 94.6: a computer that runs connect keeps its key in the
+	// credentials file, never the keychain.
+	save := auth.SaveToken
+	connectHere := connectSetUpHere()
+	if connectHere {
+		save = auth.SaveTokenToFile
+	}
+	loc, err := save(token)
+	if err == nil && connectHere {
+		_ = auth.DeleteKeychainKey()
+	}
 	if err != nil {
 		_, _ = fmt.Fprintf(cmd.ErrOrStderr(),
 			"Token verified but saving failed: %v\nSet ARCHIVIST_TOKEN=ak_... as a workaround.\n", err)
@@ -142,9 +153,41 @@ func loginWithToken(cmd *cobra.Command, version, token string) error {
 		account = "unknown"
 	}
 	_, _ = fmt.Fprintf(cmd.OutOrStdout(),
-		"Token verified and saved.\n  Account: %s (tier: %s)\n  Key:     %s\n  File:    %s\nEvery new terminal can now run archivist without setup.\n",
-		account, resp.Tier, auth.MaskToken(token), path)
+		"Token verified and saved.\n  Account: %s (tier: %s)\n  Key:     %s\n%sEvery new terminal can now run archivist without setup.\n",
+		account, resp.Tier, auth.MaskToken(token), savedLine(loc))
 	return nil
+}
+
+// connectSetUpHere reports whether this computer runs connect: the
+// background service is installed or ~/.archivist/connect exists (an
+// existing credentials file keeps the file store in auth.SaveToken itself).
+func connectSetUpHere() bool {
+	if pairServiceInstalled() {
+		return true
+	}
+	dir, err := connect.DefaultStateDir()
+	if err != nil {
+		return false
+	}
+	_, err = os.Lstat(dir)
+	return err == nil
+}
+
+// deletedKeyWhere names what logout deleted: where from
+// auth.DeleteCredentials ("the keychain", a file path, or both).
+func deletedKeyWhere(where string) string {
+	if rest, ok := strings.CutPrefix(where, "the keychain"); ok {
+		return "the key saved in the keychain" + rest
+	}
+	return where
+}
+
+// savedLine is the "where the key went" line of a save (Story 94.6).
+func savedLine(loc auth.Location) string {
+	if loc.Keychain {
+		return "  Saved:   in the keychain\n"
+	}
+	return fmt.Sprintf("  File:    %s\n", loc.Path)
 }
 
 func newAuthStatusCmd(version string) *cobra.Command {
@@ -198,7 +241,7 @@ func newAuthWhoamiCmd(version string) *cobra.Command {
 func newAuthLogoutCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "logout",
-		Short: "Delete the saved credentials file",
+		Short: "Delete the saved key (keychain item and credentials file)",
 		Annotations: map[string]string{
 			"pp:typed-exit-codes": "0,1",
 			"mcp:hidden":          "true",
@@ -210,9 +253,9 @@ func newAuthLogoutCmd() *cobra.Command {
 				return &ExitError{Code: ExitGenericError}
 			}
 			if !existed {
-				_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Logged out: no credentials file found, nothing to delete.")
+				_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Logged out: no saved key found, nothing to delete.")
 			} else {
-				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Logged out: deleted %s\n", path)
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Logged out: deleted %s\n", deletedKeyWhere(path))
 			}
 			if os.Getenv("ARCHIVIST_TOKEN") != "" {
 				_, _ = fmt.Fprintln(cmd.OutOrStdout(),
@@ -291,6 +334,9 @@ func runAuthStatus(cmd *cobra.Command, version string, _ bool) error {
 			if _, statErr := os.Stat(path); statErr == nil {
 				_, _ = fmt.Fprintf(cmd.OutOrStdout(),
 					"Note: credentials file present but overridden by %s.\n", source)
+			} else if _, savedErr := auth.SavedToken(); savedErr == nil {
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(),
+					"Note: a key saved in the keychain is overridden by %s.\n", source)
 			}
 		}
 	}

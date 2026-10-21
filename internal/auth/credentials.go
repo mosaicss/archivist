@@ -11,6 +11,7 @@ import (
 
 	"github.com/mosaicss/archivist/internal/client"
 	"github.com/mosaicss/archivist/internal/fsutil"
+	"github.com/zalando/go-keyring"
 )
 
 // Accepted token prefixes:
@@ -48,6 +49,8 @@ const (
 	SourceFlag
 	SourceEnv
 	SourceFile
+	// SourceKeychain is the operating system keychain (Story 94.6).
+	SourceKeychain
 )
 
 func (s Source) String() string {
@@ -58,6 +61,8 @@ func (s Source) String() string {
 		return "env"
 	case SourceFile:
 		return "file"
+	case SourceKeychain:
+		return "keychain"
 	default:
 		return "none"
 	}
@@ -74,10 +79,11 @@ func CredentialsPath() (string, error) {
 }
 
 // Resolve returns the active CLI token and the ladder rung it came from.
-// Resolution order: --token flag > ARCHIVIST_TOKEN env var > credentials
-// file > ErrNoToken. A found-but-malformed token returns the token and its
-// source alongside a format error so diagnostic callers (doctor) can still
-// report on the credential that was found.
+// Resolution order: --token flag > ARCHIVIST_TOKEN env var > saved key
+// (the credentials file, then the keychain; see SavedToken) > ErrNoToken. A
+// found-but-malformed token returns the token and its source alongside a
+// format error so diagnostic callers (doctor) can still report on the
+// credential that was found.
 func Resolve(flagValue string) (string, Source, error) {
 	if flagValue != "" {
 		return flagValue, SourceFlag, validate(flagValue, SourceFlag, "")
@@ -85,58 +91,75 @@ func Resolve(flagValue string) (string, Source, error) {
 	if env := os.Getenv("ARCHIVIST_TOKEN"); env != "" {
 		return env, SourceEnv, validate(env, SourceEnv, "")
 	}
-
-	path, err := CredentialsPath()
-	if err != nil {
-		return "", SourceNone, err
-	}
-	data, err := fsutil.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return "", SourceNone, ErrNoToken
-		}
-		return "", SourceNone, fmt.Errorf("read credentials file %s: %w", path, err)
-	}
-	token := strings.TrimSpace(string(data))
-	if token == "" {
-		// Empty or whitespace-only file is "no credential", not a format error.
-		return "", SourceNone, ErrNoToken
-	}
-	return token, SourceFile, validate(token, SourceFile, path)
+	return savedToken()
 }
 
-// validate wraps ValidateTokenFormat, naming the credentials file when the
-// malformed token came from disk.
+// validate wraps ValidateTokenFormat, naming the credentials file (or the
+// keychain) when the malformed token came from there.
 func validate(token string, source Source, path string) error {
 	if err := ValidateTokenFormat(token); err != nil {
-		if source == SourceFile {
+		switch source {
+		case SourceFile:
 			return fmt.Errorf("credentials file %s: %w", path, err)
+		case SourceKeychain:
+			return fmt.Errorf("the key saved in the keychain: %w", err)
 		}
 		return err
 	}
 	return nil
 }
 
-// SavedToken returns the credentials file's token, ignoring the flag and
-// ARCHIVIST_TOKEN rungs: it is what a background service (which never
-// carries ARCHIVIST_TOKEN) will use. A missing or empty file is ErrNoToken.
+// SavedToken returns the saved key, ignoring the flag and ARCHIVIST_TOKEN
+// rungs: it is what a background service (which never carries
+// ARCHIVIST_TOKEN) will use. The credentials file is read first (the store
+// on a computer that runs connect, where no keychain can be used, and from
+// before Story 94.6), then the keychain, only when Archivist saved a key
+// there (its marker). Nothing saved is ErrNoToken; a keychain that holds the
+// key but did not answer is ErrKeychainUnavailable.
 func SavedToken() (string, error) {
+	token, _, err := savedToken()
+	return token, err
+}
+
+// savedToken is SavedToken with the rung that supplied the key.
+func savedToken() (string, Source, error) {
 	path, err := CredentialsPath()
 	if err != nil {
-		return "", err
+		return "", SourceNone, err
 	}
 	data, err := fsutil.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return "", ErrNoToken
-		}
-		return "", fmt.Errorf("read credentials file %s: %w", path, err)
+	if err != nil && !os.IsNotExist(err) {
+		return "", SourceNone, fmt.Errorf("read credentials file %s: %w", path, err)
 	}
-	token := strings.TrimSpace(string(data))
-	if token == "" {
-		return "", ErrNoToken
+	// An empty or whitespace-only file is "no credential", not a format error.
+	if token := strings.TrimSpace(string(data)); err == nil && token != "" {
+		return token, SourceFile, validate(token, SourceFile, path)
 	}
-	return token, validate(token, SourceFile, path)
+	token, err := keychainGet()
+	switch {
+	case err == nil && strings.TrimSpace(token) != "":
+		token = strings.TrimSpace(token)
+		return token, SourceKeychain, validate(token, SourceKeychain, "")
+	case err == nil, noKeychain(err), errors.Is(err, keyring.ErrNotFound):
+		return "", SourceNone, ErrNoToken
+	}
+	return "", SourceNone, err
+}
+
+// Location is where SaveToken put the key.
+type Location struct {
+	// Keychain is true when the key is in the operating system keychain.
+	Keychain bool
+	// Path is the credentials file (set either way: the keychain item's
+	// account names it).
+	Path string
+}
+
+func (l Location) String() string {
+	if l.Keychain {
+		return "the keychain"
+	}
+	return l.Path
 }
 
 // ResolveToken returns the active CLI token or an error.
@@ -149,32 +172,88 @@ func ResolveToken(flagValue string) (string, error) {
 	return token, nil
 }
 
-// SaveToken writes the token to the credentials file (mode 0600, parent dir
-// 0700) atomically (temporary file plus rename) and returns the path
-// written. When the credentials file is a symlink (a dotfiles setup), the
-// link is kept: the temporary file is written beside its target and renamed
-// onto it. Callers verify the token first; this function only persists.
-func SaveToken(token string) (string, error) {
+// SaveToken saves the token and says where (Story 94.6). Once the
+// credentials file exists (or is a symlink, a dotfiles setup), it stays the
+// store; otherwise the key goes to the keychain where one is usable (and
+// the marker records it), and to the file where none is (or its write
+// failed or timed out). A computer that runs connect keeps its key in the
+// file: connect and auth login there save with SaveTokenToFile, and connect
+// moves a keychain key there (MoveKeychainKeyToFile).
+// Callers verify the token first; this function only persists.
+func SaveToken(token string) (Location, error) {
 	path, err := CredentialsPath()
 	if err != nil {
-		return "", err
+		return Location{}, err
+	}
+	if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) && keychainSet(token) == nil {
+		return Location{Keychain: true, Path: path}, nil
+	}
+	return SaveTokenToFile(token)
+}
+
+// SaveTokenToFile writes the token to the credentials file (mode 0600,
+// parent dir 0700) atomically (temporary file plus rename), never the
+// keychain. When the credentials file is a symlink (a dotfiles setup), the
+// link is kept: the temporary file is written beside its target and renamed
+// onto it.
+func SaveTokenToFile(token string) (Location, error) {
+	path, err := CredentialsPath()
+	if err != nil {
+		return Location{}, err
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return "", fmt.Errorf("create %s: %w", filepath.Dir(path), err)
+		return Location{}, fmt.Errorf("create %s: %w", filepath.Dir(path), err)
 	}
 	target, err := credentialsTarget(path)
 	if err != nil {
-		return "", fmt.Errorf("resolve credentials link %s: %w", path, err)
+		return Location{}, fmt.Errorf("resolve credentials link %s: %w", path, err)
 	}
 	if target != path {
 		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
-			return "", fmt.Errorf("create %s: %w", filepath.Dir(target), err)
+			return Location{}, fmt.Errorf("create %s: %w", filepath.Dir(target), err)
 		}
 	}
 	if err := writeFileAtomic(target, []byte(token+"\n")); err != nil {
-		return "", fmt.Errorf("write credentials file %s: %w", path, err)
+		return Location{}, fmt.Errorf("write credentials file %s: %w", path, err)
 	}
-	return path, nil
+	return Location{Path: path}, nil
+}
+
+// MoveKeychainKeyToFile leaves the keychain empty on a computer that runs
+// connect (connect keeps its key in the credentials file). With nothing
+// saved in the keychain (no marker) it does nothing and asks the keychain
+// nothing. When the keychain holds the saved key, it writes the 0600 file
+// atomically, then deletes the item: moved is true. When the file already
+// holds the saved key, an item left in the keychain is deleted. On a
+// failure the item (and its marker) stays, so the next call tries again,
+// and the error returns (a file already written then holds the same key).
+func MoveKeychainKeyToFile() (bool, error) {
+	if !keychainMarked() {
+		return false, nil
+	}
+	token, source, err := savedToken()
+	switch {
+	case source == SourceKeychain && err == nil:
+		if _, err := SaveTokenToFile(token); err != nil {
+			return false, err
+		}
+		if _, err := keychainDelete(); err != nil {
+			return false, err
+		}
+		return true, nil
+	case source == SourceFile, errors.Is(err, ErrNoToken):
+		_, err := keychainDelete()
+		return false, err
+	}
+	return false, err
+}
+
+// DeleteKeychainKey removes the keychain item Archivist saved, if any (best
+// effort for callers that just saved a key to the file; without the marker
+// the keychain is not asked).
+func DeleteKeychainKey() error {
+	_, err := keychainDelete()
+	return err
 }
 
 // credentialsTarget is the file SaveToken replaces: path itself, or, when
@@ -240,20 +319,34 @@ func writeFileAtomic(path string, data []byte) (err error) {
 	return fsutil.Rename(tmp, path)
 }
 
-// DeleteCredentials removes the credentials file. Idempotent: a missing file
-// returns existed=false with no error.
+// DeleteCredentials removes the saved key: the keychain item (only when the
+// marker says one was saved) and the credentials file, each on its own.
+// Idempotent: nothing saved returns existed=false with no error. existed
+// and where name what was removed (the file path, "the keychain", or both),
+// also when the other store failed; err joins the failures.
 func DeleteCredentials() (bool, string, error) {
 	path, err := CredentialsPath()
 	if err != nil {
 		return false, "", err
 	}
-	if err := os.Remove(path); err != nil {
-		if os.IsNotExist(err) {
-			return false, path, nil
-		}
-		return true, path, fmt.Errorf("remove credentials file %s: %w", path, err)
+	inKeychain, kerr := keychainDelete()
+	fileErr := os.Remove(path)
+	inFile := fileErr == nil
+	if os.IsNotExist(fileErr) {
+		fileErr = nil
+	} else if fileErr != nil {
+		fileErr = fmt.Errorf("remove credentials file %s: %w", path, fileErr)
 	}
-	return true, path, nil
+	var where string
+	switch {
+	case inKeychain && inFile:
+		where = "the keychain and " + path
+	case inKeychain:
+		where = "the keychain"
+	default:
+		where = path
+	}
+	return inKeychain || inFile, where, errors.Join(fileErr, kerr)
 }
 
 // MaskToken returns a display-safe form of the token: first 10 characters,

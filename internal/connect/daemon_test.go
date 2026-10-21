@@ -67,6 +67,8 @@ type harness struct {
 	claudeEffort string
 	// webSearch is Config.WebSearch (Story 78.33).
 	webSearch bool
+	// onPause is Config.OnPause (Story 94.6).
+	onPause func()
 	// activityFile and resumeFrom are the session-bound run's
 	// Config.ActivityFile and SessionStart.ResumeFrom (Story 78.37).
 	activityFile, resumeFrom string
@@ -165,6 +167,7 @@ func (h *harness) start() {
 		Environ:    func() []string { return env },
 		TempDir:    h.tmp,
 		ChatAPIURL: h.api.srv.URL,
+		OnPause:    h.onPause,
 	})
 	if err != nil {
 		h.t.Fatal(err)

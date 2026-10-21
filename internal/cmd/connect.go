@@ -136,12 +136,27 @@ One-step setup: the workspace shows a pairing code.
   archivist connect --status      report the service, its ceiling, the saved key,
                                   its account and how many browsers can use
                                   this computer
-  archivist connect --uninstall   stop and remove the background service
+  archivist connect --pause       pause on this computer: sessions stop and
+                                  connect holds no relay connection until
+                                  --resume or Resume in Mosaic
+  archivist connect --resume      connect again after a pause
+  archivist connect --uninstall   stop and remove the background service, turn
+                                  off lingering Archivist turned on (Linux),
+                                  revoke the saved ak_ key (also one saved
+                                  with 'auth login --token', which then stops
+                                  working everywhere it is used) and remove it
+                                  and ~/.archivist/connect
 
-The service uses the saved key (~/.archivist/credentials), never
-ARCHIVIST_TOKEN, and logs to ~/.archivist/connect/connect.log. These five
-flags are used one at a time. Windows runs the task as archivistw.exe
-(installed next to archivist.exe by install.ps1), without a console window.
+Connect keeps its saved key in ~/.archivist/credentials (0600), which
+connect sessions do not open: --pair (and 'auth login' on a computer that
+runs connect) saves it there, and --install or a connect start moves a key
+saved in the keychain (with 'auth login') there. Keys saved with 'auth
+login' on a computer that does not run connect go to the operating system
+keychain. The service uses the saved key, never
+ARCHIVIST_TOKEN, and logs to
+~/.archivist/connect/connect.log. These flags are used one at a time.
+Windows runs the task as archivistw.exe (installed next to archivist.exe by
+install.ps1), without a console window.
 
 Exit codes: 0 ok; 1 refused or stopped (feature off, superseded, too old,
 or a session-bound start refused, for example a model or effort this
@@ -151,7 +166,9 @@ time, or no terminal and no browser to confirm it), or a browser not
 added; 2 bad flag or relay URL, or a browser code that is not valid; 3 no
 usable harness (Claude Code not found, or no usable Claude Code or Codex);
 4 credential or Claude login problem, or an invalid or expired pairing
-code; 5 server or network error while pairing; 7 pairing rate limited.`
+code; 5 server or network error while pairing; 7 pairing rate limited.
+--uninstall exits 1 when the key could not be revoked (its files are still
+removed; remove the key in Mosaic settings).`
 
 var (
 	connectModelRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:\[\]-]{0,127}$`)
@@ -164,6 +181,7 @@ func newConnectCmd(version string) *cobra.Command {
 	var sessionID, agent, promptFile, resumeFrom string
 	var pair, trust string
 	var install, uninstall, status, serviceMode bool
+	var pause, resume, ask bool
 	var maxPermission string
 	var webSearch bool
 	// mode holds --mode, --model and --effort (session-bound mode only).
@@ -182,7 +200,11 @@ func newConnectCmd(version string) *cobra.Command {
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			m := setupMode{pair: cmd.Flags().Changed("pair"), trust: cmd.Flags().Changed("trust"), install: install, uninstall: uninstall,
-				status: status, service: serviceMode}
+				status: status, service: serviceMode, pause: pause, resume: resume}
+			if ask && !install {
+				_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "Error: --ask applies only with --install")
+				return &ExitError{Code: ExitUsageError}
+			}
 			if err := m.validate(cmd.ErrOrStderr(), args, check, sessionID != "" || agent != "" || promptFile != "" || resumeFrom != "",
 				model != "" || effort != "" || codexModel != "" || codexEffort != ""); err != nil {
 				return err
@@ -199,11 +221,13 @@ func newConnectCmd(version string) *cobra.Command {
 			case m.trust:
 				return runTrust(cmd, trust)
 			case m.install:
-				return runServiceInstall(cmd, maxPermission)
+				return runServiceInstall(cmd, maxPermission, ask)
 			case m.uninstall:
-				return runServiceUninstall(cmd)
+				return runServiceUninstall(cmd, version)
 			case m.status:
 				return runServiceStatus(cmd, version)
+			case m.pause, m.resume:
+				return runPauseCmd(cmd, m.pause)
 			}
 			if model != "" && !connectModelRe.MatchString(model) {
 				_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Error: --claude-model %q is not a model name\n", model)
@@ -249,10 +273,14 @@ func newConnectCmd(version string) *cobra.Command {
 	c.Flags().StringVar(&pair, "pair", "", "Redeem a pairing code from the Mosaic workspace for a new key and save it (CODE, or CODE.BROWSER as Mosaic shows it)")
 	c.Flags().StringVar(&trust, "trust", "", "Let the browser with this code (shown in Mosaic) use this computer")
 	c.Flags().BoolVar(&install, "install", false, "Install and start connect as a background user service (macOS launchd agent, Linux systemd user unit, Windows logon task)")
-	c.Flags().BoolVar(&uninstall, "uninstall", false, "Stop and remove the background service")
+	c.Flags().BoolVar(&uninstall, "uninstall", false, "Stop and remove the background service, revoke the saved ak_ key (also one saved with 'auth login --token', which then stops working everywhere) and remove its connect files")
 	c.Flags().BoolVar(&status, "status", false, "Report the background service and the saved key")
 	c.Flags().BoolVar(&serviceMode, "service", false, "Run as the background service (used by the service definition)")
 	_ = c.Flags().MarkHidden("service")
+	c.Flags().BoolVar(&pause, "pause", false, "Pause on this computer: stop sessions and hold no relay connection until --resume or Resume in Mosaic")
+	c.Flags().BoolVar(&resume, "resume", false, "Connect again after a pause")
+	c.Flags().BoolVar(&ask, "ask", false, "With --install: ask whether to start Archivist when the computer starts (the installers pass it)")
+	_ = c.Flags().MarkHidden("ask")
 	c.Flags().StringVar(&maxPermission, "max-permission", "", "Highest permission mode a session on this machine may run: "+
 		connect.ModeHelp()+" (default auto_edits; full_auto with --session)")
 	c.Flags().BoolVar(&webSearch, "web-search", false, "Turn on the harness's own provider side web search for sessions on this machine "+
@@ -442,6 +470,9 @@ func runConnect(cmd *cobra.Command, version string, check bool, f connectFlags) 
 	token, _, err := auth.Resolve(tokenFlag)
 	if err != nil || !strings.HasPrefix(token, "ak_") {
 		msg := "archivist connect needs an ak_ API key. Run 'archivist auth login --token ak_...' or set ARCHIVIST_TOKEN."
+		if errors.Is(err, auth.ErrKeychainUnavailable) {
+			msg = "archivist connect: the saved key is in the keychain, which could not be read (" + err.Error() + "). Unlock it (log in) and try again."
+		}
 		if err == nil {
 			msg = "archivist connect needs an ak_ API key; mc_pat_ and task (mst_) credentials cannot mint relay tickets."
 		}
@@ -481,6 +512,9 @@ func runConnect(cmd *cobra.Command, version string, check bool, f connectFlags) 
 	log := connect.NewLogger(stderr)
 	debug, _ := strconv.ParseBool(os.Getenv("ARCHIVIST_CONNECT_DEBUG")) // unset or invalid: off
 	log.SetDebug(debug)
+	if f.session == nil {
+		keepConnectKeyInFile(log)
+	}
 	// Handed to each session's MCP server; the same rule as the root check.
 	baseURL := os.Getenv(client.BaseURLEnv)
 	if baseURL != "" {
@@ -518,6 +552,12 @@ func runConnect(cmd *cobra.Command, version string, check bool, f connectFlags) 
 			log.Printf("warning: Codex sessions are unavailable: %s", det.Codex.Problem)
 		}
 	}
+	// Story 94.6: the normal daemon pauses and resumes under a loop (the
+	// session-bound mode never pauses).
+	loop := newPauseLoop(stateDir, relayURL, api, log)
+	if f.session == nil {
+		cfg.OnPause = loop.pause
+	}
 	d, err := connect.New(cfg)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "archivist connect: %v\n", err)
@@ -554,8 +594,55 @@ func runConnect(cmd *cobra.Command, version string, check bool, f connectFlags) 
 	}
 	log.Printf("archivist connect %s: %s; permission ceiling %s; web search %s; key fp:%s; relay %s. Ctrl-C stops.",
 		version, strings.Join(harnesses, "; "), d.MaxMode(), onOff(d.WebSearch()), auth.Fingerprint(token), relayURL)
-	return connectResult(stderr, log, d, d.Run(ctx))
+	return runPausable(ctx, stderr, log, loop, cfg, d)
 }
+
+// keepConnectKeyInFile leaves the keychain empty before the daemon starts
+// (Story 94.6: a computer that runs connect keeps its key in the file): a
+// saved key held in the keychain moves to the credentials file, and an item
+// left there beside the file is deleted. It asks the keychain only when
+// Archivist saved a key there (auth's marker), so it is retried at every
+// start until that is done. A failure logs one warning and connect goes on
+// with the key it already holds.
+func keepConnectKeyInFile(log *connect.Logger) {
+	moved, err := auth.MoveKeychainKeyToFile()
+	switch {
+	case err != nil:
+		log.Printf("warning: the key saved in the keychain could not be moved or removed (%v); connect tries again at its next start", err)
+	case moved:
+		path, _ := auth.CredentialsPath()
+		log.Printf("the saved key moved to %s, where connect keeps it", path)
+	}
+}
+
+// runPausable runs the normal daemon under the pause loop (Story 94.6): d
+// serves the first connected stretch, a new daemon each later one, none
+// while paused.
+func runPausable(ctx context.Context, stderr io.Writer, log *connect.Logger, loop *pauseLoop, cfg connect.Config, d *connect.Daemon) error {
+	first := true
+	err := loop.serve(ctx, func(runCtx context.Context) error {
+		if !first {
+			next, err := connect.New(cfg)
+			if err != nil {
+				return &connectSetupError{err}
+			}
+			d = next
+		}
+		first = false
+		return d.Run(runCtx)
+	})
+	var setup *connectSetupError
+	if errors.As(err, &setup) {
+		_, _ = fmt.Fprintf(stderr, "archivist connect: %v\n", setup.err)
+		return &ExitError{Code: ExitGenericError}
+	}
+	return connectResult(stderr, log, d, err)
+}
+
+// connectSetupError is a daemon that could not be built (connect.New).
+type connectSetupError struct{ err error }
+
+func (e *connectSetupError) Error() string { return e.err.Error() }
 
 // activityFileEnv names the session-bound mode's activity file (Story
 // 78.37): the sandbox Worker reads it to pause an idle sandbox.

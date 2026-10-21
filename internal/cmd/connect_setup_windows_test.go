@@ -77,7 +77,8 @@ func windowsSandbox(t *testing.T) string {
 // Install, status and uninstall against a stub schtasks (Story 78.34):
 // archivistw.exe must sit next to archivist.exe; the task XML and
 // service.env are written, the task registered and run; status reads the
-// exit codes and the daemon pid; uninstall ends, deletes and keeps the key.
+// exit codes and the daemon pid; uninstall ends and deletes the task, then
+// (Story 94.6) revokes the saved key and removes it and ~/.archivist/connect.
 func TestConnectInstallStatusUninstallWindows(t *testing.T) {
 	home := windowsSandbox(t)
 	saveKey(t, home, pairedKey)
@@ -155,6 +156,7 @@ func TestConnectInstallStatusUninstallWindows(t *testing.T) {
 		t.Fatalf("reinstall: exit %d\n%s", code, out)
 	}
 
+	revoked := revokeServer(t)
 	out, code = runRoot(t, "connect", "--uninstall")
 	if code != 0 || !strings.Contains(out, "Background connect removed") {
 		t.Fatalf("uninstall: exit %d\n%s", code, out)
@@ -162,16 +164,22 @@ func TestConnectInstallStatusUninstallWindows(t *testing.T) {
 	if _, err := os.Stat(xmlPath); err == nil {
 		t.Fatal("task XML kept")
 	}
-	if _, err := os.Stat(filepath.Join(home, ".archivist", "credentials")); err != nil {
-		t.Fatalf("key removed: %v", err)
+	if got := revoked(); len(got) != 1 || got[0] != pairedKey {
+		t.Fatalf("revoked %v, want the saved key", got)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".archivist", "credentials")); !os.IsNotExist(err) {
+		t.Fatalf("saved key kept: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".archivist", "connect")); !os.IsNotExist(err) {
+		t.Fatalf("connect folder kept: %v", err)
 	}
 	out, code = runRoot(t, "connect", "--status")
 	if code != ExitGenericError || !strings.Contains(out, "not installed") {
 		t.Fatalf("status after uninstall: exit %d\n%s", code, out)
 	}
 	out, code = runRoot(t, "connect", "--uninstall")
-	if code != 0 || !strings.Contains(out, "Background connect is not installed.") {
-		t.Fatalf("second uninstall: exit %d\n%s", code, out)
+	if code != 0 || !strings.Contains(out, "Background connect is not installed.") || len(revoked()) != 1 {
+		t.Fatalf("second uninstall: exit %d revoked %v\n%s", code, revoked(), out)
 	}
 }
 

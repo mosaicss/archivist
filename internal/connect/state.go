@@ -166,6 +166,18 @@ func (s *Store) List() ([]*SessionRecord, error) {
 	return out, nil
 }
 
+// Remove deletes a session record (Story 94.6: pruning old ended records).
+// A missing record is not an error.
+func (s *Store) Remove(id string) error {
+	path, err := s.recordPath(id)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return fsutil.RemoveAll(path)
+}
+
 // RunDir returns (creating) the private runtime directory for a session.
 func (s *Store) RunDir(id string) (string, error) {
 	if !uuidRe.MatchString(id) {

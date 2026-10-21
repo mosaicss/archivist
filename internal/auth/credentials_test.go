@@ -191,14 +191,15 @@ func TestSaveTokenWritesFileWithModes(t *testing.T) {
 	home := sandboxHome(t)
 	t.Setenv("ARCHIVIST_TOKEN", "")
 
-	path, err := auth.SaveToken("ak_savedtoken")
+	loc, err := auth.SaveToken("ak_savedtoken")
 	if err != nil {
 		t.Fatalf("SaveToken: %v", err)
 	}
 	want := filepath.Join(home, ".archivist", "credentials")
-	if path != want {
-		t.Errorf("path: got %q, want %q", path, want)
+	if loc.Keychain || loc.Path != want || loc.String() != want {
+		t.Errorf("location: got %+v, want the file %q (no keychain in tests)", loc, want)
 	}
+	path := loc.Path
 
 	data, err := os.ReadFile(path)
 	if err != nil {

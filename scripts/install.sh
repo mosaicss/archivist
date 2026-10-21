@@ -7,7 +7,10 @@
 # Installs or updates archivist, then with --pair redeems the pairing code
 # from the Mosaic workspace (archivist connect --pair), installs the
 # background service (archivist connect --install) and reports it
-# (archivist connect --status). Every download is checked before anything
+# (archivist connect --status). A first install asks "Start Archivist when
+# your computer starts? (recommended)" (yes is the default; with no terminal
+# to answer it the answer is yes, said in one line); no keeps the foreground
+# mode (run archivist connect when you want it). Every download is checked before anything
 # is installed: the release's archivist_v<ver>_SHA256SUMS must carry a valid
 # signature (archivist_v<ver>_SHA256SUMS.sig, checked with openssl against
 # the release key below), and each archive must match its line in it.
@@ -372,7 +375,15 @@ main() {
     # An installed service is restarted on the new binary and key even with
     # --no-service.
     if [ "$WANT_SERVICE" = 1 ] || service_installed; then
-      if ! "$BIN" connect --install; then
+      # Story 94.6: a first install asks whether to start at login (--ask);
+      # an installed service is reinstalled without the question.
+      local status=0
+      if service_installed; then
+        "$BIN" connect --install || status=$?
+      else
+        "$BIN" connect --install --ask || status=$?
+      fi
+      if [ "$status" != 0 ]; then
         printf '\n%s\n%s\n' \
           "This computer is paired, but the background service could not be installed." \
           "Fix the error above, then run: ${BIN} connect --install (no new code is needed)" >&2

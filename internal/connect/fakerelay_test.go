@@ -68,6 +68,11 @@ type fakeRelay struct {
 	queries            []string
 	// userKinds lists the user socket's report frames in arrival order.
 	userKinds []string
+	// features are the features frames received (Story 94.6); oldRelay
+	// answers them INVALID_FRAME too, as a relay before 94.6, and
+	// refuseFeatures answers only them so (a relay with 94.7 but not 94.6).
+	features       []map[string]any
+	refuseFeatures bool
 }
 
 func newFakeRelay(t *testing.T) *fakeRelay {
@@ -159,7 +164,7 @@ func (r *fakeRelay) serve(w http.ResponseWriter, req *http.Request) {
 		if json.Unmarshal(data, &x) != nil {
 			continue
 		}
-		if k, _ := x["kind"].(string); sid == "" && (k == "signing" || k == "capabilities" || k == "controls") {
+		if k, _ := x["kind"].(string); sid == "" && (k == "features" || k == "signing" || k == "capabilities" || k == "controls") {
 			r.mu.Lock()
 			r.userKinds = append(r.userKinds, k)
 			r.mu.Unlock()
@@ -182,6 +187,14 @@ func (r *fakeRelay) serve(w http.ResponseWriter, req *http.Request) {
 			if !old && x["kind"] == "signing" {
 				r.signing = append(r.signing, x)
 			}
+			r.mu.Unlock()
+			if old {
+				_ = c.Write(ctx, websocket.MessageText, []byte(`{"kind":"error","code":"INVALID_FRAME"}`))
+			}
+		case "features":
+			r.mu.Lock()
+			old := r.oldRelay || r.refuseFeatures
+			r.features = append(r.features, x)
 			r.mu.Unlock()
 			if old {
 				_ = c.Write(ctx, websocket.MessageText, []byte(`{"kind":"error","code":"INVALID_FRAME"}`))

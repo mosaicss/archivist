@@ -71,7 +71,16 @@ type Config struct {
 	// quiet and since when an approval has waited, for the sandbox Worker's
 	// idle pause. Ignored outside RunSession.
 	ActivityFile string
+	// OnPause, when set, declares the pause feature to the relay (Story
+	// 94.6) and is called when the workspace pauses this computer: the
+	// caller records the pause and ends Run. Nil: no Pause from the
+	// workspace (the relay refuses it PAUSE_UNSUPPORTED). Ignored outside Run.
+	OnPause func()
 }
+
+// pruneAfter is how long an ended or failed session record is kept (Story
+// 94.6), counted from the later of its creation and its expiry.
+const pruneAfter = 7 * 24 * time.Hour
 
 // Daemon is a running `archivist connect`.
 type Daemon struct {
@@ -123,6 +132,10 @@ type Daemon struct {
 	signingLive *live
 	signingSent string
 	computerRun string
+	// onPause is Config.OnPause; featuresWin recognizes an older relay's
+	// refusal of the features frame (Story 94.6).
+	onPause     func()
+	featuresWin refusalWindow
 
 	mu       sync.Mutex
 	signIn   string // harness awaiting its posture-1 sign-in (guarded by mu)
@@ -153,7 +166,7 @@ func New(cfg Config) (*Daemon, error) {
 		environ: cfg.Environ, tempDir: cfg.TempDir, dial: cfg.Dial, signIn: cfg.SignIn, chatAPIURL: cfg.ChatAPIURL,
 		sessions: map[string]*session{}, starting: map[string]bool{}, tokens: map[string]bool{},
 		maxMode: cfg.MaxMode, webSearch: cfg.WebSearch, activityFile: cfg.ActivityFile, codexProbed: make(chan struct{}),
-		counters: newCounterStore(store.Dir())}
+		counters: newCounterStore(store.Dir()), onPause: cfg.OnPause}
 	if d.maxMode == "" {
 		d.maxMode = DefaultMaxMode
 	}
@@ -235,6 +248,12 @@ func (d *Daemon) Run(ctx context.Context) error {
 			if rec.Status != "active" {
 				removeSessionCwd(rec.Cwd)
 				d.store.RemoveCodexHome(rec.SessionID)
+				// Story 94.6: an ended or failed record is kept for a week.
+				if time.UnixMilli(max(rec.CreatedAt, rec.ExpiresAt)).Add(pruneAfter).Before(time.Now()) {
+					if err := d.store.Remove(rec.SessionID); err != nil {
+						d.log.Printf("session record %s not pruned: %v", rec.SessionID, err)
+					}
+				}
 				continue
 			}
 			if d.reclamp(rec) {
@@ -255,6 +274,14 @@ func (d *Daemon) Run(ctx context.Context) error {
 	// trusts; announced again when the list changes (checked at each ping).
 	user.onPing = d.announceSigning
 	user.onConnect = func(l *live) {
+		// Story 94.6: Pause from the workspace, declared first, so an older
+		// relay's refusals arrive in send order (features, signing,
+		// controls) and each is claimed by its own frame.
+		if d.onPause != nil {
+			if sent := d.featuresWin.arm(); !l.Send(featuresFrame(FeaturePause)) {
+				d.featuresWin.disarm(sent)
+			}
+		}
 		d.announceSigning(l)
 		det := d.detect(ctx)
 		caps := det.Capabilities()
@@ -289,6 +316,14 @@ func (d *Daemon) Run(ctx context.Context) error {
 				defer d.wg.Done()
 				d.handleStart(sessCtx, l, in, "")
 			}()
+		case "pause":
+			// Story 94.6: only a daemon that declared the feature is sent it.
+			if d.onPause != nil {
+				d.log.Printf("paused from Mosaic")
+				d.onPause()
+			} else {
+				d.log.Printf("pause from the relay ignored: this daemon offers no pause")
+			}
 		case "approval_response":
 			// Terminal receipt after the session ended: an audit record, never
 			// executed (the decision is not applied, nothing restarts).
@@ -419,7 +454,7 @@ func (d *Daemon) handleStart(ctx context.Context, l *live, in *Inbound, resumeFr
 	if err != nil {
 		var apiErr *client.APIError
 		if errors.As(err, &apiErr) && (apiErr.Status == http.StatusNotFound || apiErr.Status == http.StatusBadRequest) {
-			d.refuseStart(ctx, l, in, "The session is unknown.", false)
+			d.refuseStart(ctx, l, in, unknownSessionReason, false)
 			return nil
 		}
 		// Transient: no ack, the relay redelivers in 30 s.
@@ -504,8 +539,12 @@ func (d *Daemon) refuseStart(ctx context.Context, l *live, in *Inbound, reason s
 	d.log.Printf("start_session %s refused: %s", in.CorrelationID, reason)
 	rec := &SessionRecord{SessionID: in.SessionID, Agent: in.Agent, StartCorrelationID: in.CorrelationID,
 		Status: "failed", CreatedAt: time.Now().UnixMilli()}
-	if err := d.store.Save(rec); err != nil {
-		d.log.Printf("refusal record not saved: %v", err)
+	// Story 94.6: no record for a session chat-api does not know (a
+	// redelivery asks chat-api again and is refused the same way).
+	if reason != unknownSessionReason {
+		if err := d.store.Save(rec); err != nil {
+			d.log.Printf("refusal record not saved: %v", err)
+		}
 	}
 	if l != nil {
 		l.Send(commandAck(UserSocket, in.CorrelationID, in.SessionID))
@@ -532,6 +571,9 @@ func (d *Daemon) refuseStart(ctx context.Context, l *live, in *Inbound, reason s
 	cancel()
 	close(s.done)
 }
+
+// unknownSessionReason is the refusal for a session chat-api does not know.
+const unknownSessionReason = "The session is unknown."
 
 // agentUsable reports whether this daemon drives agent (its harness was
 // usable at startup).
