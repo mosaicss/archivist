@@ -34,9 +34,12 @@ short-lived, session-scoped task token). Ctrl-C stops every session and
 revokes its tokens.
 
 Tool calls that change anything ask for your approval in the workspace.
-Claude Code: "Allow for session" applies to every later call of that tool
-(any input) in that session without asking again, and "Deny for session"
-refuses it the same way; restarting archivist connect clears these rules.
+Claude Code: "Allow for session" keeps one narrow rule for the rest of that
+session: a shell command's program and subcommand for a plain command (the
+exact command for anything else), the file for Edit and Write, and the tool
+itself for Read, Grep, Glob and other tools; "Deny for session" refuses
+that tool for the rest of the session. The approval card says what an
+allow covers. Restarting archivist connect clears these rules.
 Codex: "Allow for session" is Codex's accept for session (the identical
 command or file again runs without asking), and "Deny for session" is
 Codex's cancel (deny and end the turn).
@@ -101,6 +104,16 @@ claude auth login --console, {"id","method":"api_key","key"} runs the
 session with that key as ANTHROPIC_API_KEY (never logged). In this mode any
 Claude Code login reported as logged in is accepted.
 
+Commands from the browser are signed: each Mosaic browser has its own key,
+and connect runs a start, a message, a mode change or an approval only when
+it comes from a browser this computer knows. Pairing with the command Mosaic
+shows (--pair CODE.BROWSER) adds that browser; another browser is added from
+a browser already added (Connect your computer in Mosaic) or with
+archivist connect --trust <code>. The list is kept in
+~/.archivist/connect/browsers.json (at most 32, the oldest dropped); pairing
+with another account empties it. Stopping, interrupting and denying need no
+signature, and the session-bound mode below does not use the list.
+
 One-step setup: the workspace shows a pairing code.
 
   archivist connect --pair CODE   redeem a pairing code for a new key and save it
@@ -110,19 +123,23 @@ One-step setup: the workspace shows a pairing code.
                                   this computer's browser, which connects
                                   only when that browser is signed in to the
                                   same account; pairing again revokes the
-                                  key it replaces
+                                  key it replaces. CODE.BROWSER, as Mosaic
+                                  shows it, also adds that browser
+  archivist connect --trust CODE  let the browser showing this code in
+                                  Mosaic use this computer
   archivist connect --install     run connect as a background user service
                                   (launchd agent, systemd user unit or Windows
                                   logon task) that starts at login and
                                   restarts after a crash;
                                   add --max-permission <mode> to set the
                                   service's ceiling (default auto_edits)
-  archivist connect --status      report the service, its ceiling, the saved key
-                                  and its account
+  archivist connect --status      report the service, its ceiling, the saved key,
+                                  its account and how many browsers can use
+                                  this computer
   archivist connect --uninstall   stop and remove the background service
 
 The service uses the saved key (~/.archivist/credentials), never
-ARCHIVIST_TOKEN, and logs to ~/.archivist/connect/connect.log. These four
+ARCHIVIST_TOKEN, and logs to ~/.archivist/connect/connect.log. These five
 flags are used one at a time. Windows runs the task as archivistw.exe
 (installed next to archivist.exe by install.ps1), without a console window.
 
@@ -130,8 +147,8 @@ Exit codes: 0 ok; 1 refused or stopped (feature off, superseded, too old,
 or a session-bound start refused, for example a model or effort this
 machine does not offer), service not running, service setup failed, or
 pairing not confirmed (cancelled, refused in the browser, not confirmed in
-time, or no terminal and no browser to confirm it); 2 bad flag or relay
-URL; 3 no
+time, or no terminal and no browser to confirm it), or a browser not
+added; 2 bad flag or relay URL, or a browser code that is not valid; 3 no
 usable harness (Claude Code not found, or no usable Claude Code or Codex);
 4 credential or Claude login problem, or an invalid or expired pairing
 code; 5 server or network error while pairing; 7 pairing rate limited.`
@@ -145,7 +162,7 @@ func newConnectCmd(version string) *cobra.Command {
 	var check bool
 	var model, effort, codexModel, codexEffort string
 	var sessionID, agent, promptFile, resumeFrom string
-	var pair string
+	var pair, trust string
 	var install, uninstall, status, serviceMode bool
 	var maxPermission string
 	var webSearch bool
@@ -164,7 +181,7 @@ func newConnectCmd(version string) *cobra.Command {
 		// code typed with spaces (archivist connect --pair abcde fghjk).
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			m := setupMode{pair: cmd.Flags().Changed("pair"), install: install, uninstall: uninstall,
+			m := setupMode{pair: cmd.Flags().Changed("pair"), trust: cmd.Flags().Changed("trust"), install: install, uninstall: uninstall,
 				status: status, service: serviceMode}
 			if err := m.validate(cmd.ErrOrStderr(), args, check, sessionID != "" || agent != "" || promptFile != "" || resumeFrom != "",
 				model != "" || effort != "" || codexModel != "" || codexEffort != ""); err != nil {
@@ -179,6 +196,8 @@ func newConnectCmd(version string) *cobra.Command {
 			switch {
 			case m.pair:
 				return runPair(cmd, version, strings.Join(append([]string{pair}, args...), " "))
+			case m.trust:
+				return runTrust(cmd, trust)
 			case m.install:
 				return runServiceInstall(cmd, maxPermission)
 			case m.uninstall:
@@ -227,7 +246,8 @@ func newConnectCmd(version string) *cobra.Command {
 	c.Flags().StringVar(&agent, "agent", "", "Session-bound mode: the session's agent, claude or codex")
 	c.Flags().StringVar(&promptFile, "prompt-file", "", "Session-bound mode: file holding the session's first prompt")
 	c.Flags().StringVar(&resumeFrom, "resume-from", "", "Session-bound mode: an earlier session (UUID) whose harness conversation this session continues")
-	c.Flags().StringVar(&pair, "pair", "", "Redeem a pairing code from the Mosaic workspace for a new key and save it")
+	c.Flags().StringVar(&pair, "pair", "", "Redeem a pairing code from the Mosaic workspace for a new key and save it (CODE, or CODE.BROWSER as Mosaic shows it)")
+	c.Flags().StringVar(&trust, "trust", "", "Let the browser with this code (shown in Mosaic) use this computer")
 	c.Flags().BoolVar(&install, "install", false, "Install and start connect as a background user service (macOS launchd agent, Linux systemd user unit, Windows logon task)")
 	c.Flags().BoolVar(&uninstall, "uninstall", false, "Stop and remove the background service")
 	c.Flags().BoolVar(&status, "status", false, "Report the background service and the saved key")

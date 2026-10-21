@@ -84,6 +84,7 @@ type fakeMosaic struct {
 	mu       sync.Mutex
 	redeems  int
 	confirms []string       // the confirm field of every redeem
+	bodies   []string       // every redeem body as sent
 	revoked  []string       // bearer of every DELETE /account/cli-tokens/current
 	revokeAs map[string]int // status per bearer; default 204
 	listAs   map[string]int // GET /account/cli-tokens status per bearer; default 200
@@ -116,8 +117,10 @@ func newFakeMosaic(t *testing.T, redeemBody string) *fakeMosaic {
 			if r.Header.Get("Authorization") != "" {
 				t.Errorf("redeem sent Authorization")
 			}
+			raw, _ := io.ReadAll(r.Body)
+			f.bodies = append(f.bodies, string(raw))
 			var body map[string]string
-			_ = json.NewDecoder(r.Body).Decode(&body)
+			_ = json.Unmarshal(raw, &body)
 			f.confirms = append(f.confirms, body["confirm"])
 			if body["confirm"] == "browser" && f.pending != "" {
 				w.WriteHeader(http.StatusAccepted)

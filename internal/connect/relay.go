@@ -222,7 +222,10 @@ type link struct {
 	onCommand func(l *live, in *Inbound)
 	// onError sees a relay error first; true means it was handled.
 	onError func(code string) bool
-	dial    func(ctx context.Context, u string, opts *websocket.DialOptions) (*websocket.Conn, *http.Response, error)
+	// onPing runs after each application ping on the socket (the user
+	// socket's signing frame check, Story 94.7).
+	onPing func(l *live)
+	dial   func(ctx context.Context, u string, opts *websocket.DialOptions) (*websocket.Conn, *http.Response, error)
 	// connected is closed after the first successful dial (tests, status).
 	connectedOnce sync.Once
 	connected     chan struct{}
@@ -483,6 +486,9 @@ func (k *link) write(ctx context.Context, l *live) {
 		case <-ping.C:
 			if !send([]byte("ping")) {
 				return
+			}
+			if k.onPing != nil {
+				k.onPing(l)
 			}
 		}
 		if !flush() {

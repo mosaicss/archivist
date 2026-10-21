@@ -18,6 +18,7 @@ import (
 	"os/signal"
 	"os/user"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -105,12 +106,12 @@ const accountStatusTimeout = 5 * time.Second
 
 // setupMode is which one-step setup flag was given.
 type setupMode struct {
-	pair, install, uninstall, status, service bool
+	pair, trust, install, uninstall, status, service bool
 }
 
 func (m setupMode) count() int {
 	n := 0
-	for _, b := range []bool{m.pair, m.install, m.uninstall, m.status, m.service} {
+	for _, b := range []bool{m.pair, m.trust, m.install, m.uninstall, m.status, m.service} {
 		if b {
 			n++
 		}
@@ -134,10 +135,10 @@ func (m setupMode) validate(stderr io.Writer, args []string, check, session, har
 		return nil
 	}
 	if n > 1 {
-		return usage("--pair, --install, --uninstall and --status are used one at a time")
+		return usage("--pair, --trust, --install, --uninstall and --status are used one at a time")
 	}
 	if check || session {
-		return usage("--pair, --install, --uninstall, --status and --service cannot be combined with --check, --session, --agent or --prompt-file")
+		return usage("--pair, --trust, --install, --uninstall, --status and --service cannot be combined with --check, --session, --agent or --prompt-file")
 	}
 	if harnessFlags && !m.service {
 		return usage("--claude-model, --claude-effort, --codex-model and --codex-effort apply only when connect runs")
@@ -216,6 +217,16 @@ func installedCeiling(args []string) (mode connect.Mode, found, ok bool) {
 // ak_ key it replaced.
 func runPair(cmd *cobra.Command, version, raw string) error {
 	stderr := cmd.ErrOrStderr()
+	// Story 94.7: CODE.FP also names the browser that showed the code; it is
+	// checked before anything is sent and never leaves this computer.
+	raw, browser, withBrowser := strings.Cut(raw, ".")
+	if withBrowser {
+		browser = strings.TrimSpace(browser)
+		if !connect.ValidBrowserCode(browser) {
+			_, _ = fmt.Fprintln(stderr, "archivist connect: "+pairBrowserInvalidMessage)
+			return &ExitError{Code: ExitUsageError}
+		}
+	}
 	code, err := client.NormalizePairingCode(raw)
 	if err != nil {
 		_, _ = fmt.Fprintln(stderr, "archivist connect: "+pairInvalidMessage)
@@ -289,7 +300,7 @@ func runPair(cmd *cobra.Command, version, raw string) error {
 			return &ExitError{Code: ExitGenericError}
 		}
 	}
-	return savePairedKey(cmd, version, res)
+	return savePairedKey(cmd, version, res, browser)
 }
 
 // pairNotNamed is the refusal for a redeem answer this CLI cannot confirm
@@ -300,8 +311,10 @@ func pairNotNamed(stderr io.Writer) error {
 }
 
 // savePairedKey saves a confirmed key, revokes the ak_ key it replaced and
-// says so.
-func savePairedKey(cmd *cobra.Command, version string, res *client.PairingResult) error {
+// says so, then records the pairing in the trusted browser list (Story
+// 94.7): browser ("" = none named) is trusted, and the list is emptied first
+// when it was kept for another account.
+func savePairedKey(cmd *cobra.Command, version string, res *client.PairingResult, browser string) error {
 	stderr, stdout := cmd.ErrOrStderr(), cmd.OutOrStdout()
 	email := printableText(res.Email)
 	if email == "" {
@@ -321,6 +334,11 @@ func savePairedKey(cmd *cobra.Command, version string, res *client.PairingResult
 		name = res.KeyID
 	}
 	_, _ = fmt.Fprintf(stdout, "Paired as %s.\n  Account: %s\n  Key:     %s\n  File:    %s\n", name, email, auth.MaskToken(res.Key), path)
+	if err := pairBrowsers(email, browser); err != nil {
+		_, _ = fmt.Fprintf(stderr, "Note: the list of browsers that can use this computer was not updated (%v). In Mosaic, open Connect your computer to add this browser.\n", err)
+	} else if browser != "" {
+		_, _ = fmt.Fprintln(stdout, browserTrustedMessage)
+	}
 	if perr == nil && previous != res.Key && !auth.IsTaskToken(previous) {
 		// Only a saved ak_ key is revoked, with itself as the credential.
 		revoked := false
@@ -341,6 +359,59 @@ func savePairedKey(cmd *cobra.Command, version string, res *client.PairingResult
 		_, _ = fmt.Fprintln(stdout, "Run 'archivist connect --install' to restart background connect with the new key.")
 	}
 	return nil
+}
+
+// pairBrowserInvalidMessage answers a --pair value whose browser code
+// (after the dot) is malformed.
+const pairBrowserInvalidMessage = "the browser code after the pairing code is not valid, so nothing was sent. Copy the command from Mosaic again."
+
+// browserTrustedMessage confirms a browser was added (--pair CODE.FP,
+// --trust).
+const browserTrustedMessage = "This browser can now use this computer."
+
+// pairBrowsers records a pairing in the trusted browser list (Story 94.7).
+func pairBrowsers(account, browser string) error {
+	dir, err := connect.DefaultStateDir()
+	if err != nil {
+		return err
+	}
+	return connect.PairBrowsers(dir, account, browser)
+}
+
+// runTrust adds a browser to the list of browsers that can use this
+// computer (Story 94.7): `archivist connect --trust <code>` with the code
+// Mosaic shows in that browser. A running connect announces it at its next
+// ping. A malformed code exits 2.
+func runTrust(cmd *cobra.Command, code string) error {
+	stderr := cmd.ErrOrStderr()
+	code = strings.TrimSpace(code)
+	if !connect.ValidBrowserCode(code) {
+		_, _ = fmt.Fprintln(stderr, "archivist connect: this browser code is not valid. Copy the command from Mosaic again.")
+		return &ExitError{Code: ExitUsageError}
+	}
+	dir, err := connect.DefaultStateDir()
+	if err == nil {
+		_, err = connect.TrustBrowser(dir, code, connect.ViaTrust)
+	}
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "archivist connect: the browser was not added: %v\n", err)
+		return &ExitError{Code: ExitGenericError}
+	}
+	_, _ = fmt.Fprintln(cmd.OutOrStdout(), browserTrustedMessage)
+	return nil
+}
+
+// browsersLine is the --status count of browsers that can use this computer.
+func browsersLine() string {
+	dir, err := connect.DefaultStateDir()
+	if err != nil {
+		return "unknown (" + err.Error() + ")"
+	}
+	l, err := connect.LoadBrowsers(dir)
+	if err != nil {
+		return "unreadable (pair again with the command Mosaic shows to rewrite it)"
+	}
+	return strconv.Itoa(len(l.Browsers))
 }
 
 // confirmInBrowser waits for the workspace confirm page (Story 94.3, owner
@@ -723,6 +794,7 @@ func runServiceStatus(cmd *cobra.Command, version string) error {
 	} else {
 		_, _ = fmt.Fprintln(out, "Key:      none (run 'archivist connect --pair CODE' with a code from Mosaic)")
 	}
+	_, _ = fmt.Fprintf(out, "Browsers: %s\n", browsersLine())
 	_, _ = fmt.Fprintf(out, "Log:      %s\n", service.LogPath(home))
 	if line := service.LastLogLine(home); line != "" {
 		_, _ = fmt.Fprintf(out, "Last log: %s\n", connect.Scrub(line))

@@ -49,6 +49,15 @@ type fakeRelay struct {
 	// answers them INVALID_FRAME without closing, as a relay before 78.32.
 	controls []map[string]any
 	oldRelay bool
+	// signing are the signing frames received (Story 94.7); signer, when
+	// set, signs each command send queues as the workspace browser would
+	// (sendUnsigned leaves it unsigned); agents maps the session ids of
+	// signed starts to their agent.
+	signing []map[string]any
+	signer  *testBrowser
+	agents  map[string]string
+	// userKinds lists the user socket's report frames in arrival order.
+	userKinds []string
 }
 
 func newFakeRelay(t *testing.T) *fakeRelay {
@@ -58,7 +67,8 @@ func newFakeRelay(t *testing.T) *fakeRelay {
 	}
 	r := &fakeRelay{t: t, parser: p, sessions: map[string]*websocket.Conn{}, events: map[string][]map[string]any{},
 		seen: map[string]bool{}, queued: map[string][]map[string]any{}, dials: map[string]int{},
-		withhold: map[string]bool{}, frames: map[string][]string{}, unavailable: map[string]bool{}, refused: map[string]string{}}
+		withhold: map[string]bool{}, frames: map[string][]string{}, unavailable: map[string]bool{}, refused: map[string]string{},
+		agents: map[string]string{}}
 	r.srv = httptest.NewServer(http.HandlerFunc(r.serve))
 	t.Cleanup(r.srv.Close)
 	return r
@@ -120,6 +130,11 @@ func (r *fakeRelay) serve(w http.ResponseWriter, req *http.Request) {
 		if json.Unmarshal(data, &x) != nil {
 			continue
 		}
+		if k, _ := x["kind"].(string); sid == "" && (k == "signing" || k == "capabilities" || k == "controls") {
+			r.mu.Lock()
+			r.userKinds = append(r.userKinds, k)
+			r.mu.Unlock()
+		}
 		switch x["kind"] {
 		case "capabilities":
 			var caps struct {
@@ -129,11 +144,14 @@ func (r *fakeRelay) serve(w http.ResponseWriter, req *http.Request) {
 			r.mu.Lock()
 			r.caps = append(r.caps, caps.Agents)
 			r.mu.Unlock()
-		case "controls":
+		case "controls", "signing":
 			r.mu.Lock()
 			old := r.oldRelay
-			if !old {
+			if !old && x["kind"] == "controls" {
 				r.controls = append(r.controls, x)
+			}
+			if !old && x["kind"] == "signing" {
+				r.signing = append(r.signing, x)
 			}
 			r.mu.Unlock()
 			if old {
@@ -196,8 +214,15 @@ func (r *fakeRelay) serve(w http.ResponseWriter, req *http.Request) {
 }
 
 // send queues a command for the user ("" ) or a session socket and pushes it
-// when that socket is connected.
+// when that socket is connected. With a signer, a command that needs a
+// signature and carries none is signed first (signCommand).
 func (r *fakeRelay) send(sid string, cmd map[string]any) {
+	r.signCommand(sid, cmd)
+	r.sendUnsigned(sid, cmd)
+}
+
+// sendUnsigned is send without signing.
+func (r *fakeRelay) sendUnsigned(sid string, cmd map[string]any) {
 	r.mu.Lock()
 	r.queued[sid] = append(r.queued[sid], cmd)
 	c := r.user

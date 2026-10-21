@@ -52,6 +52,12 @@ type Inbound struct {
 	Mode   string
 	Model  string
 	Effort string
+	// Sig is the command's browser signature as received (Story 94.7,
+	// signing.go; nil when absent). It is checked only where a command
+	// needs one, so a deny direction command runs whatever it carries.
+	Sig json.RawMessage
+	// Browser is trust_browser's browser code (fingerprint).
+	Browser string
 }
 
 // DecodeError is a frame outside the closed set. CorrelationID/SessionID are
@@ -80,19 +86,21 @@ type shape struct{ required, optional []string }
 
 var commonFields = []string{"kind", "correlationId", "sessionId"}
 
+// Commands may carry a browser signature, sig (Story 94.7).
 var userShapes = map[string]shape{
 	"presence":          {required: []string{"kind", "online", "agents"}},
-	"start_session":     {required: append(append([]string{}, commonFields...), "agent", "prompt"), optional: []string{"mode", "model", "effort"}},
-	"approval_response": {required: append(append([]string{}, commonFields...), "approvalId", "decision", "reason", "terminalReceipt"), optional: []string{"scope"}},
+	"start_session":     {required: append(append([]string{}, commonFields...), "agent", "prompt"), optional: []string{"mode", "model", "effort", "sig"}},
+	"approval_response": {required: append(append([]string{}, commonFields...), "approvalId", "decision", "reason", "terminalReceipt"), optional: []string{"scope", "sig"}},
+	"trust_browser":     {required: []string{"kind", "correlationId", "browser", "sig"}},
 	"error":             {required: []string{"kind", "code"}},
 }
 
 var sessionShapes = map[string]shape{
-	"user_message":      {required: append(append([]string{}, commonFields...), "text")},
+	"user_message":      {required: append(append([]string{}, commonFields...), "text"), optional: []string{"sig"}},
 	"interrupt":         {required: commonFields},
-	"stop_session":      {required: commonFields},
-	"set_mode":          {required: append(append([]string{}, commonFields...), "mode")},
-	"approval_response": {required: append(append([]string{}, commonFields...), "approvalId", "decision", "reason"), optional: []string{"scope"}},
+	"stop_session":      {required: commonFields, optional: []string{"sig"}},
+	"set_mode":          {required: append(append([]string{}, commonFields...), "mode"), optional: []string{"sig"}},
+	"approval_response": {required: append(append([]string{}, commonFields...), "approvalId", "decision", "reason"), optional: []string{"scope", "sig"}},
 	"ack":               {required: []string{"kind", "correlationId", "seq", "duplicate"}},
 	"error":             {required: []string{"kind", "code"}},
 }
@@ -146,7 +154,7 @@ func Decode(socket Socket, raw []byte) (*Inbound, error) {
 		{"correlationId", &in.CorrelationID}, {"sessionId", &in.SessionID}, {"agent", &in.Agent},
 		{"prompt", &in.Prompt}, {"text", &in.Text}, {"approvalId", &in.ApprovalID},
 		{"decision", &in.Decision}, {"reason", &in.Reason}, {"scope", &in.Scope}, {"code", &in.Code},
-		{"mode", &in.Mode}, {"model", &in.Model}, {"effort", &in.Effort},
+		{"mode", &in.Mode}, {"model", &in.Model}, {"effort", &in.Effort}, {"browser", &in.Browser},
 	} {
 		if !str(f.name, f.dst) {
 			return fail(f.name + " must be a string")
@@ -179,7 +187,17 @@ func Decode(socket Socket, raw []byte) (*Inbound, error) {
 			return fail("invalid correlationId")
 		}
 		return in, nil
+	case "trust_browser":
+		if !validCID(in.CorrelationID, false) {
+			return fail("invalid correlationId")
+		}
+		if !ValidBrowserCode(in.Browser) {
+			return fail("browser is not a browser code")
+		}
+		in.Sig = fields["sig"]
+		return in, nil
 	}
+	in.Sig = fields["sig"]
 
 	// Commands.
 	if !uuidRe.MatchString(in.SessionID) {

@@ -47,6 +47,8 @@ type pendingApproval struct {
 	toolName  string
 	toolUseID string
 	input     json.RawMessage
+	// card is the digest of the card sent for it (Story 94.7).
+	card string
 }
 
 // session drives one relay session: its session socket, its Claude Code
@@ -318,6 +320,13 @@ func timerC(t *time.Timer) <-chan time.Time {
 
 func (s *session) emit(chunks ...Chunk) {
 	for _, c := range chunks {
+		if c["type"] == "tool-approval-request" {
+			// A Claude card: its digest stays with the pending approval.
+			id, _ := c["approvalId"].(string)
+			if p := s.pending[id]; p != nil {
+				p.card = s.cardDigestOf(c)
+			}
+		}
 		for _, out := range s.co.Add(c) {
 			s.outbox.Emit(out)
 		}
@@ -916,14 +925,83 @@ func (s *session) admit(c sessionCmd) bool {
 		ack()
 		return false
 	}
+	// Story 94.7: a message or a mode change runs only when a trusted
+	// browser signed it for this session (stop_session and interrupt need
+	// no signature). The counter is recorded once the command is durable.
+	var signed *signedCommand
+	if s.needsSignature(in) {
+		bind := bindMode(s.id, in)
+		if in.Kind == "user_message" {
+			bind = bindMessage(s.id, s.rec.Agent, in)
+		}
+		var f *signFailure
+		if signed, f = s.d.verifyCommand(in, bind); f != nil {
+			s.refuseCommand(in, f)
+			ack()
+			return false
+		}
+	}
 	prev := append([]string(nil), s.rec.Handled...)
 	s.rec.MarkHandled(in.CorrelationID)
 	if !s.save() {
 		s.rec.Handled = prev // remembered only once durable; the relay redelivers
+		s.d.releaseSigned(signed)
 		return false
 	}
+	s.d.commitSigned(signed)
 	ack()
 	return true
+}
+
+// needsSignature reports whether in must be signed by a trusted browser to
+// run (Story 94.7): a user daemon's user_message, set_mode and allowing
+// approval_response. The session-bound sandbox mode never checks.
+func (s *session) needsSignature(in *Inbound) bool {
+	if s.d.sandbox {
+		return false
+	}
+	switch in.Kind {
+	case "user_message", "set_mode":
+		return true
+	case "approval_response":
+		return in.Decision == "allow"
+	}
+	return false
+}
+
+// refuseCommand reports a command that was not run for its signature: a
+// log line and the session's error chunk (the caller acknowledges it).
+func (s *session) refuseCommand(in *Inbound, f *signFailure) {
+	s.log.Printf("%s %s not run: %s", in.Kind, in.CorrelationID, f.reason)
+	s.emitError(f.message())
+}
+
+// approvalSigned checks an approval answer's signature against the card
+// sent for it (digest card). A failure means the allow is not run (refused
+// and reported); the caller denies the tool call instead, because the relay
+// has already recorded the answer and no timeout deny follows. The returned
+// command is committed once the answer is applied.
+func (s *session) approvalSigned(in *Inbound, card string) (*signedCommand, *signFailure) {
+	if !s.needsSignature(in) {
+		return nil, nil
+	}
+	signed, f := s.d.verifyCommand(in, bindApproval(s.id, card, in))
+	if f != nil {
+		s.refuseCommand(in, f)
+		return nil, f
+	}
+	return signed, nil
+}
+
+// cardDigestOf is the digest of an approval card's descriptor ("" when it
+// has none JSON can carry; then no signed answer can match it).
+func (s *session) cardDigestOf(c Chunk) string {
+	d, err := cardDigest(c["approvalDescriptor"])
+	if err != nil {
+		s.log.Printf("approval card %v: no digest: %v", c["approvalId"], err)
+		return ""
+	}
+	return d
 }
 
 func (s *session) userMessage(ctx context.Context, text string) {
@@ -1012,7 +1090,14 @@ func (s *session) answerApproval(in *Inbound) {
 	if !ok || s.proc == nil {
 		return // unknown or already answered: ack only
 	}
+	signed, f := s.approvalSigned(in, p.card)
 	delete(s.pending, in.ApprovalID)
+	if f != nil {
+		// The allow is not run: the tool call is denied, with no rule kept.
+		s.write(denyFrame(in.ApprovalID, f.denyMessage()))
+		return
+	}
+	defer s.d.commitSigned(signed)
 	if in.Decision == "allow" {
 		s.write(allowFrame(in.ApprovalID, p.input))
 	} else {

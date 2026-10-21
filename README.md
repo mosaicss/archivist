@@ -281,7 +281,7 @@ It installs or updates archivist, then runs:
 ```sh
 archivist connect --pair ABCDE-FGHJK   # redeem the code for a new ak_ key, saved to ~/.archivist/credentials
 archivist connect --install            # run connect as a background user service
-archivist connect --status             # report the service, its ceiling, the saved key and its account
+archivist connect --status             # report the service, its ceiling, the saved key, its account and its browsers
 ```
 
 Before it saves anything, `--pair` names the account the code belongs to and
@@ -373,7 +373,7 @@ macOS: the job is loaded and the daemon in `service.pid` is alive; Windows:
 the task is registered and the daemon in `service.pid` is alive) and a key
 is saved, else 1, and prints the ceiling and the last log line. A loaded launchd job whose
 daemon has stopped shows "loaded, not running"; a job loaded a moment ago gets
-about 5 seconds to write its pid first. `--pair`, `--install`,
+about 5 seconds to write its pid first. `--pair`, `--trust`, `--install`,
 `--uninstall` and `--status` are used one at a time.
 
 #### Windows
@@ -417,6 +417,46 @@ releases have no `SHA256SUMS.sig`; for those run that release's own script,
 `.../install.ps1`), and `ARCHIVIST_RELEASE_BASE_URL` points the script at another release host (for
 testing; `https://`, or `http://` to a loopback host). Each released script is
 stamped with its own tag.
+
+### Commands from the browser are signed
+
+Each browser you use Mosaic in has its own signing key (a WebCrypto ECDSA
+P-256 key that never leaves the browser). The commands that let an agent do
+something on this computer are signed in the browser: starting a session,
+sending a message, changing the permission mode, allowing a tool call, and
+adding another browser. `archivist connect` runs them only when the key is
+one this computer knows and the signed content matches the command: the
+session, the agent, the text you sent, the mode, and, for an approval, the
+exact card you answered. Each signature carries a counter and is accepted
+once. Stopping a session, interrupting a turn and denying a tool call need
+no signature. A command that does not pass is not run and the session shows
+why; a tool call whose allow did not pass is denied instead, with no
+session rule kept.
+
+The browsers this computer knows are listed in
+`~/.archivist/connect/browsers.json` (0600; at most 32, the oldest dropped).
+A browser is added in one of three ways:
+
+- the pairing command Mosaic shows carries the browser's code after the
+  pairing code (`archivist connect --pair ABCDE-FGHJK.<code>`): the code is
+  checked first (a malformed one exits 2 and nothing is sent), only the
+  pairing code is sent to Mosaic, and once the key is saved the browser is
+  added;
+- `archivist connect --trust <code>`, with the code Mosaic shows in the
+  browser to add (prints "This browser can now use this computer.");
+- Connect your computer in Mosaic, from a browser this computer already
+  knows, with the new browser's code.
+
+Pairing with a different account empties the list first; pairing again with
+the same account keeps it. Nothing a server sends adds a browser. A running
+`archivist connect` tells the relay which browsers it knows when it connects
+and again within one ping (20 seconds) of a change, so Mosaic can show the
+one time step to add a new browser. `--status` shows how many browsers this
+computer knows (`Browsers:`). Used counters are kept in
+`~/.archivist/connect/browser-counters.json`; if either file cannot be read,
+signed commands are not run until it is fixed (pairing again rewrites an
+unreadable list; an unreadable counters file has to be removed). Session-bound mode (`--session`, a Mosaic cloud sandbox)
+does not use the list.
 
 ### Running it yourself
 
