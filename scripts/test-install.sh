@@ -25,7 +25,9 @@
 # signed by another key; the unmodified install.sh (release key) against the
 # test signed release; a skill bundle that does not match; a plain http://
 # release URL that is not loopback (refused before any download); and no
-# openssl on PATH.
+# openssl on PATH. On Linux without bwrap or socat the install prints one
+# line naming the missing packages and the apt-get command (both missing, or
+# only socat), none when both are present, and the exit code stays 0.
 
 set -euo pipefail
 
@@ -502,5 +504,64 @@ CODE=$?
 set -e
 assert_refused "no openssl" "$H8" "$CODE" "$OUT" "openssl is needed to check the download"
 pass "no openssl on PATH is refused with nothing installed"
+
+# --- 9. Linux packages for archivist connect: one line when missing ---------
+# A PATH with the install's tools and openssl but no bwrap or socat, plus a
+# logging apt-get stub (never run).
+mkdir -p "$WORK/nopkgs" "$WORK/aptstub" "$WORK/pkgstub"
+for tool in uname mktemp rm tr curl awk head sha256sum tar gzip chmod mkdir cp mv dirname cat openssl id; do
+  ln -s "$(command -v "$tool")" "$WORK/nopkgs/$tool"
+done
+for stub in "$WORK/aptstub/apt-get" "$WORK/pkgstub/bwrap" "$WORK/pkgstub/socat"; do
+  # shellcheck disable=SC2016 # $* and $STUB_LOG expand when the stub runs
+  printf '#!/bin/sh\necho "%s $*" >> "$STUB_LOG"\nexit 0\n' "$(basename "$stub")" > "$stub"
+  chmod 0755 "$stub"
+done
+# install.sh drops sudo when it runs as root.
+SUDO="sudo "
+[ "$(id -u)" = 0 ] && SUDO=""
+PKG_LINE="Archivist connect on Linux also needs bubblewrap and socat. Install with: ${SUDO}apt-get install -y bubblewrap socat"
+H9="$WORK/home9"
+: > "$WORK/calls.log"
+set +e
+OUT="$(RUN_PATH="$WORK/stubs:$WORK/aptstub:$WORK/nopkgs" run_install "$H9" v9.9.9 2>&1)"
+CODE=$?
+set -e
+[ "$CODE" = 0 ] || fail "install without bwrap and socat exited $CODE:
+$OUT"
+[ -x "$H9/.local/bin/archivist" ] || fail "install without bwrap and socat did not install"
+case "$OUT" in *"$PKG_LINE"*) ;; *) fail "no package line:
+$OUT" ;; esac
+[ "$(printf '%s\n' "$OUT" | grep -c 'also needs')" = 1 ] || fail "the package line is not printed once:
+$OUT"
+if grep -q '^apt-get' "$WORK/calls.log"; then fail "apt-get was run"; fi
+pass "missing bwrap and socat print the apt-get line, exit 0"
+
+H10="$WORK/home10"
+set +e
+OUT="$(RUN_PATH="$WORK/stubs:$WORK/aptstub:$WORK/pkgstub:$WORK/nopkgs" run_install "$H10" v9.9.9 2>&1)"
+CODE=$?
+set -e
+[ "$CODE" = 0 ] || fail "install with bwrap and socat exited $CODE:
+$OUT"
+case "$OUT" in *"also needs"*) fail "a package line with bwrap and socat present:
+$OUT" ;; esac
+pass "bwrap and socat present print no package line"
+
+mkdir -p "$WORK/bwrapstub"
+cp "$WORK/pkgstub/bwrap" "$WORK/bwrapstub/bwrap"
+H11="$WORK/home11"
+set +e
+OUT="$(RUN_PATH="$WORK/stubs:$WORK/aptstub:$WORK/bwrapstub:$WORK/nopkgs" run_install "$H11" v9.9.9 2>&1)"
+CODE=$?
+set -e
+[ "$CODE" = 0 ] || fail "install without socat exited $CODE:
+$OUT"
+SOCAT_LINE="Archivist connect on Linux also needs socat. Install with: ${SUDO}apt-get install -y socat"
+[ "$(printf '%s\n' "$OUT" | grep -c 'also needs')" = 1 ] || fail "the package line is not printed once:
+$OUT"
+printf '%s\n' "$OUT" | grep -qxF "$SOCAT_LINE" || fail "no socat only line:
+$OUT"
+pass "only socat missing prints the socat line, exit 0"
 
 echo "install.sh replay: all checks passed"

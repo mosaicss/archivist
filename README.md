@@ -20,7 +20,9 @@ The script installs or updates archivist (`~/.local/bin`, or
 `%LOCALAPPDATA%\Programs\archivist` on Windows) after checking the download
 (see [Verifying a release](#verifying-a-release)), and adds the Claude Code
 skill when `~/.claude/skills` exists. `install.sh` needs `curl`, `tar` and
-`openssl`, which macOS and most Linux systems include. A Homebrew install is upgraded with `brew upgrade`
+`openssl`, which macOS and most Linux systems include. On Linux it also
+prints the install command for `bubblewrap` and `socat` when either is
+missing; `archivist connect` uses them. A Homebrew install is upgraded with `brew upgrade`
 instead (only while the cask is still installed). With a pairing code from the Mosaic workspace it also connects this
 machine; see [One-step connect](#one-step-connect).
 
@@ -80,8 +82,8 @@ into `install.sh`, `install.ps1` and the `archivist` binary.
 - `archivist update` and `archivist update --skill` do the same with the key
   built into the running binary. `archivist update` also keeps the installed
   version when the latest release is older, and leaves an executable binary.
-- The Homebrew cask and the npm package check the skill bundle against the
-  hash written into them at release time.
+- The Homebrew cask checks the skill bundle against the hash written into it
+  at release time.
 - The release files also carry GitHub build provenance:
   `gh attestation verify archivist_v<version>_linux_amd64.tar.gz -R mosaicss/archivist`.
 
@@ -817,7 +819,7 @@ git tag v0.2.23
 git push origin v0.2.23
 ```
 
-`.github/workflows/release.yml` runs four jobs, each with only the
+`.github/workflows/release.yml` runs three jobs, each with only the
 permissions and secrets it uses, and every action pinned by commit SHA:
 
 1. `build` (read only, no secrets): checks the tag, verifies the Go modules,
@@ -833,7 +835,6 @@ permissions and secrets it uses, and every action pinned by commit SHA:
 3. `publish`: verifies again, creates the GitHub Release with every asset, and
    pushes `Casks/archivist.rb` to `mosaic-finance-inc/homebrew-tap` (needs the
    `HOMEBREW_TAP_GITHUB_TOKEN` secret).
-4. `npm`: publishes the npm package only when the `NPM_TOKEN` secret is set.
 
 macOS signing and notarization are not part of the workflow.
 

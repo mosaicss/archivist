@@ -33,6 +33,8 @@
 #                               ::1 or localhost (a local test release).
 #
 # Needs curl, tar and openssl (macOS and most Linux systems have all three).
+# On Linux, it prints the install command for bubblewrap and socat (used by
+# archivist connect) when either is missing; it never runs it.
 # Bash, not sh: pipefail is not POSIX and /bin/sh is often dash.
 
 set -euo pipefail
@@ -301,6 +303,34 @@ brew_update() {
   BIN="$(command -v archivist)" || die "archivist is not on PATH after brew upgrade"
 }
 
+# linux_packages_note: on Linux, archivist connect also uses bubblewrap
+# (bwrap) and socat. When either is missing, print one line naming the
+# missing packages and the install command for the first package manager
+# found. It never runs the command and never fails the install.
+linux_packages_note() {
+  [ "$OS" = Linux ] || return 0
+  local missing="" cmd=""
+  command -v bwrap >/dev/null 2>&1 || missing="bubblewrap"
+  command -v socat >/dev/null 2>&1 || missing="${missing:+$missing }socat"
+  [ -n "$missing" ] || return 0
+  # As root (a container without sudo) the command runs as is.
+  local sudo="sudo "
+  [ "$(id -u 2>/dev/null)" = 0 ] && sudo=""
+  if command -v apt-get >/dev/null 2>&1; then cmd="${sudo}apt-get install -y ${missing}"
+  elif command -v dnf >/dev/null 2>&1; then cmd="${sudo}dnf install -y ${missing}"
+  elif command -v yum >/dev/null 2>&1; then cmd="${sudo}yum install -y ${missing}"
+  elif command -v pacman >/dev/null 2>&1; then cmd="${sudo}pacman -S --needed ${missing}"
+  elif command -v zypper >/dev/null 2>&1; then cmd="${sudo}zypper install -y ${missing}"
+  elif command -v apk >/dev/null 2>&1; then cmd="${sudo}apk add ${missing}"
+  fi
+  local names="${missing// / and }"
+  if [ -n "$cmd" ]; then
+    say "Archivist connect on Linux also needs ${names}. Install with: ${cmd}"
+  else
+    say "Archivist connect on Linux also needs ${names}. Install them with your package manager."
+  fi
+}
+
 service_installed() {
   case "$OS" in
     Darwin) [ -f "${HOME}/Library/LaunchAgents/com.mosaic-finance.archivist.connect.plist" ] ;;
@@ -329,6 +359,7 @@ main() {
     download_and_verify
     install_binary
   fi
+  linux_packages_note
 
   local on_path
   on_path="$(command -v archivist 2>/dev/null || true)"

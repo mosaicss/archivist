@@ -11,9 +11,10 @@
 # read-only build job: goreleaser builds and writes dist/ (archives,
 # SHA256SUMS, skill bundle, CHANGELOG.md, homebrew/Casks/archivist.rb) and
 # publishes nothing; later jobs sign SHA256SUMS, create the GitHub release
-# and push the cask. Builds are reproducible: -trimpath, the commit's
-# timestamp and date, and no `go mod tidy` before the build (the workflow
-# checks go.mod and go.sum instead).
+# and push the cask. The binaries are reproducible (-trimpath, the commit's
+# timestamp and date, and no `go mod tidy` before the build; the workflow
+# checks go.mod and go.sum instead); the archives are not byte-identical
+# across runs.
 
 version: 2
 

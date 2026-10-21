@@ -50,8 +50,8 @@ func TestUpdateChannelRoutingBrew(t *testing.T) {
 	}
 }
 
-// An npm channel file self-updates like any other non-brew channel (the npm
-// package installs the release binary; there is no npm upgrade path).
+// Any channel value other than brew self-updates, an old "npm" value
+// included, and prints no other upgrade command.
 func TestUpdateChannelNPMSelfUpdates(t *testing.T) {
 	tmpHome := t.TempDir()
 	writeChannelFile(t, tmpHome, "npm")

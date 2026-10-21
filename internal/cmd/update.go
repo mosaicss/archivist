@@ -213,8 +213,8 @@ func runUpdate(ctx context.Context, cmd *cobra.Command, current string) error {
 		return nil
 	}
 
-	// Self-replace path: curl-sh, powershell, npm, github-releases, unknown,
-	// or absent channel.
+	// Self-replace path: curl-sh, powershell, github-releases, any other
+	// value (an old npm one too), or absent channel.
 	latest, err := fetchLatestVersion(ctx)
 	if err != nil {
 		_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "archivist update: failed to fetch release info:", err)
@@ -389,7 +389,7 @@ func stageWindowsBinaries(archive, currentName, dir string) (map[string]string, 
 // A failed copy puts the renamed file back. Stale <name>.old-* files of the
 // staged names from earlier swaps, and the legacy <name>.new, are removed best effort (one still running
 // stays until next time); nothing else in dir is touched (it may be a shared
-// folder such as ~/bin or an npm prefix).
+// folder such as ~/bin).
 func swapBinaries(dir string, staged map[string]string) error {
 	names := make([]string, 0, len(staged))
 	for name := range staged {

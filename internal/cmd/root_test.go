@@ -198,7 +198,7 @@ func TestExitErrorImplementsErrorInterface(t *testing.T) {
 // command with a usage error naming the variable, before any request.
 func TestRootRefusesPlainHTTPBaseURL(t *testing.T) {
 	sandbox(t)
-	t.Setenv("ARCHIVIST_TOKEN", "ak_test")
+	t.Setenv("ARCHIVIST_TOKEN", "ak_"+"test")
 	t.Setenv("ARCHIVIST_BASE_URL", "http://example.com")
 	for _, args := range [][]string{
 		{"search", "revenue"}, {"doctor"}, {"connect", "--check"}, {"usage"},

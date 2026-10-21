@@ -28,6 +28,12 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      # The release build checks the same.
+      - name: Verify modules
+        run: |
+          go mod verify
+          go mod tidy -diff
+
       - name: go vet
         run: go vet ./...
 
@@ -95,19 +101,6 @@ jobs:
             || { echo "FAIL: the cask does not carry the skill bundle sha256"; cat dist/homebrew/Casks/archivist.rb; exit 1; }
           echo "cask OK: carries the skill bundle sha256"
 
-      # The npm job's hash injection, against the snapshot SHA256SUMS on
-      # scratch copies of the package files.
-      - name: npm hash injection (snapshot)
-        run: |
-          SUMS=$(ls dist/archivist_v*_SHA256SUMS)
-          VER=$(basename "$SUMS" _SHA256SUMS)
-          VER="${VER#archivist_v}"
-          SCRATCH="$RUNNER_TEMP/npm-inject"
-          mkdir -p "$SCRATCH"
-          cp packages/npm-orchestrator/bin/archivist-install.js packages/npm-orchestrator/package.json "$SCRATCH/"
-          bash scripts/inject-npm-hashes.sh "$SUMS" "$VER" "$SCRATCH/archivist-install.js" "$SCRATCH/package.json"
-          node --check "$SCRATCH/archivist-install.js"
-
       # Story 78.34: the Windows zip carries archivist.exe and the
       # console-less archivistw.exe (GUI subsystem) the logon task runs.
       - name: Verify the Windows archive holds both executables
@@ -134,7 +127,7 @@ jobs:
           sudo apt-get install -y shellcheck
 
       - name: shellcheck install.sh
-        run: shellcheck scripts/install.sh scripts/test-install.sh scripts/install-release-tools.sh scripts/inject-npm-hashes.sh
+        run: shellcheck scripts/install.sh scripts/test-install.sh scripts/install-release-tools.sh
 
       - name: install.sh replay (fake release, stub service managers)
         run: bash scripts/test-install.sh
