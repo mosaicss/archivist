@@ -7,7 +7,7 @@ Names read local/hosted: search/search_filings is search in the archivist CLI an
 - read_passage: a passage and its neighbours, to read around a search result.
 - toc/filing_toc: a filing's section headers.
 - read_section/read_filing_section: the passages of one whole section.
-- Hosted list_filings: a company's filings newest first by symbol, with form, date, period and a filing url; filters formtype, date_from and date_to. Use it for the latest filing of a form or every filing in a range.
+- Hosted list_filings: a company's filings newest first by symbol, with form, date, period, reaction and a filing url; filters formtype, date_from, date_to and min_reaction_z. reaction is the share move measured around each filing, not caused by it (z in standard deviations), or null; min_reaction_z keeps filings whose move is at least that many standard deviations either way. Use it for the latest filing of a form, every filing in a range, or the filings that moved a stock most.
 - Hosted find_in_filing: whether one filing mentions a term, by filing_id; found, total_matches and the best matches with section, snippet and url. Quote a phrase for an exact match. found false is an answer, not an error; use it instead of repeated searches to check that a term is absent.
 - Hosted search and fetch return the same passages in a compact shape: search gives id, title and url per passage; fetch takes an id and returns the passage text with its filing metadata.
 - When next_cursor is not null, repeat the call with the same arguments and cursor set to next_cursor.

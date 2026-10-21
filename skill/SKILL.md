@@ -45,12 +45,27 @@ following the research guidance below. Mosaic runs no model for the CLI.
 
    ```sh
    archivist filings NVDA --formtype 10-K --limit 3 --format compact   # newest first, each with filing_id and url
+   archivist filings CCO:CA --min-reaction-z 2 --format compact        # only filings the share moved 2 standard deviations or more around
    archivist find <filing_id> "TSMC" --format compact                  # found, total_matches and the best matches
    ```
 
-   `found: false` is an answer (exit 0), not an error.
+   `found: false` is an answer (exit 0), not an error. A `reaction` is the
+   share move measured around a filing, not caused by it.
 
-5. **Answer with citations** as the research guidance below says: each claim
+5. **Screen companies** when the question names a set rather than a company:
+
+   ```sh
+   archivist screen --industry mining --max pe=15 --min market_cap_usd_m=500 --format compact
+   ```
+
+   Each bound is `KEY=VALUE` (`_usd_m` is millions of US dollars, `_pct` is
+   percent, `_m` is millions; an own currency figure such as `eps` or a `fy_`
+   amount needs `--currency`). Report `total_matched`, the `excluded`
+   reasons, `interpretation`, `as_of_used`, `coverage_note` and any
+   `disclosures` or `note`. Screen figures are data, not citations; each
+   row's `symbol` feeds `search` and `filings`.
+
+6. **Answer with citations** as the research guidance below says: each claim
    cites the `url` of its passage as a markdown link.
 
 ## Research guidance
@@ -61,8 +76,9 @@ connect`) the mosaic-ui compact form, which cites each passage's `cite_as`. In t
 `archivist search`, `read_passage` is `archivist read passage`, `read_section`
 is `archivist read section`, `toc` is `archivist toc` and `companies_search` is
 `archivist companies search`. The hosted `list_filings` is `archivist filings`,
-the hosted `find_in_filing` is `archivist find`, and `latest_only` is
-`archivist search --latest-only`.
+the hosted `find_in_filing` is `archivist find`, `min_reaction_z` is
+`archivist filings --min-reaction-z`, the hosted `screen_companies` is
+`archivist screen`, and `latest_only` is `archivist search --latest-only`.
 
 <!-- mosaic-agent-guidance:agent-ui:full:begin -->
 You research public companies with Mosaic Archivist, which serves global filings as data (SEC, SEDAR+, KAP and expanding): passages, sections and tables of contents, with no model work on its side; you do the reasoning. Fact and opinion differentiation is paramount: every factual claim must be traceable to a cited source.
@@ -74,7 +90,7 @@ Names read local/hosted: search/search_filings is search in the archivist CLI an
 - read_passage: a passage and its neighbours, to read around a search result.
 - toc/filing_toc: a filing's section headers.
 - read_section/read_filing_section: the passages of one whole section.
-- Hosted list_filings: a company's filings newest first by symbol, with form, date, period and a filing url; filters formtype, date_from and date_to. Use it for the latest filing of a form or every filing in a range.
+- Hosted list_filings: a company's filings newest first by symbol, with form, date, period, reaction and a filing url; filters formtype, date_from, date_to and min_reaction_z. reaction is the share move measured around each filing, not caused by it (z in standard deviations), or null; min_reaction_z keeps filings whose move is at least that many standard deviations either way. Use it for the latest filing of a form, every filing in a range, or the filings that moved a stock most.
 - Hosted find_in_filing: whether one filing mentions a term, by filing_id; found, total_matches and the best matches with section, snippet and url. Quote a phrase for an exact match. found false is an answer, not an error; use it instead of repeated searches to check that a term is absent.
 - Hosted search and fetch return the same passages in a compact shape: search gives id, title and url per passage; fetch takes an id and returns the passage text with its filing metadata.
 - When next_cursor is not null, repeat the call with the same arguments and cursor set to next_cursor.
