@@ -1,0 +1,19 @@
+{
+  "hosts": [
+    "sec.gov",
+    "sedarplus.ca",
+    "sedarplus.com",
+    "sedar.com",
+    "kap.org.tr",
+    "quotemedia.com",
+    "tmx.com",
+    "tmxmoney.com",
+    "tmxinfoservices.com",
+    "tmxwebstore.com",
+    "financialfilings.com",
+    "financialreports.eu",
+    "r2.cloudflarestorage.com"
+  ],
+  "bucketPrefix": "themcp-v2-filings",
+  "gcsHost": "storage.googleapis.com"
+}

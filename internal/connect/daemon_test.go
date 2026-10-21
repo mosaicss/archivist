@@ -70,9 +70,14 @@ type harness struct {
 	// activityFile and resumeFrom are the session-bound run's
 	// Config.ActivityFile and SessionStart.ResumeFrom (Story 78.37).
 	activityFile, resumeFrom string
-	d                        *Daemon
-	cancel                   context.CancelFunc
-	done                     chan error
+	// browser is the trusted workspace browser key (Story 94.7): start
+	// trusts it and the fake relay signs commands with it, unless
+	// relayUnsigned leaves the relay's commands unsigned.
+	browser       *testBrowser
+	relayUnsigned bool
+	d             *Daemon
+	cancel        context.CancelFunc
+	done          chan error
 }
 
 func newHarness(t *testing.T, fakeCfg map[string]any) *harness {
@@ -132,6 +137,13 @@ func (h *harness) start() {
 	}
 	logger := NewLogger(h.log)
 	logger.SetDebug(h.debugLog)
+	if h.browser == nil {
+		h.browser = newTestBrowser(h.t)
+	}
+	h.browser.trust(h.t, filepath.Join(h.home, ".archivist", "connect"))
+	if !h.relayUnsigned {
+		h.relay.set(func(r *fakeRelay) { r.signer = h.browser })
+	}
 	d, err := New(Config{
 		API:      api,
 		RelayURL: h.relay.url(),

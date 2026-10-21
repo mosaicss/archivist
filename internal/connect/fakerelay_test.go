@@ -49,6 +49,25 @@ type fakeRelay struct {
 	// answers them INVALID_FRAME without closing, as a relay before 78.32.
 	controls []map[string]any
 	oldRelay bool
+	// signing are the signing frames received (Story 94.7); signer, when
+	// set, signs each command send queues as the workspace browser would
+	// (sendUnsigned leaves it unsigned); agents maps the session ids of
+	// signed starts to their agent.
+	signing []map[string]any
+	signer  *testBrowser
+	agents  map[string]string
+	// context is the context blocks the signer signs in front of a turn's
+	// text (Story 94.7 A1; "" = none).
+	context string
+	// refuseSigning, when set, answers a dial with the signing query flag
+	// HTTP 400 with this error code (a relay before Story 94.7 A1 answers
+	// INVALID_QUERY); refuseSigningDials > 0 limits that to the next so many
+	// such dials. queries lists each dial's query.
+	refuseSigning      string
+	refuseSigningDials int
+	queries            []string
+	// userKinds lists the user socket's report frames in arrival order.
+	userKinds []string
 }
 
 func newFakeRelay(t *testing.T) *fakeRelay {
@@ -58,7 +77,8 @@ func newFakeRelay(t *testing.T) *fakeRelay {
 	}
 	r := &fakeRelay{t: t, parser: p, sessions: map[string]*websocket.Conn{}, events: map[string][]map[string]any{},
 		seen: map[string]bool{}, queued: map[string][]map[string]any{}, dials: map[string]int{},
-		withhold: map[string]bool{}, frames: map[string][]string{}, unavailable: map[string]bool{}, refused: map[string]string{}}
+		withhold: map[string]bool{}, frames: map[string][]string{}, unavailable: map[string]bool{}, refused: map[string]string{},
+		agents: map[string]string{}}
 	r.srv = httptest.NewServer(http.HandlerFunc(r.serve))
 	t.Cleanup(r.srv.Close)
 	return r
@@ -69,6 +89,25 @@ func (r *fakeRelay) url() string { return "ws" + strings.TrimPrefix(r.srv.URL, "
 func (r *fakeRelay) serve(w http.ResponseWriter, req *http.Request) {
 	if !strings.HasPrefix(req.Header.Get("Authorization"), "Bearer eyJ") || req.URL.Query().Get("role") != "daemon" {
 		http.Error(w, `{"code":"MISSING_CREDENTIALS"}`, http.StatusUnauthorized)
+		return
+	}
+	r.mu.Lock()
+	r.queries = append(r.queries, req.URL.RawQuery)
+	refuse := r.refuseSigning
+	if refuse == "" || !req.URL.Query().Has("signing") {
+		refuse = ""
+	} else if r.refuseSigningDials > 0 {
+		r.refuseSigningDials--
+		if r.refuseSigningDials == 0 {
+			r.refuseSigning = ""
+		}
+	}
+	r.mu.Unlock()
+	if refuse != "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		body, _ := json.Marshal(map[string]string{"error": refuse, "code": refuse})
+		_, _ = w.Write(body)
 		return
 	}
 	sid := ""
@@ -120,6 +159,11 @@ func (r *fakeRelay) serve(w http.ResponseWriter, req *http.Request) {
 		if json.Unmarshal(data, &x) != nil {
 			continue
 		}
+		if k, _ := x["kind"].(string); sid == "" && (k == "signing" || k == "capabilities" || k == "controls") {
+			r.mu.Lock()
+			r.userKinds = append(r.userKinds, k)
+			r.mu.Unlock()
+		}
 		switch x["kind"] {
 		case "capabilities":
 			var caps struct {
@@ -129,11 +173,14 @@ func (r *fakeRelay) serve(w http.ResponseWriter, req *http.Request) {
 			r.mu.Lock()
 			r.caps = append(r.caps, caps.Agents)
 			r.mu.Unlock()
-		case "controls":
+		case "controls", "signing":
 			r.mu.Lock()
 			old := r.oldRelay
-			if !old {
+			if !old && x["kind"] == "controls" {
 				r.controls = append(r.controls, x)
+			}
+			if !old && x["kind"] == "signing" {
+				r.signing = append(r.signing, x)
 			}
 			r.mu.Unlock()
 			if old {
@@ -196,8 +243,15 @@ func (r *fakeRelay) serve(w http.ResponseWriter, req *http.Request) {
 }
 
 // send queues a command for the user ("" ) or a session socket and pushes it
-// when that socket is connected.
+// when that socket is connected. With a signer, a command that needs a
+// signature and carries none is signed first (signCommand).
 func (r *fakeRelay) send(sid string, cmd map[string]any) {
+	r.signCommand(sid, cmd)
+	r.sendUnsigned(sid, cmd)
+}
+
+// sendUnsigned is send without signing.
+func (r *fakeRelay) sendUnsigned(sid string, cmd map[string]any) {
 	r.mu.Lock()
 	r.queued[sid] = append(r.queued[sid], cmd)
 	c := r.user

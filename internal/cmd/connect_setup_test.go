@@ -129,6 +129,12 @@ func TestConnectSetupFlagsAreExclusive(t *testing.T) {
 		{"connect", "--pair", "ABCDE-FGHJK", "--web-search"},
 		// Story 94.3: no flag skips the pairing confirmation.
 		{"connect", "--pair", "ABCDE-FGHJK", "--yes"},
+		// Story 94.7: --trust is one setup flag, takes no other argument.
+		{"connect", "--trust", testBrowserCode, "--install"},
+		{"connect", "--trust", testBrowserCode, "--pair", "ABCDE-FGHJK"},
+		{"connect", "--trust", testBrowserCode, "--check"},
+		{"connect", "--trust", testBrowserCode, "stray"},
+		{"connect", "--trust", testBrowserCode, "--web-search"},
 	} {
 		if out, code := runRoot(t, args...); code != ExitUsageError {
 			t.Errorf("%v: exit %d\n%s", args, code, out)

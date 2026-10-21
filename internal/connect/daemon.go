@@ -10,7 +10,6 @@ import (
 	"regexp"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -105,12 +104,25 @@ type Daemon struct {
 	activityFile string
 	// Codex model list probe (Story 78.32): codexProbed closes when it ends;
 	// codexCat (guarded by mu) is empty after a failure.
-	probeOnce       sync.Once
-	codexProbed     chan struct{}
-	codexCat        []modelEntry
-	controlsRefused atomic.Bool
-	// controlsSentAt is the last controls send (unix ns, 0 = none pending).
-	controlsSentAt atomic.Int64
+	probeOnce   sync.Once
+	codexProbed chan struct{}
+	codexCat    []modelEntry
+	// controlsWin and signingWin recognize an older relay's refusal of the
+	// controls and signing frames (refusalWindow).
+	controlsWin refusalWindow
+	signingWin  refusalWindow
+	// signingOnce logs once per daemon that the relay does not take the
+	// signing query flag (link.dialSigning).
+	signingOnce sync.Once
+	// counters guards signed command counters (Story 94.7, browsers.go).
+	counters *counterStore
+	// signingLive and signingSent are the user socket and the computer id
+	// and browser list last announced on it; computerRun is the computer id
+	// used when browsers.json cannot hold one (all guarded by signingMu).
+	signingMu   sync.Mutex
+	signingLive *live
+	signingSent string
+	computerRun string
 
 	mu       sync.Mutex
 	signIn   string // harness awaiting its posture-1 sign-in (guarded by mu)
@@ -140,7 +152,8 @@ func New(cfg Config) (*Daemon, error) {
 		log:         cfg.Log, parser: parser, store: store, detect: cfg.Detect, runner: cfg.Runner,
 		environ: cfg.Environ, tempDir: cfg.TempDir, dial: cfg.Dial, signIn: cfg.SignIn, chatAPIURL: cfg.ChatAPIURL,
 		sessions: map[string]*session{}, starting: map[string]bool{}, tokens: map[string]bool{},
-		maxMode: cfg.MaxMode, webSearch: cfg.WebSearch, activityFile: cfg.ActivityFile, codexProbed: make(chan struct{})}
+		maxMode: cfg.MaxMode, webSearch: cfg.WebSearch, activityFile: cfg.ActivityFile, codexProbed: make(chan struct{}),
+		counters: newCounterStore(store.Dir())}
 	if d.maxMode == "" {
 		d.maxMode = DefaultMaxMode
 	}
@@ -233,11 +246,16 @@ func (d *Daemon) Run(ctx context.Context) error {
 
 	d.startCodexProbe(sessCtx)
 	user := newLink("user socket", UserSocket, "", d.api, d.relayURL, nil, d.log)
+	user.signingOnce = &d.signingOnce
 	if d.dial != nil {
 		user.dial = d.dial
 	}
-	user.onError = d.relayRefusedControls
+	user.onError = d.relayRefusedFrame
+	// Story 94.7: before the capabilities, the browsers this computer
+	// trusts; announced again when the list changes (checked at each ping).
+	user.onPing = d.announceSigning
 	user.onConnect = func(l *live) {
+		d.announceSigning(l)
 		det := d.detect(ctx)
 		caps := det.Capabilities()
 		// Available only for a harness this daemon drives (fixed at
@@ -276,6 +294,8 @@ func (d *Daemon) Run(ctx context.Context) error {
 			// executed (the decision is not applied, nothing restarts).
 			d.log.Printf("terminal approval receipt %s for session %s acknowledged, not executed", in.CorrelationID, in.SessionID)
 			l.Send(commandAck(UserSocket, in.CorrelationID, in.SessionID))
+		case "trust_browser":
+			d.trustBrowser(l, in)
 		}
 	}
 	err := user.run(ctx)
@@ -373,6 +393,24 @@ func (d *Daemon) handleStart(ctx context.Context, l *live, in *Inbound, resumeFr
 		d.log.Printf("start_session %s: session record unreadable, awaiting redelivery: %v", in.CorrelationID, err)
 		return nil
 	}
+	// Story 94.7: a user daemon starts only a start signed by a trusted
+	// browser (after the duplicate checks, before chat-api's). The
+	// session-bound sandbox mode takes its start from the command line.
+	var signed *signedCommand
+	if !d.sandbox {
+		var f *signFailure
+		if signed, f = d.verifyCommand(in, bindStart(in)); f != nil {
+			d.log.Printf("start_session %s not run: %s", in.CorrelationID, f.reason)
+			d.refuseStart(ctx, l, in, f.message(), true)
+			return nil
+		}
+	}
+	started := false
+	defer func() {
+		if !started {
+			d.releaseSigned(signed)
+		}
+	}()
 	if !d.agentUsable(in.Agent) {
 		d.refuseStart(ctx, l, in, fmt.Sprintf("The %s agent is not available in this archivist connect.", in.Agent), true)
 		return nil
@@ -435,7 +473,7 @@ func (d *Daemon) handleStart(ctx context.Context, l *live, in *Inbound, resumeFr
 	}
 	rec := &SessionRecord{SessionID: sid, Agent: in.Agent, StartCorrelationID: in.CorrelationID, Cwd: cwd,
 		ExpiresAt: info.ExpiresAt, Status: "active", CreatedAt: now,
-		Mode: string(d.startMode(in)), Model: in.Model, Effort: in.Effort}
+		Mode: string(d.startMode(in, signedPayloadOf(signed))), Model: in.Model, Effort: in.Effort}
 	if src != nil {
 		rec.ClaudeSessionID, rec.CodexThreadID = src.ClaudeSessionID, src.CodexThreadID
 	}
@@ -452,6 +490,8 @@ func (d *Daemon) handleStart(ctx context.Context, l *live, in *Inbound, resumeFr
 	if src != nil {
 		d.retire(src, sid)
 	}
+	started = true
+	d.commitSigned(signed)
 	ack()
 	d.log.Printf("session %s starting (cwd %s, mode %s, ceiling %s)", sid, cwd, rec.Mode, d.maxMode)
 	return d.attach(ctx, rec, in.Prompt, true, res)

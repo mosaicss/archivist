@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/mosaicss/archivist/internal/taskscope"
@@ -607,34 +608,67 @@ func trimControls(maxMode, defaultMode Mode, agents []agentControls) ([]byte, in
 // answers INVALID_FRAME (logged once, onError); the capabilities stand.
 func (d *Daemon) sendControls(ctx context.Context, l *live) {
 	frame := d.controls(ctx)
-	sent := time.Now().UnixNano()
-	d.controlsSentAt.Store(sent)
+	sent := d.controlsWin.arm()
 	if !l.Send(frame) {
-		d.controlsSentAt.CompareAndSwap(sent, 0)
+		d.controlsWin.disarm(sent)
 		d.log.Printf("controls not sent: the user socket closed")
 	}
 }
 
-// controlsRefusalWindow bounds how long after a controls send an
-// INVALID_FRAME counts as its refusal (a var so tests can shorten it).
+// controlsRefusalWindow bounds how long after a controls or signing send
+// an INVALID_FRAME counts as its refusal (a var so tests can shorten it).
 var controlsRefusalWindow = 10 * time.Second
 
-// relayRefusedControls handles a user socket relay error; true when it is
-// the first INVALID_FRAME within controlsRefusalWindow of a controls send
-// (an older relay refusing it, logged only once). A relay that accepts the
-// frame answers nothing, so every later error takes the usual path.
-func (d *Daemon) relayRefusedControls(code string) bool {
+// refusalWindow recognizes an older relay's refusal of a frame kind it does
+// not know (controls, Story 78.32; signing, Story 94.7): such a relay
+// answers INVALID_FRAME and keeps the socket, while a relay that accepts the
+// frame answers nothing. The first INVALID_FRAME within
+// controlsRefusalWindow of a send is that refusal (logged once per daemon).
+type refusalWindow struct {
+	// sentAt is the last send (unix ns, 0 = none pending).
+	sentAt  atomic.Int64
+	refused atomic.Bool
+}
+
+// arm records a send; disarm withdraws it when the send failed.
+func (w *refusalWindow) arm() int64 {
+	sent := time.Now().UnixNano()
+	w.sentAt.Store(sent)
+	return sent
+}
+
+func (w *refusalWindow) disarm(sent int64) { w.sentAt.CompareAndSwap(sent, 0) }
+
+// claim takes an INVALID_FRAME as the refusal of the pending send; first
+// reports whether it is the first refusal this daemon saw.
+func (w *refusalWindow) claim(code string) (claimed, first bool) {
 	if code != "INVALID_FRAME" {
-		return false
+		return false, false
 	}
-	sent := d.controlsSentAt.Load()
-	if sent == 0 || time.Since(time.Unix(0, sent)) > controlsRefusalWindow || !d.controlsSentAt.CompareAndSwap(sent, 0) {
-		return false
+	sent := w.sentAt.Load()
+	if sent == 0 || time.Since(time.Unix(0, sent)) > controlsRefusalWindow || !w.sentAt.CompareAndSwap(sent, 0) {
+		return false, false
 	}
-	if d.controlsRefused.CompareAndSwap(false, true) {
-		d.log.Printf("the relay refused the controls frame (an older relay): plain capabilities kept, session controls unavailable")
+	return true, w.refused.CompareAndSwap(false, true)
+}
+
+// relayRefusedFrame handles a user socket relay error; true when it is an
+// older relay refusing the signing frame (sent first) or the controls frame.
+// Every other error takes the usual path.
+func (d *Daemon) relayRefusedFrame(code string) bool {
+	if ok, first := d.signingWin.claim(code); ok {
+		if first {
+			d.log.Printf("the relay refused the signing frame (an older relay): commands keep working as before")
+		}
+		return true
 	}
-	return true
+	if ok, first := d.controlsWin.claim(code); ok {
+		if first {
+			d.log.Printf("the relay refused the controls frame (an older relay): plain capabilities kept, session controls unavailable")
+		}
+		return true
+	}
+	return false
 }
 
 // ─── per session ────────────────────────────────────────────────────────────
@@ -655,11 +689,23 @@ func (d *Daemon) reclamp(rec *SessionRecord) bool {
 }
 
 // startMode is a new session's mode: the requested one or the default,
-// clamped to the ceiling.
-func (d *Daemon) startMode(in *Inbound) Mode {
+// capped, for a signed start (Story 94.7), at the higher of the signed mode
+// (the default when the browser signed none) and the default, then clamped
+// to the ceiling.
+func (d *Daemon) startMode(in *Inbound, signed *signedPayload) Mode {
 	m, ok := ParseMode(in.Mode)
 	if !ok {
 		m = d.defaultMode()
+	}
+	if signed != nil {
+		limit := d.defaultMode()
+		if sm, ok := ParseMode(signed.Mode); ok && sm.rank() > limit.rank() {
+			limit = sm
+		}
+		if m.rank() > limit.rank() {
+			d.log.Printf("start_session %s: mode %s lowered to %s, the mode the browser asked for", in.CorrelationID, m, limit)
+			m = limit
+		}
 	}
 	if c := ClampMode(m, d.maxMode); c != m {
 		d.log.Printf("start_session %s: mode %s clamped to this machine's ceiling %s", in.CorrelationID, m, c)

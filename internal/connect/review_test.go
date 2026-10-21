@@ -1,6 +1,7 @@
 package connect
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -33,7 +34,10 @@ func TestReviewHandledIDOnlyAfterDurableSave(t *testing.T) {
 	st.failSaves = 1
 	st.mu.Unlock()
 	cid := "msg-durable"
-	raw := `{"kind":"user_message","correlationId":"` + cid + `","sessionId":"` + sid + `","text":"echo two"}`
+	cmd := map[string]any{"kind": "user_message", "correlationId": cid, "sessionId": sid, "text": "echo two"}
+	h.relay.signCommand(sid, cmd) // the redelivery carries the same signature
+	b, _ := json.Marshal(cmd)
+	raw := string(b)
 	h.relay.sendRaw(sid, raw)
 	time.Sleep(500 * time.Millisecond)
 	if h.relay.acked(cid) || len(h.relay.eventsOf(sid, "finish")) != 1 {

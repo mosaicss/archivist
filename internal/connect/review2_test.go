@@ -224,6 +224,7 @@ func TestStartSaveFailureAwaitsRedelivery(t *testing.T) {
 	st.mu.Unlock()
 	s := h.api.addSession("claude")
 	cmd := map[string]any{"kind": "start_session", "correlationId": "start-durable", "sessionId": s.SessionID, "agent": "claude", "prompt": "echo started"}
+	h.relay.signCommand("", cmd) // the redelivery carries the same signature
 	raw, _ := json.Marshal(cmd)
 	h.relay.sendRaw("", string(raw))
 	time.Sleep(500 * time.Millisecond)

@@ -231,6 +231,8 @@ type codexPending struct {
 	id         jsonrpc2.ID
 	kind       string // command | file | mcp
 	toolCallID string
+	// card is the digest of the card sent for it (Story 94.7).
+	card string
 }
 
 // spawnCodex starts the app-server and runs the handshake and the
@@ -796,11 +798,12 @@ func (s *session) codexServerRequest(ev codexEvent) {
 		if s.proc != nil {
 			s.proc.Snapshot()
 		}
-		if !s.emitApproval(chunks[0]) {
+		card, ok := s.emitApproval(chunks[0])
+		if !ok {
 			reply(map[string]any{"decision": "decline"})
 			return
 		}
-		c.pending[approvalID] = &codexPending{id: ev.ID, kind: kind, toolCallID: h.ItemID}
+		c.pending[approvalID] = &codexPending{id: ev.ID, kind: kind, toolCallID: h.ItemID, card: card}
 	case "mcpServer/elicitation/request":
 		var e codexElicitation
 		_ = json.Unmarshal(ev.Params, &e)
@@ -839,12 +842,13 @@ func (s *session) codexServerRequest(ev codexEvent) {
 			reply(map[string]any{"action": "decline", "content": nil, "_meta": nil})
 			return
 		}
-		if !s.emitApproval(Chunk{"type": "tool-approval-request", "approvalId": approvalID, "toolCallId": toolCallID,
-			"approvalDescriptor": descriptor}) {
+		card, ok := s.emitApproval(Chunk{"type": "tool-approval-request", "approvalId": approvalID, "toolCallId": toolCallID,
+			"approvalDescriptor": descriptor})
+		if !ok {
 			reply(map[string]any{"action": "decline", "content": nil, "_meta": nil})
 			return
 		}
-		c.pending[approvalID] = &codexPending{id: ev.ID, kind: "mcp", toolCallID: toolCallID}
+		c.pending[approvalID] = &codexPending{id: ev.ID, kind: "mcp", toolCallID: toolCallID, card: card}
 	case "item/tool/requestUserInput":
 		s.log.Printf("codex asked for user input; answered with no answers")
 		reply(map[string]any{"answers": map[string]any{}})
@@ -882,8 +886,14 @@ func (s *session) codexAnswerApproval(in *Inbound) {
 	if !ok {
 		return // unknown or already answered: ack only
 	}
+	signed, f := s.approvalSigned(in, p.card)
 	delete(c.pending, in.ApprovalID)
-	decision := codexDecision(in.Decision, in.Scope)
+	decision, scope := codexDecision(in.Decision, in.Scope), in.Scope
+	if f != nil {
+		// The allow is not run: declined like a deny, with no session scope.
+		decision, scope = codexDecision("deny", ""), ""
+	}
+	defer s.d.commitSigned(signed)
 	var result any = map[string]any{"decision": decision}
 	if p.kind == "mcp" {
 		// Elicitation actions: accept, decline, cancel. "Allow for session"
@@ -907,8 +917,8 @@ func (s *session) codexAnswerApproval(in *Inbound) {
 		return
 	}
 	s.emitCodex(s.ctr.ApprovalResponse(in.ApprovalID, decision))
-	if in.Scope != "" {
-		data := map[string]any{"approvalId": in.ApprovalID, "scope": in.Scope}
+	if scope != "" {
+		data := map[string]any{"approvalId": in.ApprovalID, "scope": scope}
 		if p.toolCallID != "" {
 			data["toolCallId"] = p.toolCallID
 		}
@@ -916,21 +926,25 @@ func (s *session) codexAnswerApproval(in *Inbound) {
 	}
 }
 
-// emitApproval queues an approval card; false means the card was not sent,
-// so the request is declined instead of waiting for an answer that cannot
-// come: a card that cannot be shown whole (Story 94.4, approvalcard.go) or
-// one the outbox dropped.
-func (s *session) emitApproval(c Chunk) bool {
+// emitApproval queues an approval card, with filing source links removed
+// (stripCard), and returns its digest (Story 94.7, cardDigestOf); false
+// means the card was not sent, so the request is declined instead of
+// waiting for an answer that cannot come: a card that cannot be shown
+// whole (Story 94.4, approvalcard.go) or one the outbox dropped. Codex
+// keeps its own request; an allow only accepts it.
+func (s *session) emitApproval(c Chunk) (string, bool) {
 	s.flushCoalesced()
 	if cardRefusal(c, s.outbox.Fits) != "" {
 		s.log.Printf("approval card %v cannot be shown whole; declined", c["approvalId"])
-		return false
+		return "", false
 	}
+	c = stripCard(c)
+	card := s.cardDigestOf(c)
 	if s.outbox.Emit(c) == 0 {
 		s.log.Printf("approval card %v could not be sent; declined", c["approvalId"])
-		return false
+		return "", false
 	}
-	return true
+	return card, true
 }
 
 // emitCodex sends translated chunks, holding data-usage back so a turn
