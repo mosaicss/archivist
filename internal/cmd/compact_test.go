@@ -1034,3 +1034,28 @@ func TestFilingsMinReactionZOutOfRangeSendsNothing(t *testing.T) {
 		t.Errorf("out of range values sent %d requests", n)
 	}
 }
+
+// Compact keeps a measured reaction object whole; a null reaction is dropped
+// like every null member.
+func TestFilingsMinReactionZCompactKeepsReaction(t *testing.T) {
+	srv := newStub(t, 200, nil, reactionFilingsBody(t))
+	stdout, stderr, code := runVerb(t, srv.URL, "filings", "CCO:CA", "--min-reaction-z", "2", "--format", "compact")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	if u := srv.last(); u != "/research/filings?limit=10&min_reaction_z=2&symbol=CCO%3ACA" {
+		t.Errorf("request %q", u)
+	}
+	want := `"reaction":{"event_session":"2025-11-06","z":-3.456,"abnormal_return":-7.1,"kind":"company"}`
+	if !strings.Contains(stdout, want) || strings.Count(stdout, `"reaction"`) != 1 {
+		t.Errorf("compact output lacks the reaction object or kept the null one:\n%s", stdout)
+	}
+	got := decodeCompact(t, stdout)
+	rows, _ := got["filings"].([]any)
+	if len(rows) != 2 {
+		t.Fatalf("filings %d: %s", len(rows), stdout)
+	}
+	if r, _ := rows[0].(map[string]any)["reaction"].(map[string]any); r["z"] != -3.456 {
+		t.Errorf("first row reaction %v", rows[0])
+	}
+}
