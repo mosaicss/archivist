@@ -34,6 +34,11 @@ import (
 //
 // The signature is ECDSA P-256 with SHA-256 over the decoded payload bytes
 // (WebCrypto's {name:"ECDSA", hash:"SHA-256"}, IEEE P1363 r||s form).
+//
+// Every payload names the computer it is for (`computer`, the id this
+// daemon announces in its signing frame, browsers.go), and a turn signs the
+// context blocks the workspace puts in front of the user's text
+// (`contextSha256`) as well as the text itself (`textSha256`).
 
 // Envelope limits (base64url characters).
 const (
@@ -41,10 +46,6 @@ const (
 	maxSigPayloadChars = 2048
 	sigChars           = 86 // 64 bytes
 	digestChars        = 43 // 32 bytes
-	// maxPromptPrefix bounds the context blocks the workspace may put in
-	// front of the signed text (prompt binding); a filter block may list
-	// many filing types.
-	maxPromptPrefix = 16384
 	// maxSafeInteger is JavaScript's Number.MAX_SAFE_INTEGER.
 	maxSafeInteger = 1<<53 - 1
 )
@@ -101,13 +102,17 @@ type signedPayload struct {
 	Scope      string
 	CardSha256 string
 	Browser    string
-	has        map[string]bool
+	// Computer is the computer id the payload is addressed to; Context is
+	// a turn's contextSha256.
+	Computer string
+	Context  string
+	has      map[string]bool
 }
 
 // payloadShapes are the fields of each payload kind beyond v, kind,
-// counter and iat.
+// counter, iat and computer.
 var payloadShapes = map[string]shape{
-	"turn":              {required: []string{"agent", "textSha256"}, optional: []string{"sessionId", "mode"}},
+	"turn":              {required: []string{"agent", "textSha256", "contextSha256"}, optional: []string{"sessionId", "mode"}},
 	"user_message":      {required: []string{"sessionId", "textSha256"}},
 	"set_mode":          {required: []string{"sessionId", "mode"}},
 	"approval_response": {required: []string{"sessionId", "approvalId", "decision", "scope", "cardSha256"}},
@@ -258,7 +263,7 @@ func decodeSignedPayload(b []byte) (*signedPayload, error) {
 	if !ok {
 		return nil, fmt.Errorf("payload kind %q is unknown", kind)
 	}
-	full := shape{required: append([]string{"v", "kind", "counter", "iat"}, sh.required...), optional: sh.optional}
+	full := shape{required: append([]string{"v", "kind", "counter", "iat", "computer"}, sh.required...), optional: sh.optional}
 	if reason := exactFields(fields, full); reason != "" {
 		return nil, errors.New("payload " + reason)
 	}
@@ -279,7 +284,7 @@ func decodeSignedPayload(b []byte) (*signedPayload, error) {
 	}{
 		{"agent", &p.Agent}, {"textSha256", &p.TextSha256}, {"sessionId", &p.SessionID}, {"mode", &p.Mode},
 		{"approvalId", &p.ApprovalID}, {"decision", &p.Decision}, {"scope", &p.Scope}, {"cardSha256", &p.CardSha256},
-		{"browser", &p.Browser},
+		{"browser", &p.Browser}, {"computer", &p.Computer}, {"contextSha256", &p.Context},
 	} {
 		raw, present := fields[f.name]
 		if !present {
@@ -293,8 +298,12 @@ func decodeSignedPayload(b []byte) (*signedPayload, error) {
 	switch {
 	case p.has["agent"] && p.Agent != "claude" && p.Agent != "codex":
 		return nil, errors.New("payload agent is not claude or codex")
+	case !ValidComputerID(p.Computer):
+		return nil, errors.New("payload computer is not a computer id")
 	case p.has["textSha256"] && !validDigest(p.TextSha256):
 		return nil, errors.New("payload textSha256 is not a digest")
+	case p.has["contextSha256"] && !validDigest(p.Context):
+		return nil, errors.New("payload contextSha256 is not a digest")
 	case p.has["cardSha256"] && !validDigest(p.CardSha256):
 		return nil, errors.New("payload cardSha256 is not a digest")
 	case p.has["browser"] && !validDigest(p.Browser):
@@ -370,41 +379,30 @@ func strictObject(b []byte) (map[string]json.RawMessage, error) {
 
 // ─── bindings ───────────────────────────────────────────────────────────────
 
-// textMatches reports whether text is the signed text (textSha256), or the
-// signed text after the workspace's context blocks: one or more
-// "[Search filters: …]" or "[Attached filing: …]" blocks joined by a blank
-// line, at most maxPromptPrefix bytes, then a blank line.
-func textMatches(text, textSha256 string) bool {
-	if sha256b64u([]byte(text)) == textSha256 {
-		return true
-	}
-	for i := 0; i <= maxPromptPrefix && i+2 <= len(text); i++ {
-		j := strings.Index(text[i:], "\n\n")
-		if j < 0 || i+j > maxPromptPrefix {
-			return false
-		}
-		i += j
-		if contextPrefix(text[:i]) && sha256b64u([]byte(text[i+2:])) == textSha256 {
-			return true
-		}
-	}
-	return false
-}
-
-// contextPrefix reports a run of workspace context blocks joined by "\n\n".
-// A block may hold single line breaks (a filter block lists several filing
-// types one per line).
-func contextPrefix(prefix string) bool {
-	if prefix == "" {
+// promptMatches reports whether text is the signed context followed by the
+// signed text: text = P + T with SHA-256(P) = contextSha256 and SHA-256(T)
+// = textSha256, at any split point (P may be empty: no context blocks).
+// P is whatever the browser rendered and signed; its shape is not checked.
+func promptMatches(text, contextSha256, textSha256 string) bool {
+	want, err := base64.RawURLEncoding.Strict().DecodeString(contextSha256)
+	if err != nil || len(want) != sha256.Size {
 		return false
 	}
-	for _, block := range strings.Split(prefix, "\n\n") {
-		if !strings.HasSuffix(block, "]") ||
-			(!strings.HasPrefix(block, "[Search filters: ") && !strings.HasPrefix(block, "[Attached filing: ")) {
+	// The prefix digests are computed incrementally (Sum leaves the running
+	// state as it is); the rest is hashed only where the prefix matches.
+	h := sha256.New()
+	sum, next := make([]byte, 0, sha256.Size), make([]byte, 1)
+	for i := 0; ; i++ {
+		sum = h.Sum(sum[:0])
+		if bytes.Equal(sum, want) && sha256b64u([]byte(text[i:])) == textSha256 {
+			return true
+		}
+		if i == len(text) {
 			return false
 		}
+		next[0] = text[i]
+		h.Write(next)
 	}
-	return true
 }
 
 // ─── card digest (RFC 8785) ─────────────────────────────────────────────────
@@ -627,6 +625,9 @@ func (d *Daemon) verifyCommand(in *Inbound, bind func(p *signedPayload) string) 
 	if err != nil {
 		return nil, mismatch("browser fp:%s: %v", shortFP(fp), err)
 	}
+	if computer := d.computerID(); p.Computer != computer {
+		return nil, mismatch("browser fp:%s: signed %s is for another computer", shortFP(fp), p.Kind)
+	}
 	if why := bind(p); why != "" {
 		return nil, mismatch("browser fp:%s: signed %s does not match: %s", shortFP(fp), p.Kind, why)
 	}
@@ -664,7 +665,7 @@ func bindStart(in *Inbound) func(p *signedPayload) string {
 			return "kind"
 		case p.Agent != in.Agent:
 			return "agent"
-		case !textMatches(in.Prompt, p.TextSha256):
+		case !promptMatches(in.Prompt, p.Context, p.TextSha256):
 			return "text"
 		}
 		return ""
@@ -682,7 +683,7 @@ func bindMessage(sessionID, agent string, in *Inbound) func(p *signedPayload) st
 				return "session"
 			case p.Agent != agent:
 				return "agent"
-			case !textMatches(in.Text, p.TextSha256):
+			case !promptMatches(in.Text, p.Context, p.TextSha256):
 				return "text"
 			}
 			return ""
@@ -751,35 +752,56 @@ func bindTrust(in *Inbound) func(p *signedPayload) string {
 
 // ─── signing frame ──────────────────────────────────────────────────────────
 
-// signingFrame tells the relay that this daemon checks signatures and which
-// browsers it trusts: {"kind":"signing","v":1,"browsers":[fp...]}.
-func signingFrame(browsers []string) []byte {
+// signingFrame tells the relay that this daemon checks signatures, which
+// computer it is (the id signed payloads name) and which browsers it
+// trusts: {"kind":"signing","v":1,"computer":id,"browsers":[fp...]}.
+func signingFrame(computer string, browsers []string) []byte {
 	if browsers == nil {
 		browsers = []string{}
 	}
 	b, _ := json.Marshal(struct {
 		Kind     string   `json:"kind"`
 		V        int      `json:"v"`
+		Computer string   `json:"computer"`
 		Browsers []string `json:"browsers"`
-	}{"signing", 1, browsers})
+	}{"signing", 1, computer, browsers})
 	return b
 }
 
+// computerID is this computer's id (browsers.json, created on first need).
+// When the list cannot be read or written, an id made for this run is used
+// instead, so the signing frame and the checks still agree.
+func (d *Daemon) computerID() string {
+	id, err := EnsureComputer(d.store.Dir())
+	if err == nil {
+		return id
+	}
+	d.signingMu.Lock()
+	defer d.signingMu.Unlock()
+	if d.computerRun == "" {
+		d.computerRun = NewComputerID()
+		d.log.Printf("computer id not saved, using one for this run: %v", err)
+	}
+	return d.computerRun
+}
+
 // announceSigning sends the signing frame on l when l is a new socket or
-// the trusted list changed since the last announcement (checked at each
-// ping, and after a trust_browser). An unreadable list announces none.
+// the computer id or trusted list changed since the last announcement
+// (checked at each ping, and after a trust_browser). An unreadable list
+// announces none.
 func (d *Daemon) announceSigning(l *live) {
 	var fps []string
+	computer := d.computerID()
 	list, err := LoadBrowsers(d.store.Dir())
-	state := ""
+	state := computer + ";"
 	if err != nil {
-		state = "error: " + err.Error()
+		state += "error: " + err.Error()
 	} else {
 		fps = list.Fingerprints()
 		if len(fps) > MaxBrowsers {
 			fps = fps[len(fps)-MaxBrowsers:]
 		}
-		state = strings.Join(fps, ",")
+		state += strings.Join(fps, ",")
 	}
 	d.signingMu.Lock()
 	if d.signingLive == l && d.signingSent == state {
@@ -792,7 +814,7 @@ func (d *Daemon) announceSigning(l *live) {
 		d.log.Printf("trusted browsers unreadable, none announced: %v", err)
 	}
 	sent := d.signingWin.arm()
-	if !l.Send(signingFrame(fps)) {
+	if !l.Send(signingFrame(computer, fps)) {
 		d.signingWin.disarm(sent)
 		// Not sent: forget it, so the next ping announces the list again.
 		d.signingMu.Lock()

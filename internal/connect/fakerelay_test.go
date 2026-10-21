@@ -56,6 +56,13 @@ type fakeRelay struct {
 	signing []map[string]any
 	signer  *testBrowser
 	agents  map[string]string
+	// context is the context blocks the signer signs in front of a turn's
+	// text (Story 94.7 A1; "" = none).
+	context string
+	// noSigningFlag answers a dial with the signing query flag HTTP 400, as
+	// a relay before Story 94.7 A1 does; queries lists each dial's query.
+	noSigningFlag bool
+	queries       []string
 	// userKinds lists the user socket's report frames in arrival order.
 	userKinds []string
 }
@@ -79,6 +86,14 @@ func (r *fakeRelay) url() string { return "ws" + strings.TrimPrefix(r.srv.URL, "
 func (r *fakeRelay) serve(w http.ResponseWriter, req *http.Request) {
 	if !strings.HasPrefix(req.Header.Get("Authorization"), "Bearer eyJ") || req.URL.Query().Get("role") != "daemon" {
 		http.Error(w, `{"code":"MISSING_CREDENTIALS"}`, http.StatusUnauthorized)
+		return
+	}
+	r.mu.Lock()
+	r.queries = append(r.queries, req.URL.RawQuery)
+	refuse := r.noSigningFlag && req.URL.Query().Has("signing")
+	r.mu.Unlock()
+	if refuse {
+		http.Error(w, `{"code":"INVALID_QUERY"}`, http.StatusBadRequest)
 		return
 	}
 	sid := ""

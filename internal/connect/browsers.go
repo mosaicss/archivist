@@ -1,6 +1,7 @@
 package connect
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,6 +22,12 @@ import (
 // verification and announces the list to the relay (the signing frame), so
 // the workspace knows which browsers can drive this computer. Nothing a
 // server sends ever adds to it.
+//
+// The file also holds this computer's id (`computer`, Story 94.7 A1): 16
+// random bytes, base64url, made the first time it is needed and kept from
+// then on, pairing included; a new id comes only with a new file. The
+// daemon announces it in its signing frame, and every signed payload names
+// the computer it is for.
 
 // File names in the state directory.
 const (
@@ -46,11 +53,58 @@ type TrustedBrowser struct {
 }
 
 // BrowserList is browsers.json: the account the computer was paired with
-// ("" = not known) and its trusted browsers, oldest first.
+// ("" = not known), this computer's id ("" = none yet) and its trusted
+// browsers, oldest first.
 type BrowserList struct {
 	Version  int              `json:"version"`
 	Account  string           `json:"account"`
+	Computer string           `json:"computer,omitempty"`
 	Browsers []TrustedBrowser `json:"browsers"`
+}
+
+// computerIDBytes is the size of a computer id before encoding (22
+// base64url characters).
+const computerIDBytes = 16
+
+// NewComputerID makes a computer id: 16 random bytes, base64url.
+func NewComputerID() string {
+	b := make([]byte, computerIDBytes)
+	_, _ = rand.Read(b) // crypto/rand.Read never fails (Go 1.24+)
+	return b64u(b)
+}
+
+// ValidComputerID reports a well formed computer id: 22 base64url
+// characters.
+func ValidComputerID(s string) bool {
+	return len(s) == 22 && b64uRe.MatchString(s)
+}
+
+// ensureComputer gives l a computer id when it has none (or a malformed
+// one); it reports whether it did.
+func (l *BrowserList) ensureComputer() bool {
+	if ValidComputerID(l.Computer) {
+		return false
+	}
+	l.Computer = NewComputerID()
+	return true
+}
+
+// EnsureComputer returns this computer's id from the list in dir, making
+// and saving one first when the list has none.
+func EnsureComputer(dir string) (string, error) {
+	browserListMu.Lock()
+	defer browserListMu.Unlock()
+	l, err := LoadBrowsers(dir)
+	if err != nil {
+		return "", err
+	}
+	if !l.ensureComputer() {
+		return l.Computer, nil
+	}
+	if err := SaveBrowsers(dir, l); err != nil {
+		return "", err
+	}
+	return l.Computer, nil
 }
 
 // browserListMu serializes this process's read-modify-write of the list.
@@ -141,7 +195,11 @@ func TrustBrowser(dir, fp, via string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	made := l.ensureComputer()
 	if !l.Add(fp, via, time.Now()) {
+		if made {
+			return false, SaveBrowsers(dir, l)
+		}
 		return false, nil
 	}
 	return true, SaveBrowsers(dir, l)
@@ -150,7 +208,8 @@ func TrustBrowser(dir, fp, via string) (bool, error) {
 // PairBrowsers records a pairing with account (the paired account email):
 // a list kept for another account is emptied (one with no account recorded
 // is kept and takes this account), then fp, when not "", is trusted (via
-// "pair"). An unreadable list is replaced.
+// "pair"). The computer id is kept; an unreadable list is replaced, with a
+// new id.
 func PairBrowsers(dir, account, fp string) error {
 	if fp != "" && !ValidBrowserCode(fp) {
 		return errors.New("not a browser code")
@@ -165,6 +224,7 @@ func PairBrowsers(dir, account, fp string) error {
 		l.Browsers = nil
 	}
 	l.Account = account
+	l.ensureComputer()
 	if fp != "" {
 		l.Add(fp, ViaPair, time.Now())
 	}

@@ -425,13 +425,34 @@ P-256 key that never leaves the browser). The commands that let an agent do
 something on this computer are signed in the browser: starting a session,
 sending a message, changing the permission mode, allowing a tool call, and
 adding another browser. `archivist connect` runs them only when the key is
-one this computer knows and the signed content matches the command: the
-session, the agent, the text you sent, the mode, and, for an approval, the
-exact card you answered. Each signature carries a counter and is accepted
-once. Stopping a session, interrupting a turn and denying a tool call need
-no signature. A command that does not pass is not run and the session shows
-why; a tool call whose allow did not pass is denied instead, with no
-session rule kept.
+one this computer knows and the signed content matches the command: this
+computer, the session, the agent, the text you sent, the search filter and
+attached filing lines Mosaic puts in front of that text, the mode, and, for
+an approval, the exact card you answered. Each signature carries a counter
+and is accepted once. Stopping a session, interrupting a turn and denying a
+tool call need no signature. A command that does not pass is not run and
+the session shows why; a tool call whose allow did not pass is denied
+instead, with no session rule kept.
+
+- **This computer.** Each computer has its own id, made the first time it
+  is needed and kept in `browsers.json` (pairing again keeps it; a new id
+  comes only with a new file). `archivist connect` announces it with the
+  browser list, and every signed command names the computer it is for; a
+  command for another computer is not run.
+- **Search filters and attached filings.** The browser signs the exact
+  lines Mosaic adds in front of your message (search filters, an attached
+  filing) together with the message, so a message runs only with the lines
+  the browser sent.
+- **Delivery.** `archivist connect` asks the relay for signed commands
+  (`signing=1` on its sockets). A relay that does not know that request
+  refuses the connection (HTTP 400); `archivist connect` then connects
+  without it, logs that once, and keeps working as before for that socket.
+- **Filing links on approval cards.** Links to filing sources (regulator,
+  exchange and filing vendor document URLs) are removed from an approval
+  card before it is sent and signed, the same way Mosaic removes them from
+  agent answers: a command such as `curl https://www.sec.gov/...` shows as
+  `curl (source link removed)`. Allowing it still runs the command the
+  agent asked for, unchanged.
 
 The browsers this computer knows are listed in
 `~/.archivist/connect/browsers.json` (0600; at most 32, the oldest dropped).

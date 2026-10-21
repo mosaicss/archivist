@@ -226,6 +226,10 @@ type link struct {
 	// socket's signing frame check, Story 94.7).
 	onPing func(l *live)
 	dial   func(ctx context.Context, u string, opts *websocket.DialOptions) (*websocket.Conn, *http.Response, error)
+	// noSigning is set once the relay refused the signing query flag
+	// (HTTP 400, a relay before Story 94.7 A1): this link then dials
+	// without it for the rest of its life.
+	noSigning bool
 	// connected is closed after the first successful dial (tests, status).
 	connectedOnce sync.Once
 	connected     chan struct{}
@@ -236,15 +240,24 @@ func newLink(name string, socket Socket, sessionID string, api API, relayURL str
 		outbox: outbox, log: log, dial: websocket.Dial, connected: make(chan struct{})}
 }
 
+// signingQuery is the query flag that tells the relay this daemon checks
+// browser signatures (Story 94.7 A1): the relay then delivers commands with
+// their `sig`; to a socket without it, the relay leaves `sig` out.
+const signingQuery = "&signing=1"
+
 func (k *link) socketURL(ticket string) (string, error) {
+	query := "?role=daemon"
+	if !k.noSigning {
+		query += signingQuery
+	}
 	if k.socket == SessionSocket {
-		return k.relayURL + "/sessions/" + url.PathEscape(k.sessionID) + "/ws?role=daemon", nil
+		return k.relayURL + "/sessions/" + url.PathEscape(k.sessionID) + "/ws" + query, nil
 	}
 	sub, err := ticketSubject(ticket)
 	if err != nil {
 		return "", err
 	}
-	return k.relayURL + "/users/" + url.PathEscape(sub) + "/ws?role=daemon", nil
+	return k.relayURL + "/users/" + url.PathEscape(sub) + "/ws" + query, nil
 }
 
 // run keeps the socket up until ctx ends or a terminal condition:
@@ -302,6 +315,13 @@ func (k *link) run(ctx context.Context) error {
 			}
 			if k.socket == SessionSocket && (status == http.StatusNotFound || status == http.StatusConflict) {
 				return ErrSessionInactive
+			}
+			if status == http.StatusBadRequest && !k.noSigning {
+				// An older relay refuses the unknown query flag: dial again
+				// without it, now, and from then on for this link.
+				k.noSigning = true
+				k.log.Printf("%s: the relay refused the signing flag (an older relay); connecting without it", k.name)
+				continue
 			}
 			k.log.Printf("%s: relay dial failed (HTTP %d, ticket fp:%s), retrying: %v", k.name, status, TicketFingerprint(ticket.Ticket), err)
 			if err := retry(); err != nil {

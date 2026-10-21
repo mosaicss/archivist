@@ -926,17 +926,19 @@ func (s *session) codexAnswerApproval(in *Inbound) {
 	}
 }
 
-// emitApproval queues an approval card and returns its digest (Story 94.7,
-// cardDigestOf); false means the card was not sent, so the request is
-// declined instead of waiting for an answer that cannot come: a card that
-// cannot be shown whole (Story 94.4, approvalcard.go) or one the outbox
-// dropped.
+// emitApproval queues an approval card, with filing source links removed
+// (stripCard), and returns its digest (Story 94.7, cardDigestOf); false
+// means the card was not sent, so the request is declined instead of
+// waiting for an answer that cannot come: a card that cannot be shown
+// whole (Story 94.4, approvalcard.go) or one the outbox dropped. Codex
+// keeps its own request; an allow only accepts it.
 func (s *session) emitApproval(c Chunk) (string, bool) {
 	s.flushCoalesced()
 	if cardRefusal(c, s.outbox.Fits) != "" {
 		s.log.Printf("approval card %v cannot be shown whole; declined", c["approvalId"])
 		return "", false
 	}
+	c = stripCard(c)
 	card := s.cardDigestOf(c)
 	if s.outbox.Emit(c) == 0 {
 		s.log.Printf("approval card %v could not be sent; declined", c["approvalId"])

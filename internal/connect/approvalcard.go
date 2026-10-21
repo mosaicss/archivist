@@ -24,8 +24,16 @@ const (
 
 // claudeApprovalCard is the tool-approval-request for one Claude
 // can_use_tool request (request decoded with decodeNumbers): the request
-// itself as the descriptor, plus the session scope.
+// itself as the descriptor, plus the session scope, with filing source
+// links removed (stripCard). The harness still gets the request's own
+// input when the call is allowed (session.go answerApproval).
 func claudeApprovalCard(requestID string, request map[string]any) Chunk {
+	return stripCard(claudeRawCard(requestID, request))
+}
+
+// claudeRawCard is claudeApprovalCard before filing source links are
+// removed.
+func claudeRawCard(requestID string, request map[string]any) Chunk {
 	toolCallID, _ := request["tool_use_id"].(string)
 	if toolCallID == "" {
 		toolCallID = requestID
@@ -40,24 +48,45 @@ func claudeApprovalCard(requestID string, request map[string]any) Chunk {
 	return Chunk{"type": "tool-approval-request", "approvalId": requestID, "toolCallId": toolCallID, "approvalDescriptor": descriptor}
 }
 
-// claudeCardFor builds the card of a raw can_use_tool request; ok is false
-// when the request is not a JSON object.
+// claudeCardFor builds the card of a raw can_use_tool request before
+// filing source links are removed (claudeRawCard); ok is false when the
+// request is not a JSON object.
 func claudeCardFor(requestID string, request json.RawMessage) (Chunk, bool) {
 	var m map[string]any
 	if decodeNumbers(request, &m) != nil || m == nil {
 		return nil, false
 	}
-	return claudeApprovalCard(requestID, m), true
+	return claudeRawCard(requestID, m), true
+}
+
+// stripCard is an approval card with filing source links removed from
+// every string of its descriptor (Story 94.7 A1, filinglinks.go): the card
+// the daemon hashes and sends.
+func stripCard(c Chunk) Chunk {
+	d, ok := c["approvalDescriptor"]
+	if !ok {
+		return c
+	}
+	out := make(Chunk, len(c))
+	for k, v := range c {
+		out[k] = v
+	}
+	out["approvalDescriptor"] = stripFilingDescriptor(d)
+	return out
 }
 
 // cardRefusal says why an approval card cannot be shown whole ("" when it
 // can): a shell command longer than previewBytes, or a card that does not
-// fit one relay frame unreduced (fits: Outbox.Fits).
+// fit one relay frame unreduced (fits: Outbox.Fits). c is the card as the
+// harness asked; the card sent is c with filing source links removed
+// (stripCard), so the command length holds for both and the size for the
+// card sent.
 func cardRefusal(c Chunk, fits func(Chunk) bool) string {
-	if len(cardCommand(c)) > previewBytes {
+	shown := stripCard(c)
+	if len(cardCommand(c)) > previewBytes || len(cardCommand(shown)) > previewBytes {
 		return cardCommandTooLong
 	}
-	if !fits(c) {
+	if !fits(shown) {
 		return cardTooLarge
 	}
 	return ""

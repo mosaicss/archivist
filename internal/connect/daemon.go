@@ -113,11 +113,13 @@ type Daemon struct {
 	signingWin  refusalWindow
 	// counters guards signed command counters (Story 94.7, browsers.go).
 	counters *counterStore
-	// signingLive and signingSent are the user socket and the browser list
-	// last announced on it (guarded by signingMu).
+	// signingLive and signingSent are the user socket and the computer id
+	// and browser list last announced on it; computerRun is the computer id
+	// used when browsers.json cannot hold one (all guarded by signingMu).
 	signingMu   sync.Mutex
 	signingLive *live
 	signingSent string
+	computerRun string
 
 	mu       sync.Mutex
 	signIn   string // harness awaiting its posture-1 sign-in (guarded by mu)

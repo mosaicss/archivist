@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/json"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -19,6 +20,9 @@ type testBrowser struct {
 	key  *ecdsa.PrivateKey
 	spki []byte
 	fp   string
+	// dir is the state directory of the computer the browser signs for:
+	// its payloads name that computer's id (browsers.json).
+	dir string
 
 	mu      sync.Mutex
 	counter int64
@@ -46,14 +50,29 @@ func (b *testBrowser) nextCounter() int64 {
 }
 
 // sign wraps fields (the kind's own fields) into a signed payload with the
-// next counter and returns the sig envelope.
+// next counter and returns the sig envelope. As the workspace does, it adds
+// the computer id (read from the computer's browsers.json, b.dir) and, for
+// a turn, the digest of an empty context, unless fields set them; a field
+// set to nil is left out.
 func (b *testBrowser) sign(kind string, fields map[string]any) map[string]any {
 	return b.signWithCounter(kind, b.nextCounter(), fields)
 }
 
 func (b *testBrowser) signWithCounter(kind string, counter int64, fields map[string]any) map[string]any {
 	p := map[string]any{"v": 1, "kind": kind, "counter": counter, "iat": time.Now().UnixMilli()}
+	if b.dir != "" {
+		if l, err := LoadBrowsers(b.dir); err == nil && l.Computer != "" {
+			p["computer"] = l.Computer
+		}
+	}
+	if kind == "turn" {
+		p["contextSha256"] = textHash("")
+	}
 	for k, v := range fields {
+		if v == nil {
+			delete(p, k)
+			continue
+		}
 		p[k] = v
 	}
 	payload, err := json.Marshal(p)
@@ -76,12 +95,14 @@ func (b *testBrowser) signBytes(payload []byte) map[string]any {
 	return map[string]any{"v": 1, "key": b64u(b.spki), "payload": b64u(payload), "sig": b64u(sig)}
 }
 
-// trust adds the browser to the trusted list in dir.
+// trust adds the browser to the trusted list in dir; it then signs for
+// that computer.
 func (b *testBrowser) trust(t *testing.T, dir string) {
 	t.Helper()
 	if _, err := TrustBrowser(dir, b.fp, ViaPair); err != nil {
 		t.Fatal(err)
 	}
+	b.dir = dir
 }
 
 // textHash is the workspace's textSha256.
@@ -90,18 +111,28 @@ func textHash(s string) string { return sha256b64u([]byte(s)) }
 // signCommand signs cmd in place, as the workspace does, when the relay has
 // a signer and cmd needs a signature and carries none: a start or a
 // message as a turn, a mode change, an allowing answer to a card the relay
-// received (its digest computed from the event as the relay stored it).
+// received (its digest computed from the event as the relay stored it). A
+// turn's prompt is the relay's context (r.context, "" unless a test sets
+// it) followed by the user's text when it starts with it.
 func (r *fakeRelay) signCommand(sid string, cmd map[string]any) {
 	r.mu.Lock()
-	b := r.signer
+	b, context := r.signer, r.context
 	r.mu.Unlock()
 	if b == nil || cmd["sig"] != nil {
 		return
 	}
 	str := func(k string) string { s, _ := cmd[k].(string); return s }
+	turn := func(prompt string) map[string]any {
+		p := ""
+		if strings.HasPrefix(prompt, context) {
+			p = context
+		}
+		return map[string]any{"contextSha256": textHash(p), "textSha256": textHash(prompt[len(p):])}
+	}
 	switch cmd["kind"] {
 	case "start_session":
-		f := map[string]any{"agent": str("agent"), "textSha256": textHash(str("prompt"))}
+		f := turn(str("prompt"))
+		f["agent"] = str("agent")
 		if m := str("mode"); m != "" {
 			f["mode"] = m
 		}
@@ -117,7 +148,9 @@ func (r *fakeRelay) signCommand(sid string, cmd map[string]any) {
 			cmd["sig"] = b.sign("user_message", map[string]any{"sessionId": str("sessionId"), "textSha256": textHash(str("text"))})
 			return
 		}
-		cmd["sig"] = b.sign("turn", map[string]any{"agent": agent, "sessionId": str("sessionId"), "textSha256": textHash(str("text"))})
+		f := turn(str("text"))
+		f["agent"], f["sessionId"] = agent, str("sessionId")
+		cmd["sig"] = b.sign("turn", f)
 	case "set_mode":
 		cmd["sig"] = b.sign("set_mode", map[string]any{"sessionId": str("sessionId"), "mode": str("mode")})
 	case "approval_response":

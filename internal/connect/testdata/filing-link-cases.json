@@ -1,0 +1,177 @@
+{
+  "description": "Story 94.7 A1.4: approval descriptors before and after filing source links are removed. Go asserts strip(input) equals expected; the workspace asserts stripFilingLinksDeep(expected) is unchanged.",
+  "cases": [
+    {
+      "input": {
+        "tool_name": "Bash",
+        "input": {
+          "command": "curl -s https://www.sec.gov/Archives/edgar/data/320193/000032019324000123/aapl-20240928.htm",
+          "description": "Fetch the filing"
+        }
+      },
+      "expected": {
+        "tool_name": "Bash",
+        "input": {
+          "command": "curl -s (source link removed)",
+          "description": "Fetch the filing"
+        }
+      }
+    },
+    {
+      "input": {
+        "tool_name": "Bash",
+        "input": {
+          "command": "curl https://example.com/data.json && echo done"
+        }
+      },
+      "expected": {
+        "tool_name": "Bash",
+        "input": {
+          "command": "curl https://example.com/data.json && echo done"
+        }
+      }
+    },
+    {
+      "input": {
+        "command": "wget http://efts.sec.gov/LATEST/search-index?q=apple, then wget https://www.sedarplus.ca/x."
+      },
+      "expected": {
+        "command": "wget (source link removed), then wget (source link removed)."
+      }
+    },
+    {
+      "input": {
+        "message": "See [the 10-K](https://www.sec.gov/ix?doc=/a.htm) and ![chart](https://kap.org.tr/img.png) and [ok](https://example.com)"
+      },
+      "expected": {
+        "message": "See the 10-K and chart and [ok](https://example.com)"
+      }
+    },
+    {
+      "input": {
+        "message": "Autolinks <https://www.tmx.com/a> and <www.quotemedia.com/b> stay out; <https://example.org> stays"
+      },
+      "expected": {
+        "message": "Autolinks (source link removed) and (source link removed) stay out; <https://example.org> stays"
+      }
+    },
+    {
+      "input": {
+        "message": "Bare www.sedar.com/page and www.example.com/page"
+      },
+      "expected": {
+        "message": "Bare (source link removed) and www.example.com/page"
+      }
+    },
+    {
+      "input": {
+        "message": "[ref]: https://financialfilings.com/doc \"Title\"\nnext line"
+      },
+      "expected": {
+        "message": "(source link removed)\nnext line"
+      }
+    },
+    {
+      "input": {
+        "message": "GCS https://storage.googleapis.com/themcp-v2-filings-pdf/a.pdf and https://storage.googleapis.com/other-bucket/a.pdf and https://themcp-v2-filings-html.storage.googleapis.com/x.html"
+      },
+      "expected": {
+        "message": "GCS (source link removed) and https://storage.googleapis.com/other-bucket/a.pdf and (source link removed)"
+      }
+    },
+    {
+      "input": {
+        "message": "Subdomain https://data.r2.cloudflarestorage.com/obj and lookalike https://notsec.gov.example.com/x and https://sec.gov.evil.example/x"
+      },
+      "expected": {
+        "message": "Subdomain (source link removed) and lookalike https://notsec.gov.example.com/x and https://sec.gov.evil.example/x"
+      }
+    },
+    {
+      "input": {
+        "message": "Upper case HTTPS://WWW.SEC.GOV/Archives and trailing punctuation (https://tmxmoney.com/quote)."
+      },
+      "expected": {
+        "message": "Upper case (source link removed) and trailing punctuation ((source link removed))."
+      }
+    },
+    {
+      "input": {
+        "nested": [
+          {
+            "url": "https://financialreports.eu/r/1"
+          },
+          "plain text",
+          42,
+          true,
+          null
+        ],
+        "meta": {
+          "codex_approval_kind": "mcp_tool_call",
+          "tool_params": {
+            "url": "https://sedarplus.com/doc"
+          }
+        }
+      },
+      "expected": {
+        "nested": [
+          {
+            "url": "(source link removed)"
+          },
+          "plain text",
+          42,
+          true,
+          null
+        ],
+        "meta": {
+          "codex_approval_kind": "mcp_tool_call",
+          "tool_params": {
+            "url": "(source link removed)"
+          }
+        }
+      }
+    },
+    {
+      "input": {
+        "changes": [
+          {
+            "path": "/tmp/notes.md",
+            "kind": {
+              "type": "add"
+            },
+            "diff": "+Source: https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany\n+Other: https://example.com/a\n"
+          }
+        ],
+        "reason": "create notes"
+      },
+      "expected": {
+        "changes": [
+          {
+            "path": "/tmp/notes.md",
+            "kind": {
+              "type": "add"
+            },
+            "diff": "+Source: (source link removed)\n+Other: https://example.com/a\n"
+          }
+        ],
+        "reason": "create notes"
+      }
+    },
+    {
+      "input": {
+        "message": "No links here at all, just text with a dot.com and sec.gov mentioned"
+      },
+      "expected": {
+        "message": "No links here at all, just text with a dot.com and sec.gov mentioned"
+      }
+    },
+    {
+      "input": {
+        "message": "Digit before scheme 1https://www.sec.gov/a and letter before scheme xhttps://www.sec.gov/b"
+      },
+      "expected": {
+        "message": "Digit before scheme 1(source link removed) and letter before scheme xhttps://(source link removed)"
+      }
+    }
+  ]
+}

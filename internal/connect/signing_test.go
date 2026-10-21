@@ -30,6 +30,16 @@ const (
 	vecApprovalSig     = "BjJwtxrc4t0LbuORJ38ys_9vpn4uGq2xZXyYk6JdKFyRdOOlccY_2JIV6Bb25ixKgQP4ndf_PKkjVIrXb1UUYQ"
 	vecTurnPayload     = "eyJ2IjoxLCJraW5kIjoidHVybiIsImNvdW50ZXIiOjgsImlhdCI6MTc5MjU0MDgwMDAwMSwiYWdlbnQiOiJjbGF1ZGUiLCJ0ZXh0U2hhMjU2IjoieUhieFBlMG9mR180NnFhMndqLWZ5N01CeHRhVnV0aGNhTm5kQ3NseWtBMCIsIm1vZGUiOiJhc2sifQ"
 	vecTurnSig         = "Rswzs0ONnt_W7pRMEt3BNUtMDogWkhq92akFA-s-PBTqnQHuwlyFqn2soVxL7xlZljagG3JTKSRc-H5k8xn1ZA"
+
+	// Amendment A1 vectors, signed by the same WebCrypto key: payloads that
+	// name the computer, and a turn that signs its context blocks.
+	vecComputer          = "AAECAwQFBgcICQoLDA0ODw"
+	vecContext           = "[Search filters: Company: Apple Inc.]\n\n"
+	vecContextHash       = "bf0oqlwB3j9-cVAZD6mJnRsDukvhYf3rO3i1TJCb8XI"
+	vecA1ApprovalPayload = "eyJ2IjoxLCJraW5kIjoiYXBwcm92YWxfcmVzcG9uc2UiLCJjb3VudGVyIjo5LCJpYXQiOjE3OTI1NDA4MDAwMDIsImNvbXB1dGVyIjoiQUFFQ0F3UUZCZ2NJQ1FvTERBME9EdyIsInNlc3Npb25JZCI6IjBiOGYzZjVlLThhM2MtNGMzOS05ZDFhLTJmNWQ3YTFlNmIxMCIsImFwcHJvdmFsSWQiOiJyZXEtMSIsImRlY2lzaW9uIjoiYWxsb3ciLCJzY29wZSI6IiIsImNhcmRTaGEyNTYiOiJoMTBCODk1bW5SUnNzNVozbnlNN0duYm4tX3ZRYm84THlIUlpuMjZQYWxnIn0"
+	vecA1ApprovalSig     = "TvFAo9qv3U3ATqhwqKcn0tiLyPn-5Eqc_LdsSKVsAqO8Y0ePQGhhvTFNAFkdtQUZP4XUuaonrWFdAo-KyWG6rA"
+	vecA1TurnPayload     = "eyJ2IjoxLCJraW5kIjoidHVybiIsImNvdW50ZXIiOjEwLCJpYXQiOjE3OTI1NDA4MDAwMDMsImNvbXB1dGVyIjoiQUFFQ0F3UUZCZ2NJQ1FvTERBME9EdyIsImFnZW50IjoiY2xhdWRlIiwidGV4dFNoYTI1NiI6InlIYnhQZTBvZkdfNDZxYTJ3ai1meTdNQnh0YVZ1dGhjYU5uZENzbHlrQTAiLCJjb250ZXh0U2hhMjU2IjoiYmYwb3Fsd0IzajktY1ZBWkQ2bUpuUnNEdWt2aFlmM3JPM2kxVEpDYjhYSSIsIm1vZGUiOiJhc2sifQ"
+	vecA1TurnSig         = "NNNNSqHZRpRGusqRpQ47jgrm9wV1tHdZCcDJtYSiYFRdKXu7pqia7AygN3PO6U2ubFhrc-YnFZp6h9wgqslgxQ"
 )
 
 func vecEnvelope(payload, sig string) json.RawMessage {
@@ -117,8 +127,10 @@ func TestSigningWebCryptoVector(t *testing.T) {
 		t.Fatalf("fingerprint %s", fp)
 	}
 	for name, e := range map[string]json.RawMessage{
-		"approval": vecEnvelope(vecApprovalPayload, vecApprovalSig),
-		"turn":     vecEnvelope(vecTurnPayload, vecTurnSig),
+		"approval":    vecEnvelope(vecApprovalPayload, vecApprovalSig),
+		"turn":        vecEnvelope(vecTurnPayload, vecTurnSig),
+		"a1 approval": vecEnvelope(vecA1ApprovalPayload, vecA1ApprovalSig),
+		"a1 turn":     vecEnvelope(vecA1TurnPayload, vecA1TurnSig),
 	} {
 		env, err := decodeSigEnvelope(e)
 		if err != nil {
@@ -128,18 +140,22 @@ func TestSigningWebCryptoVector(t *testing.T) {
 			t.Fatalf("%s: %v", name, err)
 		}
 		p, err := decodeSignedPayload(env.payload)
-		if err != nil {
-			t.Fatalf("%s: %v", name, err)
-		}
 		switch name {
-		case "approval":
-			if p.Kind != "approval_response" || p.Counter != 7 || p.SessionID != vecSession || p.ApprovalID != "req-1" ||
-				p.Decision != "allow" || !p.has["scope"] || p.Scope != "" || p.CardSha256 != vecCard {
-				t.Fatalf("approval payload %+v", p)
+		case "approval", "turn":
+			// Payloads from before Amendment A1 name no computer (and the
+			// turn no context): no longer accepted.
+			if err == nil {
+				t.Fatalf("%s: a payload without computer was accepted", name)
 			}
-		case "turn":
-			if p.Kind != "turn" || p.Counter != 8 || p.Agent != "claude" || p.TextSha256 != vecTextHash || p.Mode != "ask" || p.has["sessionId"] {
-				t.Fatalf("turn payload %+v", p)
+		case "a1 approval":
+			if err != nil || p.Kind != "approval_response" || p.Counter != 9 || p.Computer != vecComputer || p.SessionID != vecSession ||
+				p.ApprovalID != "req-1" || p.Decision != "allow" || !p.has["scope"] || p.Scope != "" || p.CardSha256 != vecCard {
+				t.Fatalf("approval payload %+v %v", p, err)
+			}
+		case "a1 turn":
+			if err != nil || p.Kind != "turn" || p.Counter != 10 || p.Computer != vecComputer || p.Agent != "claude" ||
+				p.TextSha256 != vecTextHash || p.Context != vecContextHash || p.Mode != "ask" || p.has["sessionId"] {
+				t.Fatalf("turn payload %+v %v", p, err)
 			}
 		}
 		// Any change to the payload or the signature fails.
@@ -154,9 +170,12 @@ func TestSigningWebCryptoVector(t *testing.T) {
 			t.Fatalf("%s: changed signature verified", name)
 		}
 	}
+	if sha256b64u([]byte(vecContext)) != vecContextHash {
+		t.Fatal("context digest")
+	}
 	// The bindings of the shared approval: this card, this answer.
 	in := &Inbound{Kind: "approval_response", SessionID: vecSession, ApprovalID: "req-1", Decision: "allow"}
-	env, _ := decodeSigEnvelope(vecEnvelope(vecApprovalPayload, vecApprovalSig))
+	env, _ := decodeSigEnvelope(vecEnvelope(vecA1ApprovalPayload, vecA1ApprovalSig))
 	p, _ := decodeSignedPayload(env.payload)
 	if why := bindApproval(vecSession, vecCard, in)(p); why != "" {
 		t.Fatalf("binding: %s", why)
@@ -173,13 +192,17 @@ func TestSigningWebCryptoVector(t *testing.T) {
 			t.Errorf("%s: got %q", why, got)
 		}
 	}
-	// The shared turn starts a claude session with the shared text.
-	env, _ = decodeSigEnvelope(vecEnvelope(vecTurnPayload, vecTurnSig))
+	// The shared turn starts a claude session with the shared context and
+	// text, and only with them.
+	env, _ = decodeSigEnvelope(vecEnvelope(vecA1TurnPayload, vecA1TurnSig))
 	p, _ = decodeSignedPayload(env.payload)
-	if why := bindStart(&Inbound{Agent: "claude", Prompt: vecText})(p); why != "" {
+	if why := bindStart(&Inbound{Agent: "claude", Prompt: vecContext + vecText})(p); why != "" {
 		t.Fatalf("start binding: %s", why)
 	}
-	if why := bindStart(&Inbound{Agent: "codex", Prompt: vecText})(p); why != "agent" {
+	if why := bindStart(&Inbound{Agent: "claude", Prompt: vecText})(p); why != "text" {
+		t.Fatalf("start binding without the signed context: %s", why)
+	}
+	if why := bindStart(&Inbound{Agent: "codex", Prompt: vecContext + vecText})(p); why != "agent" {
 		t.Fatalf("start binding for codex: %s", why)
 	}
 }
@@ -216,22 +239,48 @@ func TestSigningEnvelopeAndPayloadShapes(t *testing.T) {
 			t.Errorf("%s: accepted", name)
 		}
 	}
+	c := `"computer":"` + vecComputer + `",`
+	ok := map[string]string{
+		"set_mode":      `{"v":1,"kind":"set_mode","counter":1,"iat":0,` + c + `"sessionId":"` + vecSession + `","mode":"ask"}`,
+		"turn":          `{"v":1,"kind":"turn","counter":1,"iat":0,` + c + `"agent":"codex","textSha256":"` + vecTextHash + `","contextSha256":"` + vecContextHash + `"}`,
+		"turn optional": `{"v":1,"kind":"turn","counter":1,"iat":0,` + c + `"agent":"claude","textSha256":"` + vecTextHash + `","contextSha256":"` + vecContextHash + `","sessionId":"` + vecSession + `","mode":"auto_edits"}`,
+		"user_message":  `{"v":1,"kind":"user_message","counter":1,"iat":0,` + c + `"sessionId":"` + vecSession + `","textSha256":"` + vecTextHash + `"}`,
+		"trust_browser": `{"v":1,"kind":"trust_browser","counter":1,"iat":0,` + c + `"browser":"` + vecFingerprint + `"}`,
+	}
+	for name, payload := range ok {
+		if _, err := decodeSignedPayload([]byte(payload)); err != nil {
+			t.Errorf("payload %s: %v", name, err)
+		}
+	}
 	for name, payload := range map[string]string{
-		"extra":         `{"v":1,"kind":"set_mode","counter":1,"iat":0,"sessionId":"` + vecSession + `","mode":"ask","x":1}`,
-		"missing":       `{"v":1,"kind":"set_mode","counter":1,"iat":0,"sessionId":"` + vecSession + `"}`,
-		"null":          `{"v":1,"kind":"set_mode","counter":1,"iat":0,"sessionId":"` + vecSession + `","mode":null}`,
-		"zero counter":  `{"v":1,"kind":"set_mode","counter":0,"iat":0,"sessionId":"` + vecSession + `","mode":"ask"}`,
-		"float counter": `{"v":1,"kind":"set_mode","counter":1.5,"iat":0,"sessionId":"` + vecSession + `","mode":"ask"}`,
-		"huge counter":  `{"v":1,"kind":"set_mode","counter":9007199254740992,"iat":0,"sessionId":"` + vecSession + `","mode":"ask"}`,
-		"bad mode":      `{"v":1,"kind":"set_mode","counter":1,"iat":0,"sessionId":"` + vecSession + `","mode":"root"}`,
-		"bad kind":      `{"v":1,"kind":"exec","counter":1,"iat":0}`,
-		"version":       `{"v":2,"kind":"trust_browser","counter":1,"iat":0,"browser":"` + vecFingerprint + `"}`,
-		"duplicate":     `{"v":1,"kind":"trust_browser","counter":1,"counter":2,"iat":0,"browser":"` + vecFingerprint + `"}`,
-		"trailing":      `{"v":1,"kind":"trust_browser","counter":1,"iat":0,"browser":"` + vecFingerprint + `"} {}`,
-		"bad browser":   `{"v":1,"kind":"trust_browser","counter":1,"iat":0,"browser":"abc"}`,
-		"bad agent":     `{"v":1,"kind":"turn","counter":1,"iat":0,"agent":"sh","textSha256":"` + vecTextHash + `"}`,
-		"bad scope":     `{"v":1,"kind":"approval_response","counter":1,"iat":0,"sessionId":"` + vecSession + `","approvalId":"a","decision":"allow","scope":"forever","cardSha256":"` + vecCard + `"}`,
-		"not utf-8":     "{\"v\":1,\"kind\":\"turn\",\"counter\":1,\"iat\":0,\"agent\":\"claude\",\"textSha256\":\"" + vecTextHash + "\",\"mode\":\"\xff\"}",
+		"no computer":      `{"v":1,"kind":"set_mode","counter":1,"iat":0,"sessionId":"` + vecSession + `","mode":"ask"}`,
+		"short computer":   `{"v":1,"kind":"trust_browser","counter":1,"iat":0,"computer":"AAECAwQFBgcICQoLDA0OD","browser":"` + vecFingerprint + `"}`,
+		"padded computer":  `{"v":1,"kind":"trust_browser","counter":1,"iat":0,"computer":"AAECAwQFBgcICQoLDA0OD=","browser":"` + vecFingerprint + `"}`,
+		"null computer":    `{"v":1,"kind":"trust_browser","counter":1,"iat":0,"computer":null,"browser":"` + vecFingerprint + `"}`,
+		"turn, no context": `{"v":1,"kind":"turn","counter":1,"iat":0,` + c + `"agent":"codex","textSha256":"` + vecTextHash + `"}`,
+		"bad context":      `{"v":1,"kind":"turn","counter":1,"iat":0,` + c + `"agent":"codex","textSha256":"` + vecTextHash + `","contextSha256":"abc"}`,
+		"context on mode":  `{"v":1,"kind":"set_mode","counter":1,"iat":0,` + c + `"sessionId":"` + vecSession + `","mode":"ask","contextSha256":"` + vecContextHash + `"}`,
+	} {
+		if _, err := decodeSignedPayload([]byte(payload)); err == nil {
+			t.Errorf("payload %s: accepted", name)
+		}
+	}
+	for name, payload := range map[string]string{
+		"extra":         `{"v":1,"kind":"set_mode","counter":1,"iat":0,"computer":"AAECAwQFBgcICQoLDA0ODw","sessionId":"` + vecSession + `","mode":"ask","x":1}`,
+		"missing":       `{"v":1,"kind":"set_mode","counter":1,"iat":0,"computer":"AAECAwQFBgcICQoLDA0ODw","sessionId":"` + vecSession + `"}`,
+		"null":          `{"v":1,"kind":"set_mode","counter":1,"iat":0,"computer":"AAECAwQFBgcICQoLDA0ODw","sessionId":"` + vecSession + `","mode":null}`,
+		"zero counter":  `{"v":1,"kind":"set_mode","counter":0,"iat":0,"computer":"AAECAwQFBgcICQoLDA0ODw","sessionId":"` + vecSession + `","mode":"ask"}`,
+		"float counter": `{"v":1,"kind":"set_mode","counter":1.5,"iat":0,"computer":"AAECAwQFBgcICQoLDA0ODw","sessionId":"` + vecSession + `","mode":"ask"}`,
+		"huge counter":  `{"v":1,"kind":"set_mode","counter":9007199254740992,"iat":0,"computer":"AAECAwQFBgcICQoLDA0ODw","sessionId":"` + vecSession + `","mode":"ask"}`,
+		"bad mode":      `{"v":1,"kind":"set_mode","counter":1,"iat":0,"computer":"AAECAwQFBgcICQoLDA0ODw","sessionId":"` + vecSession + `","mode":"root"}`,
+		"bad kind":      `{"v":1,"kind":"exec","counter":1,"iat":0,"computer":"AAECAwQFBgcICQoLDA0ODw"}`,
+		"version":       `{"v":2,"kind":"trust_browser","counter":1,"iat":0,"computer":"AAECAwQFBgcICQoLDA0ODw","browser":"` + vecFingerprint + `"}`,
+		"duplicate":     `{"v":1,"kind":"trust_browser","counter":1,"counter":2,"iat":0,"computer":"AAECAwQFBgcICQoLDA0ODw","browser":"` + vecFingerprint + `"}`,
+		"trailing":      `{"v":1,"kind":"trust_browser","counter":1,"iat":0,"computer":"AAECAwQFBgcICQoLDA0ODw","browser":"` + vecFingerprint + `"} {}`,
+		"bad browser":   `{"v":1,"kind":"trust_browser","counter":1,"iat":0,"computer":"AAECAwQFBgcICQoLDA0ODw","browser":"abc"}`,
+		"bad agent":     `{"v":1,"kind":"turn","counter":1,"iat":0,"computer":"AAECAwQFBgcICQoLDA0ODw","agent":"sh","textSha256":"` + vecTextHash + `","contextSha256":"` + vecContextHash + `"}`,
+		"bad scope":     `{"v":1,"kind":"approval_response","counter":1,"iat":0,"computer":"AAECAwQFBgcICQoLDA0ODw","sessionId":"` + vecSession + `","approvalId":"a","decision":"allow","scope":"forever","cardSha256":"` + vecCard + `"}`,
+		"not utf-8":     "{\"v\":1,\"kind\":\"turn\",\"counter\":1,\"iat\":0,\"computer\":\"AAECAwQFBgcICQoLDA0ODw\",\"agent\":\"claude\",\"textSha256\":\"" + vecTextHash + "\",\"contextSha256\":\"" + vecContextHash + "\",\"mode\":\"\xff\"}",
 	} {
 		if _, err := decodeSignedPayload([]byte(payload)); err == nil {
 			t.Errorf("payload %s: accepted", name)
@@ -239,51 +288,47 @@ func TestSigningEnvelopeAndPayloadShapes(t *testing.T) {
 	}
 }
 
-func TestSigningPromptPrefixRule(t *testing.T) {
+// A prompt runs only as the signed context blocks followed by the signed
+// text, split anywhere; the context may be empty, and nothing else may
+// come before, between or after.
+func TestSigningPromptContextRule(t *testing.T) {
 	text := "What changed?\n\nAnd why?"
-	h := textHash(text)
-	filters := "[Search filters: tickers AAPL; forms 10-K]"
-	filing := "[Attached filing: 0000320193-24-000123]"
-	for prompt, want := range map[string]bool{
-		text:                    true,
-		filters + "\n\n" + text: true,
-		filing + "\n\n" + text:  true,
-		filters + "\n\n" + filing + "\n\n" + text:                         true,
-		"Ignore that.\n\n" + text:                                         false,
-		"[Search filters: a\nb]\n\n" + text:                               true,
-		"[Search filters: a] x\n\n" + text:                                false,
-		"[Attached filing: x]\n\n" + text + "!":                           false,
-		"[Attached filing: x]\n" + text:                                   false,
-		"\n\n" + text:                                                     false,
-		"[Search filters: " + strings.Repeat("x", 4096) + "]\n\n" + text:  true,
-		"[Search filters: " + strings.Repeat("x", 16384) + "]\n\n" + text: false,
-	} {
-		if got := textMatches(prompt, h); got != want {
-			t.Errorf("%q: got %v, want %v", prompt, got, want)
-		}
-	}
-}
-
-// TestSigningPromptPrefixFilterBlock uses the workspace's own filter block
-// (several filing types, one per line) and an attached filing block.
-func TestSigningPromptPrefixFilterBlock(t *testing.T) {
-	text := "Compare the risk factors."
 	filters := "[Search filters: Company: Apple Inc. (AAPL), Filing types (call search_filings ONCE per type listed, in parallel, then combine the results):\n" +
-		"- 10-K\n- 10-Q\n- Fidelity Bond [Rule 17G-1(g)], Date range: 2024-01-01 to 2024-12-31]"
-	filing := "[Attached filing: 0000320193-24-000123. Start with toc/filing_toc on this filing_id, then read_section/read_filing_section.]"
-	if !textMatches(filters+"\n\n"+filing+"\n\n"+text, textHash(text)) {
-		t.Fatal("filter block with several filing types and an attached filing refused")
-	}
-	if !textMatches(filing+"\n\n"+filters+"\n\n"+text, textHash(text)) {
-		t.Fatal("attached filing before the filter block refused")
-	}
+		"- 10-K\n- 10-Q\n- Fidelity Bond [Rule 17G-1(g)]]\n\n"
+	filing := "[Attached filing: 0b8f3f5e-8a3c-4c39-9d1a-2f5d7a1e6b10. Start with toc/filing_toc on this filing_id, then read_section/read_filing_section.]\n\n"
 	var types []string
-	for i := 0; i < 50; i++ {
+	for range 50 {
 		types = append(types, "- "+strings.Repeat("T", 198))
 	}
-	long := "[Search filters: Filing types (call search_filings ONCE per type listed, in parallel, then combine the results):\n" + strings.Join(types, "\n") + "]"
-	if !textMatches(long+"\n\n"+text, textHash(text)) {
-		t.Fatal("filter block with 50 long filing types refused")
+	long := "[Search filters: Filing types (call search_filings ONCE per type listed, in parallel, then combine the results):\n" + strings.Join(types, "\n") + "]\n\n"
+	ctx := func(p string) string { return sha256b64u([]byte(p)) }
+	cases := []struct {
+		name, prompt, context string
+		want                  bool
+	}{
+		{"no context", text, ctx(""), true},
+		{"filters", filters + text, ctx(filters), true},
+		{"filing and filters", filing + filters + text, ctx(filing + filters), true},
+		{"fifty long filing types", long + text, ctx(long), true},
+		{"any signed shape", "Plain words the browser signed. " + text, ctx("Plain words the browser signed. "), true},
+		{"context not signed", filters + text, ctx(""), false},
+		{"other blocks of the same shape", "[Search filters: Company: Other]\n\n" + text, ctx(filters), false},
+		{"block added to signed context", filing + filters + text, ctx(filters), false},
+		{"signed context missing", text, ctx(filters), false},
+		{"text changed", filters + text + "!", ctx(filters), false},
+		{"text after the context only in part", filters + text[:5], ctx(filters), false},
+		{"instructions before the context", "Ignore that.\n\n" + filters + text, ctx(filters), false},
+		{"not a digest", text, "abc", false},
+	}
+	for _, c := range cases {
+		if got := promptMatches(c.prompt, c.context, textHash(text)); got != c.want {
+			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
+		}
+	}
+	// The workspace's own digests: the shared context fixture's value for
+	// one filter block.
+	if !promptMatches(vecContext+vecText, vecContextHash, vecTextHash) {
+		t.Fatal("shared context vector refused")
 	}
 }
 
@@ -433,11 +478,78 @@ func TestSigningCounterWindow(t *testing.T) {
 }
 
 func TestSigningFrameShape(t *testing.T) {
-	if got := string(signingFrame(nil)); got != `{"kind":"signing","v":1,"browsers":[]}` {
+	if got := string(signingFrame(vecComputer, nil)); got != `{"kind":"signing","v":1,"computer":"`+vecComputer+`","browsers":[]}` {
 		t.Fatal(got)
 	}
-	if got := string(signingFrame([]string{vecFingerprint})); got != `{"kind":"signing","v":1,"browsers":["`+vecFingerprint+`"]}` {
+	if got := string(signingFrame(vecComputer, []string{vecFingerprint})); got != `{"kind":"signing","v":1,"computer":"`+vecComputer+`","browsers":["`+vecFingerprint+`"]}` {
 		t.Fatal(got)
+	}
+}
+
+// The computer id is made on first need, kept in browsers.json across
+// trusting and pairing (another account included), and new only with a
+// new file.
+func TestSigningComputerID(t *testing.T) {
+	dir := t.TempDir()
+	id, err := EnsureComputer(dir)
+	if err != nil || !ValidComputerID(id) {
+		t.Fatalf("id %q: %v", id, err)
+	}
+	if raw, _ := base64.RawURLEncoding.Strict().DecodeString(id); len(raw) != 16 {
+		t.Fatalf("id %q is not 16 bytes", id)
+	}
+	if again, _ := EnsureComputer(dir); again != id {
+		t.Fatalf("id changed: %s then %s", id, again)
+	}
+	a, b := newTestBrowser(t), newTestBrowser(t)
+	if _, err := TrustBrowser(dir, a.fp, ViaTrust); err != nil {
+		t.Fatal(err)
+	}
+	if err := PairBrowsers(dir, "owner@example.com", b.fp); err != nil {
+		t.Fatal(err)
+	}
+	if err := PairBrowsers(dir, "other@example.com", ""); err != nil {
+		t.Fatal(err)
+	}
+	if l, _ := LoadBrowsers(dir); l.Computer != id {
+		t.Fatalf("pairing changed the id: %+v", l)
+	}
+	// Trusting or pairing first makes the id too.
+	dir2 := t.TempDir()
+	if _, err := TrustBrowser(dir2, a.fp, ViaTrust); err != nil {
+		t.Fatal(err)
+	}
+	l2, _ := LoadBrowsers(dir2)
+	if !ValidComputerID(l2.Computer) || l2.Computer == id {
+		t.Fatalf("id on trust: %+v", l2)
+	}
+	// A list written before the id existed gets one, browsers kept.
+	_ = os.WriteFile(filepath.Join(dir2, BrowsersFile), []byte(`{"version":1,"account":"","browsers":[{"fingerprint":"`+a.fp+`","added":"","via":"trust"}]}`), 0o600)
+	id3, err := EnsureComputer(dir2)
+	if l, _ := LoadBrowsers(dir2); err != nil || l.Computer != id3 || !l.Trusts(a.fp) {
+		t.Fatalf("old list: %+v %v", l, err)
+	}
+	// An unreadable list is replaced by pairing, with a new id.
+	_ = os.WriteFile(filepath.Join(dir, BrowsersFile), []byte("{"), 0o600)
+	if _, err := EnsureComputer(dir); err == nil {
+		t.Fatal("an unreadable list gave an id")
+	}
+	if err := PairBrowsers(dir, "owner@example.com", ""); err != nil {
+		t.Fatal(err)
+	}
+	if l, _ := LoadBrowsers(dir); !ValidComputerID(l.Computer) || l.Computer == id {
+		t.Fatalf("replaced list id: %+v", l)
+	}
+	// The daemon announces the id it checks against.
+	d := &Daemon{store: &Store{dir: t.TempDir()}, log: NewLogger(io.Discard)}
+	l := &live{ctrl: make(chan []byte, 1), done: make(chan struct{})}
+	d.announceSigning(l)
+	var f struct {
+		Computer string `json:"computer"`
+	}
+	_ = json.Unmarshal(<-l.ctrl, &f)
+	if f.Computer == "" || f.Computer != d.computerID() {
+		t.Fatalf("announced %q, checks %q", f.Computer, d.computerID())
 	}
 }
 
