@@ -6,6 +6,8 @@ import (
 	"errors"
 	"io"
 	"os"
+
+	"golang.org/x/sys/windows"
 )
 
 // consoleTerminal reads the console input buffer and writes the active
@@ -32,4 +34,15 @@ func openTerminal() (io.ReadWriteCloser, error) {
 		return nil, err
 	}
 	return consoleTerminal{in: in, out: out}, nil
+}
+
+// flushPendingInput discards console input typed before the pairing
+// question (an Enter pressed while the install downloaded would otherwise
+// answer it): FlushConsoleInputBuffer on the CONIN$ handle, best effort.
+func flushPendingInput(tty io.ReadWriter) {
+	t, ok := tty.(consoleTerminal)
+	if !ok {
+		return
+	}
+	_ = windows.FlushConsoleInputBuffer(windows.Handle(t.in.Fd()))
 }

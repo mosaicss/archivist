@@ -954,3 +954,35 @@ func TestConnectPairBrowserInterruptRevokesArrivingKey(t *testing.T) {
 	}
 	noKeyLeaks(t, out, pairedKey)
 }
+
+// Input typed ahead of the question is discarded right before it is
+// written, so it cannot answer for the user.
+func TestConnectPairFlushesTypedAheadInputBeforeAsking(t *testing.T) {
+	home := sandbox(t)
+	newFakeMosaic(t, redeemBody(accountEmail))
+	tty := useTerminal(t, "n\n")
+	var flushed int
+	var writtenAtFlush string
+	prev := flushConfirmInput
+	flushConfirmInput = func(got io.ReadWriter) {
+		if got != io.ReadWriter(tty) {
+			t.Errorf("flushed %T, not the opened terminal", got)
+		}
+		flushed++
+		writtenAtFlush = tty.written()
+	}
+	t.Cleanup(func() { flushConfirmInput = prev })
+	out, code := runRoot(t, "connect", "--pair", "ABCDE-FGHJK")
+	if code != ExitGenericError {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if flushed != 1 || writtenAtFlush != "" {
+		t.Fatalf("flushed %d times, prompt already written %q", flushed, writtenAtFlush)
+	}
+	if !strings.Contains(tty.written(), "Continue? [Y/n] ") {
+		t.Fatalf("terminal %q", tty.written())
+	}
+	if _, ok := credentials(t, home); ok {
+		t.Fatal("credentials written")
+	}
+}

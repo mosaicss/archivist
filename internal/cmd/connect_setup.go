@@ -43,6 +43,10 @@ const pairInvalidMessage = "This pairing code is not valid or has expired. Get a
 // (Story 94.3); tests replace it.
 var openConfirmTerminal = openTerminal
 
+// flushConfirmInput discards terminal input typed ahead of the pairing
+// question, right before it is written; tests replace it.
+var flushConfirmInput = flushPendingInput
+
 // pairOutputVisible reports whether a person can see the pairing question:
 // stdout or stderr is itself a terminal (on Windows, a console). An agent
 // that captures the output through pipes cannot answer a terminal it does
@@ -447,6 +451,8 @@ func pairRefusedMessage(reason string) string {
 func confirmAccount(ctx context.Context, tty io.ReadWriter, email string) bool {
 	ctx, stop := pairInterrupt(ctx)
 	defer stop()
+	// Typed ahead input (an Enter while the redeem ran) must not answer.
+	flushConfirmInput(tty)
 	_, _ = fmt.Fprintf(tty, "This computer will connect to %s. Continue? [Y/n] ", email)
 	answer := make(chan string, 1)
 	go func() {

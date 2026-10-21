@@ -15,3 +15,19 @@ import (
 func openTerminal() (io.ReadWriteCloser, error) {
 	return os.OpenFile("/dev/tty", os.O_RDWR, 0)
 }
+
+// flushPendingInput discards input typed before the pairing question (an
+// Enter pressed while the install downloaded would otherwise answer it),
+// best effort: anything that is not the opened terminal file, or a failed
+// flush, is ignored.
+func flushPendingInput(tty io.ReadWriter) {
+	f, ok := tty.(*os.File)
+	if !ok {
+		return
+	}
+	rc, err := f.SyscallConn()
+	if err != nil {
+		return
+	}
+	_ = rc.Control(func(fd uintptr) { _ = flushInputFD(int(fd)) })
+}
