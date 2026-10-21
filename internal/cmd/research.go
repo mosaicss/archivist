@@ -9,6 +9,7 @@ package cmd
 //	archivist toc <filing_id>                        GET /research/filings/:id/toc
 //	archivist filings <symbol>                       GET /research/filings (Story 81.4)
 //	archivist find <filing_id> <term>                GET /research/filings/:id/find (Story 81.4)
+//	archivist screen                                 GET /research/screen (screen.go)
 //
 // JSON output (the default off a TTY) is the server body re-indented, keys
 // and values unchanged. Compact output (compact.go) is a minified projection
@@ -22,9 +23,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -55,6 +58,7 @@ const (
 	defaultPassageWindow  = 1
 	sectionColumnRunes    = 32
 	snippetColumnRunes    = 60
+	maxReactionZ          = 50
 )
 
 var uuidRE = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
@@ -801,13 +805,21 @@ func runToc(cmd *cobra.Command, filingID, version string, f *tocFlags) error {
 
 // ─── filings (Story 81.4) ────────────────────────────────────────────────────
 
-// filingRow is one /research/filings row (Story 81.2).
+// filingRow is one /research/filings row (Story 81.2). reaction is the
+// share move measured around the filing, null when none was measured.
 type filingRow struct {
-	FilingID  *string `json:"filing_id"`
-	Form      *string `json:"form"`
-	Datefiled *string `json:"datefiled"`
-	Period    *string `json:"period"`
-	URL       *string `json:"url"`
+	FilingID  *string         `json:"filing_id"`
+	Form      *string         `json:"form"`
+	Datefiled *string         `json:"datefiled"`
+	Period    *string         `json:"period"`
+	Reaction  *filingReaction `json:"reaction"`
+	URL       *string         `json:"url"`
+}
+
+// filingReaction is the measured share move of a filing row; z is signed,
+// in standard deviations.
+type filingReaction struct {
+	Z *float64 `json:"z"`
 }
 
 type filingsResponse struct {
@@ -823,6 +835,7 @@ type filingsResponse struct {
 type filingsFlags struct {
 	formtype, dateFrom, dateTo, cursor, format string
 	limit                                      int
+	minReactionZ                               float64
 	dryRun                                     bool
 }
 
@@ -834,9 +847,14 @@ func newFilingsCmd(version string) *cobra.Command {
 		Long: `List one company's readable filings newest first, by symbol (AAPL for a
 US listing, ABX:CA for a Canadian one, AKBNK:TR for a Turkish one). Each row
 carries the filing_id that toc, read section and find take, the form, the
-filing date, the period and the filing url to cite. Filter by form type and
-filing dates. An empty list means no filing matched, not an error. Exit 3
-when no company has the symbol.`,
+filing date, the period, the share move measured around the filing
+(reaction, null when none was measured) and the filing url to cite. Filter
+by form type and filing dates. A minimum reaction z from 0 to 50 keeps only
+filings whose share moved at least that many standard deviations either way,
+still newest first: 2 or 3 finds the strong moves, and 0 drops the filings
+with no measured move. A reaction is measured around the filing, not caused
+by it. An empty list means no filing matched, not an error. Exit 3 when no
+company has the symbol.`,
 		Args:        cobra.ExactArgs(1),
 		Annotations: researchAnnotations("List filings", "0,2,3,4,5,7"),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -847,6 +865,7 @@ when no company has the symbol.`,
 	c.Flags().StringVar(&f.dateFrom, "date-from", "", "Earliest filing date, YYYY-MM-DD")
 	c.Flags().StringVar(&f.dateTo, "date-to", "", "Latest filing date, YYYY-MM-DD")
 	c.Flags().IntVar(&f.limit, "limit", defaultSearchLimit, "Filings to return (1 to 25)")
+	c.Flags().Float64Var(&f.minReactionZ, "min-reaction-z", 0, "Only filings whose measured share move is at least this many standard deviations either way (0 to 50); 0 drops filings with no measured move")
 	c.Flags().StringVar(&f.cursor, "cursor", "", cursorUsage)
 	c.Flags().StringVar(&f.format, "format", "", formatUsage)
 	c.Flags().BoolVar(&f.dryRun, "dry-run", false, "Print the request without sending it")
@@ -877,6 +896,14 @@ func runFilings(cmd *cobra.Command, symbol, version string, f *filingsFlags) err
 	if f.dateFrom != "" && f.dateTo != "" && f.dateFrom > f.dateTo {
 		return usageErr(cmd, "--date-from must not be later than --date-to")
 	}
+	// Sent only when set: 0 is not a no-op, it drops unmeasured filings.
+	withReaction := cmd.Flags().Changed("min-reaction-z")
+	if withReaction {
+		z := f.minReactionZ
+		if math.IsNaN(z) || math.IsInf(z, 0) || z < 0 || z > maxReactionZ {
+			return usageErr(cmd, "--min-reaction-z must be a number from 0 to %d", maxReactionZ)
+		}
+	}
 
 	q := url.Values{}
 	q.Set("symbol", symbol)
@@ -890,6 +917,9 @@ func runFilings(cmd *cobra.Command, symbol, version string, f *filingsFlags) err
 		q.Set("date_to", f.dateTo)
 	}
 	q.Set("limit", fmt.Sprintf("%d", f.limit))
+	if withReaction {
+		q.Set("min_reaction_z", strconv.FormatFloat(f.minReactionZ, 'f', -1, 64))
+	}
 
 	format := resolveFormat(f.format, cmd.OutOrStdout(), "table")
 	path, cur, err := pagedPath(cmd, "/research/filings", q, f.cursor, format)
@@ -912,7 +942,7 @@ func runFilings(cmd *cobra.Command, symbol, version string, f *filingsFlags) err
 			cursorHint(cmd, resp.NextCursor)
 		}
 	default:
-		err = renderFilingsTable(cmd.OutOrStdout(), resp.Filings)
+		err = renderFilingsTable(cmd.OutOrStdout(), resp.Filings, withReaction)
 		cursorHint(cmd, resp.NextCursor)
 	}
 	if err != nil {
@@ -926,15 +956,35 @@ func runFilings(cmd *cobra.Command, symbol, version string, f *filingsFlags) err
 	return nil
 }
 
-// renderFilingsTable writes FILING_ID FORM DATE PERIOD URL.
-func renderFilingsTable(w io.Writer, rows []filingRow) error {
+// renderFilingsTable writes FILING_ID FORM DATE PERIOD URL; with
+// --min-reaction-z a MOVE (z) column (the signed z, blank when no move was
+// measured) comes before URL.
+func renderFilingsTable(w io.Writer, rows []filingRow, withReaction bool) error {
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	_, _ = fmt.Fprintln(tw, "FILING_ID\tFORM\tDATE\tPERIOD\tURL")
+	if withReaction {
+		_, _ = fmt.Fprintln(tw, "FILING_ID\tFORM\tDATE\tPERIOD\tMOVE (z)\tURL")
+	} else {
+		_, _ = fmt.Fprintln(tw, "FILING_ID\tFORM\tDATE\tPERIOD\tURL")
+	}
 	for _, r := range rows {
+		if withReaction {
+			_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
+				cell(r.FilingID), clipCell(r.Form, sectionColumnRunes), cell(r.Datefiled), cell(r.Period), reactionCell(r.Reaction), cell(r.URL))
+			continue
+		}
 		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n",
 			cell(r.FilingID), clipCell(r.Form, sectionColumnRunes), cell(r.Datefiled), cell(r.Period), cell(r.URL))
 	}
 	return tw.Flush()
+}
+
+// reactionCell is a row's signed z to two places, blank when none was
+// measured.
+func reactionCell(r *filingReaction) string {
+	if r == nil || r.Z == nil {
+		return ""
+	}
+	return fmt.Sprintf("%+.2f", *r.Z)
 }
 
 // ─── find (Story 81.4) ───────────────────────────────────────────────────────

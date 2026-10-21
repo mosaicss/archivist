@@ -43,7 +43,7 @@ const (
 )
 
 // compactListKeys are the top level lists the fit pages through.
-var compactListKeys = map[string]bool{"results": true, "passages": true, "sections": true, "filings": true, "matches": true, "neighbours": true}
+var compactListKeys = map[string]bool{"results": true, "passages": true, "sections": true, "filings": true, "matches": true, "neighbours": true, "rows": true}
 
 // entityResolutionKeys are the entity_resolution members compact keeps.
 var entityResolutionKeys = map[string]bool{

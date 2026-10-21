@@ -29,7 +29,7 @@ import (
 // expectedToolNames is the exact tools/list contract (Story 39.7 AC2). Any
 // drift — a new verb, a hidden verb leaking, a rename — must fail loudly.
 // Story 81.4: the admin verbs (auth status, auth whoami, doctor, usage,
-// version) are shell verbs only; filings and find joined.
+// version) are shell verbs only; filings and find joined. v0.2.35: screen.
 var expectedToolNames = []string{
 	"companies_get",
 	"companies_search",
@@ -37,6 +37,7 @@ var expectedToolNames = []string{
 	"find",
 	"read_passage",
 	"read_section",
+	"screen",
 	"search",
 	"toc",
 }
@@ -51,7 +52,7 @@ func collectToolsForTest(t *testing.T) []toolSpec {
 	return collectTools(buildRootForTest("dev"))
 }
 
-// TestCollectTools_ExactSet asserts the 8-tool set as an exact match (AC2),
+// TestCollectTools_ExactSet asserts the 9-tool set as an exact match (AC2),
 // which doubles as the hidden-verb assertion (AC3): auth_login, auth_logout,
 // update, and any mcp* self-entry would break set equality.
 func TestCollectTools_ExactSet(t *testing.T) {
@@ -141,8 +142,10 @@ func TestCollectTools_SearchSchema(t *testing.T) {
 // their positionals, flags and integer limits; dry_run never reaches a schema.
 func TestCollectTools_FilingsAndFindSchemas(t *testing.T) {
 	cases := map[string][]string{
-		"filings": {"symbol", "formtype", "date_from", "date_to", "limit", "cursor", "format"},
+		"filings": {"symbol", "formtype", "date_from", "date_to", "limit", "min_reaction_z", "cursor", "format"},
 		"find":    {"filing_id", "term", "limit", "cursor", "format"},
+		"screen": {"industry", "sector", "exchange", "market", "country", "currency", "min", "max", "include_inactive",
+			"as_of", "sort_by", "sort_dir", "fields", "limit", "cursor", "format"},
 	}
 	for name, want := range cases {
 		s := findSpec(t, name)
@@ -163,6 +166,52 @@ func TestCollectTools_FilingsAndFindSchemas(t *testing.T) {
 	}
 	if s := findSpec(t, "find"); s.Title != "Find in filing" || !strings.HasSuffix(s.Description, "Exit codes: 0,2,3,4,5,7") {
 		t.Errorf("find title %q description %q", s.Title, s.Description)
+	}
+}
+
+// v0.2.35: screen takes its bounds as two string arrays and include_inactive
+// as a boolean; filings gains min_reaction_z as a number. Neither
+// description is cut.
+func TestCollectTools_ScreenAndReactionSchemas(t *testing.T) {
+	s := findSpec(t, "screen")
+	for _, k := range []string{"min", "max"} {
+		p := s.Schema.Properties[k]
+		if p == nil || p.Type != "array" || p.Items == nil || p.Items.Type != "string" || s.FlagFor[k] != k {
+			t.Errorf("screen %s: %+v -> %q", k, p, s.FlagFor[k])
+		}
+	}
+	if p := s.Schema.Properties["include_inactive"]; p == nil || p.Type != "boolean" || s.FlagFor["include_inactive"] != "include-inactive" {
+		t.Errorf("screen include_inactive: %+v", p)
+	}
+	if s.Schema.Properties["limit"].Type != "integer" || len(s.Positionals) != 0 || len(s.Schema.Required) != 0 {
+		t.Errorf("screen limit %q positionals %v required %v", s.Schema.Properties["limit"].Type, s.Positionals, s.Schema.Required)
+	}
+	if s.Title != "Screen companies" || !strings.HasSuffix(s.Description, "Exit codes: 0,2,4,5,7") ||
+		strings.Contains(s.Description, " …") || !strings.Contains(s.Description, "data, not citations.") {
+		t.Errorf("screen title %q description %q", s.Title, s.Description)
+	}
+	f := findSpec(t, "filings")
+	if p := f.Schema.Properties["min_reaction_z"]; p == nil || p.Type != "number" || f.FlagFor["min_reaction_z"] != "min-reaction-z" {
+		t.Errorf("filings min_reaction_z: %+v", p)
+	}
+	if strings.Contains(f.Description, " …") || !strings.Contains(f.Description, "company has the symbol.") {
+		t.Errorf("filings description is cut: %q", f.Description)
+	}
+}
+
+// The screen tool's arguments become repeated --min and --max flags in
+// sorted property order; min_reaction_z keeps its number as written.
+func TestBuildArgv_ScreenArraysAndReactionNumber(t *testing.T) {
+	s := pinFormat(findSpec(t, "screen"), "compact")
+	argv, usage := buildArgv(s, json.RawMessage(`{"industry":"mining","max":["pe=15"],"min":["market_cap_usd_m=500","fy_revenue_m=10"],"include_inactive":false}`), "")
+	want := "screen --include-inactive=false --industry=mining --max=pe=15 --min=market_cap_usd_m=500 --min=fy_revenue_m=10 --format=compact"
+	if usage != "" || strings.Join(argv, " ") != want {
+		t.Fatalf("argv %q (%s), want %q", strings.Join(argv, " "), usage, want)
+	}
+	f := pinFormat(findSpec(t, "filings"), "compact")
+	argv, usage = buildArgv(f, json.RawMessage(`{"symbol":"CCO:CA","min_reaction_z":2.5}`), "")
+	if usage != "" || strings.Join(argv, " ") != "filings --min-reaction-z=2.5 --format=compact -- CCO:CA" {
+		t.Fatalf("argv %q (%s)", strings.Join(argv, " "), usage)
 	}
 }
 
@@ -219,6 +268,7 @@ func TestCollectTools_PositionalSanitization(t *testing.T) {
 		"companies_get":    {"issuer_key"},
 		"filings":          {"symbol"},
 		"find":             {"filing_id", "term"},
+		"screen":           nil,
 	}
 	for name, want := range cases {
 		s := findSpec(t, name)
@@ -325,7 +375,7 @@ func callToolText(t *testing.T, cs *mcp.ClientSession, name string, args map[str
 	return text, res.IsError
 }
 
-// TestMCPServer_ToolsList covers AC2 + AC3 over the wire: exact 8-tool set,
+// TestMCPServer_ToolsList covers AC2 + AC3 over the wire: exact 9-tool set,
 // hidden verbs absent, title and all three hints surface on every tool.
 func TestMCPServer_ToolsList(t *testing.T) {
 	cs := newMCPSession(t, "")

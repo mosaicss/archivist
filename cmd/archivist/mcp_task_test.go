@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -28,7 +29,7 @@ var (
 
 // expectedTaskToolNames is the task mode tools/list contract: exactly the
 // verbs whose every chat-api route is in the 78.15 task allowlist.
-var expectedTaskToolNames = []string{"companies_search", "filings", "find", "read_passage", "read_section", "search", "toc"}
+var expectedTaskToolNames = []string{"companies_search", "filings", "find", "read_passage", "read_section", "screen", "search", "toc"}
 
 func TestTaskModeToolSet(t *testing.T) {
 	var got []string
@@ -42,7 +43,7 @@ func TestTaskModeToolSet(t *testing.T) {
 		t.Fatalf("task tools = %v, want %v", got, expectedTaskToolNames)
 	}
 	// Tools() adds publish_artifact (Story 78.18), which is not a verb.
-	if strings.Join(taskscope.Tools(), ",") != "companies_search,filings,find,publish_artifact,read_passage,read_section,search,toc" {
+	if strings.Join(taskscope.Tools(), ",") != "companies_search,filings,find,publish_artifact,read_passage,read_section,screen,search,toc" {
 		t.Fatalf("taskscope.Tools() = %v", taskscope.Tools())
 	}
 	// Story 94.4: every task tool, publish_artifact included, runs without asking.
@@ -69,7 +70,7 @@ func TestTaskModeToolSet(t *testing.T) {
 			t.Errorf("admin verb %s still has task routes", admin)
 		}
 	}
-	for _, tool := range []string{"filings", "find"} {
+	for _, tool := range []string{"filings", "find", "screen"} {
 		if !taskscope.IsReadTool(tool) || !slices.Contains(taskscope.AutoAllowedTools(), tool) {
 			t.Errorf("%s is not an auto allowed read tool", tool)
 		}
@@ -90,6 +91,9 @@ func TestTaskRouteScopeMirrorsChatAPI(t *testing.T) {
 		"GET /research/filings/f1/sections":      "read",
 		"GET /research/filings":                  "search",
 		"GET /research/filings/f1/find":          "read",
+		"GET /research/screen":                   "search",
+		"GET /research/screen/x":                 "",
+		"POST /research/screen":                  "",
 		"GET /research/filings/":                 "",
 		"GET /research/filings/f1":               "",
 		"GET /research/filings/f1/find/x":        "",
@@ -126,6 +130,7 @@ func TestToolRoutesMatchDryRun(t *testing.T) {
 		"toc":              {"toc", "--dry-run", "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"},
 		"filings":          {"filings", "--dry-run", "AAPL"},
 		"find":             {"find", "--dry-run", "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", "TSMC"},
+		"screen":           {"screen", "--dry-run", "--industry", "mining", "--max", "pe=15"},
 	}
 	if len(cases) != len(expectedTaskToolNames) {
 		t.Fatalf("dry run cases %d, task tools %d", len(cases), len(expectedTaskToolNames))
@@ -264,7 +269,7 @@ func TestMCPServe_TokenFlagsExclusiveAndFileValidated(t *testing.T) {
 	if err := os.WriteFile(tokenPath, []byte(testTaskToken), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if code, out := run("mcp", "serve", "--token-file", tokenPath); code != 0 || !strings.Contains(out, "7 tools registered") || !strings.Contains(out, "task mode") {
+	if code, out := run("mcp", "serve", "--token-file", tokenPath); code != 0 || !strings.Contains(out, "8 tools registered") || !strings.Contains(out, "task mode") {
 		t.Fatalf("task token file: exit %d %s", code, out)
 	}
 }
@@ -307,5 +312,70 @@ func TestRouteMatches(t *testing.T) {
 		if got := routeMatches(c.pattern, c.path); got != c.want {
 			t.Errorf("routeMatches(%q, %q) = %v", c.pattern, c.path, got)
 		}
+	}
+}
+
+// v0.2.35 over the wire, in agent and task mode: screen is listed with its
+// array bounds and boolean include_inactive, filings with min_reaction_z,
+// and the server instructions are the embedded text, unchanged. In task mode
+// a screen call reaches GET /research/screen with the task token.
+func TestScreenAndReactionToolsOverTheWire(t *testing.T) {
+	var mu sync.Mutex
+	var seen []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen = append(seen, r.Method+" "+r.URL.String()+" "+r.Header.Get("Authorization"))
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"as_of_used":"2026-10-20","total_matched":0,"rows":[],"excluded":{},"interpretation":{},"coverage_note":"c","disclosures":[],"cohort_id":"cs1.x","has_more":false,"truncated":false,"next_cursor":null}`))
+	}))
+	t.Cleanup(srv.Close)
+	agent := newMCPSession(t, srv.URL)
+	task, _ := newPublishSession(t, srv.URL, t.TempDir(), false)
+	for mode, cs := range map[string]*mcp.ClientSession{"agent": agent, "task": task} {
+		_, byName := toolNames(t, cs)
+		raw, err := json.Marshal(byName["screen"].InputSchema)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var screen struct {
+			Properties map[string]struct {
+				Type  string `json:"type"`
+				Items *struct {
+					Type string `json:"type"`
+				} `json:"items"`
+			} `json:"properties"`
+		}
+		if err := json.Unmarshal(raw, &screen); err != nil {
+			t.Fatal(err)
+		}
+		for _, k := range []string{"min", "max"} {
+			if p := screen.Properties[k]; p.Type != "array" || p.Items == nil || p.Items.Type != "string" {
+				t.Errorf("%s screen %s: %s", mode, k, raw)
+			}
+		}
+		if screen.Properties["include_inactive"].Type != "boolean" {
+			t.Errorf("%s screen include_inactive: %s", mode, raw)
+		}
+		if _, ok := screen.Properties["format"]; ok {
+			t.Errorf("%s screen keeps format", mode)
+		}
+		raw, _ = json.Marshal(byName["filings"].InputSchema)
+		if !strings.Contains(string(raw), `"min_reaction_z":{"description":"Only filings whose measured share move`) ||
+			!strings.Contains(string(raw), `"type":"number"`) {
+			t.Errorf("%s filings min_reaction_z: %s", mode, raw)
+		}
+		if got := cs.InitializeResult().Instructions; got != embeddedMCPInstructions(mode == "task") || !strings.Contains(got, mcpLocalSuffix) {
+			t.Errorf("%s instructions changed: %q", mode, got)
+		}
+	}
+	text, isErr := callToolText(t, task, "screen", map[string]any{"industry": "mining", "max": []string{"pe=15"}, "min": []string{"market_cap_usd_m=500"}})
+	if isErr {
+		t.Fatalf("task screen: %s", text)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(seen) != 1 || seen[0] != "GET /research/screen?industry=mining&market_cap_usd_m_min=500&pe_max=15 Bearer "+testTaskToken {
+		t.Fatalf("requests %q", seen)
 	}
 }

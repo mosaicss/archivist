@@ -20,7 +20,7 @@ import (
 )
 
 func init() {
-	// Keep registration order (auth, search, read, toc, filings, find,
+	// Keep registration order (auth, search, read, toc, filings, screen, find,
 	// companies, doctor, usage, update, connect, version) in --help: research verbs first, in the order
 	// an agent uses them. Cobra would otherwise sort alphabetically.
 	cobra.EnableCommandSorting = false
@@ -31,7 +31,8 @@ const longDescription = `Archivist is the Mosaic command line surface for filing
 It lets any AI agent (Claude Code, Cursor, custom orchestrators) or shell
 context (bash, cron, CI) search and read global filings (SEC, SEDAR+, KAP and
 expanding). 'search' finds passages; 'read passage', 'read section' and 'toc'
-read around them. 'filings' lists a company's filings newest first; 'find'
+read around them. 'filings' lists a company's filings newest first; 'screen'
+finds companies by ratios, size and returns on the nightly snapshot; 'find'
 says whether one filing mentions a term. Every passage carries a permalink
 url that opens it in Mosaic's filing viewer, so an answer can cite its source.
 
@@ -71,6 +72,7 @@ func NewRootCmd(version, commit, date string) *cobra.Command {
 	root.AddCommand(newReadCmd(version))
 	root.AddCommand(newTocCmd(version))
 	root.AddCommand(newFilingsCmd(version))
+	root.AddCommand(newScreenCmd(version))
 	root.AddCommand(newFindCmd(version))
 	root.AddCommand(newCompaniesCmd(version))
 	root.AddCommand(newDoctorCmd(version, commit, date))

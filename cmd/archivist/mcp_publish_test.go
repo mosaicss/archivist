@@ -141,7 +141,7 @@ func TestPublishToolOnlyWithSession(t *testing.T) {
 	}
 	cs, count = newPublishSession(t, api.srv.URL, t.TempDir(), true)
 	names, byName := toolNames(t, cs)
-	if count != 8 || strings.Join(names, ",") != "companies_search,filings,find,publish_artifact,read_passage,read_section,search,toc" {
+	if count != 9 || strings.Join(names, ",") != "companies_search,filings,find,publish_artifact,read_passage,read_section,screen,search,toc" {
 		t.Fatalf("with a session: %d tools %v", count, names)
 	}
 	tool := byName["publish_artifact"]
@@ -303,7 +303,7 @@ func TestMCPServePublishFlags(t *testing.T) {
 		out, _ := c.CombinedOutput()
 		return c.ProcessState.ExitCode(), string(out)
 	}
-	if code, out := run("mcp", "serve", "--token-file", tokenPath, "--publish-session", testPublishSession, "--publish-dir", dir); code != 0 || !strings.Contains(out, "8 tools registered") {
+	if code, out := run("mcp", "serve", "--token-file", tokenPath, "--publish-session", testPublishSession, "--publish-dir", dir); code != 0 || !strings.Contains(out, "9 tools registered") {
 		t.Fatalf("publish flags: exit %d %s", code, out)
 	}
 	for _, args := range [][]string{

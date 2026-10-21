@@ -970,3 +970,67 @@ func TestCompaniesGetCompact(t *testing.T) {
 		t.Errorf("not one line without nulls: %q", stdout)
 	}
 }
+
+// ─── filings --min-reaction-z ────────────────────────────────────────────────
+
+func reactionFilingsBody(t *testing.T) string {
+	t.Helper()
+	row := func(id string, reaction any) json.RawMessage {
+		return json.RawMessage(ordered(t, "filing_id", id, "form", "MD&A", "datefiled", "2025-11-06", "period", nil,
+			"reaction", reaction, "url", "https://mosaic-finance.com/filings/"+id+"/f/k1.tok/"))
+	}
+	measured := json.RawMessage(ordered(t, "event_session", "2025-11-06", "z", -3.456, "abnormal_return", -7.1, "kind", "company"))
+	return ordered(t, "company", json.RawMessage(ordered(t, "name", "Cameco Corporation", "symbol", "CCO:CA", "exchange", "TSX")),
+		"filings", rawList(row("aaaaaaaa-0000-4000-8000-000000000002", measured), row("aaaaaaaa-0000-4000-8000-000000000001", nil)),
+		"truncated", false, "next_cursor", nil)
+}
+
+func TestFilingsMinReactionZ(t *testing.T) {
+	srv := newStub(t, 200, nil, reactionFilingsBody(t))
+	stdout, stderr, code := runVerb(t, srv.URL, "filings", "CCO:CA", "--min-reaction-z", "2", "--format", "table")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	if u := srv.last(); u != "/research/filings?limit=10&min_reaction_z=2&symbol=CCO%3ACA" {
+		t.Errorf("request %q", u)
+	}
+	lines := strings.Split(stdout, "\n")
+	if !strings.HasPrefix(lines[0], "FILING_ID") || !strings.Contains(lines[0], "PERIOD  MOVE (z)  URL") ||
+		!strings.Contains(lines[1], "  -3.46     https://") || !strings.Contains(lines[2], "-       ") || strings.Contains(lines[2], ".46") {
+		t.Errorf("table:\n%s", stdout)
+	}
+	// 0 is sent (it drops unmeasured filings); a fraction keeps its digits.
+	for arg, want := range map[string]string{"0": "min_reaction_z=0", "2.5": "min_reaction_z=2.5", "50": "min_reaction_z=50"} {
+		if _, stderr, code := runVerb(t, srv.URL, "filings", "CCO:CA", "--min-reaction-z", arg, "--format", "json"); code != 0 ||
+			!strings.Contains(srv.last(), want) {
+			t.Errorf("%s: exit %d request %q %s", arg, code, srv.last(), stderr)
+		}
+	}
+}
+
+// Without the flag the query and the table are what they were before it.
+func TestFilingsWithoutMinReactionZUnchanged(t *testing.T) {
+	srv := newStub(t, 200, nil, reactionFilingsBody(t))
+	stdout, _, code := runVerb(t, srv.URL, "filings", "CCO:CA", "--format", "table")
+	if code != 0 || srv.last() != "/research/filings?limit=10&symbol=CCO%3ACA" {
+		t.Fatalf("exit %d request %q", code, srv.last())
+	}
+	want := "FILING_ID                             FORM  DATE        PERIOD  URL\n" +
+		"aaaaaaaa-0000-4000-8000-000000000002  MD&A  2025-11-06  -       https://mosaic-finance.com/filings/aaaaaaaa-0000-4000-8000-000000000002/f/k1.tok/\n" +
+		"aaaaaaaa-0000-4000-8000-000000000001  MD&A  2025-11-06  -       https://mosaic-finance.com/filings/aaaaaaaa-0000-4000-8000-000000000001/f/k1.tok/\n"
+	if stdout != want {
+		t.Errorf("table\ngot  %q\nwant %q", stdout, want)
+	}
+}
+
+func TestFilingsMinReactionZOutOfRangeSendsNothing(t *testing.T) {
+	srv := newStub(t, 200, nil, reactionFilingsBody(t))
+	for _, v := range []string{"-1", "51", "50.0001", "NaN", "Inf", "-Inf", "+Inf"} {
+		if _, stderr, code := runVerb(t, srv.URL, "filings", "CCO:CA", "--min-reaction-z", v); code != ExitUsageError {
+			t.Errorf("%s: exit %d, want 2 (%s)", v, code, stderr)
+		}
+	}
+	if n := srv.calls.Load(); n != 0 {
+		t.Errorf("out of range values sent %d requests", n)
+	}
+}

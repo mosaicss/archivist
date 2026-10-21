@@ -10,7 +10,7 @@ import (
 func TestIsReadTool(t *testing.T) {
 	for name, want := range map[string]bool{
 		"search": true, "companies_search": true, "companies_get": true, "read_passage": true, "read_section": true,
-		"toc": true, "filings": true, "find": true, PublishTool: false, "usage": false, "auth_status": false,
+		"toc": true, "filings": true, "find": true, "screen": true, PublishTool: false, "usage": false, "auth_status": false,
 		"auth_whoami": false, "doctor": false, "version": false, "": false,
 	} {
 		if IsReadTool(name) != want {
@@ -24,7 +24,7 @@ func TestIsReadTool(t *testing.T) {
 func TestMosaicToolsNeverAsk(t *testing.T) {
 	for name, want := range map[string]bool{
 		"search": true, "companies_search": true, "companies_get": true, "read_passage": true, "read_section": true,
-		"toc": true, "filings": true, "find": true, PublishTool: true, "usage": false, "auth_status": false,
+		"toc": true, "filings": true, "find": true, "screen": true, PublishTool: true, "usage": false, "auth_status": false,
 		"auth_whoami": false, "doctor": false, "version": false, "": false, "Bash": false,
 	} {
 		if IsMosaicTool(name) != want {
@@ -51,7 +51,12 @@ func TestTaskToolsMirrorChatAPI(t *testing.T) {
 	if got := RouteScope("GET", "/research/filings/f1/find"); got != "read" {
 		t.Errorf("/research/filings/:id/find scope %q", got)
 	}
-	want := "companies_search,filings,find,publish_artifact,read_passage,read_section,search,toc"
+	// v0.2.35: the company screen is a search scope route, so screen is a
+	// task tool that never asks.
+	if got := RouteScope("GET", "/research/screen"); got != "search" || !IsReadTool("screen") || !IsMosaicTool("screen") {
+		t.Errorf("/research/screen scope %q", got)
+	}
+	want := "companies_search,filings,find,publish_artifact,read_passage,read_section,screen,search,toc"
 	if got := strings.Join(Tools(), ","); got != want {
 		t.Fatalf("Tools() = %s", got)
 	}

@@ -32,7 +32,7 @@ func RouteScope(method, path string) string {
 		return ""
 	}
 	switch path {
-	case "/research/search", "/research/companies", "/research/filings", "/uploads/search":
+	case "/research/search", "/research/companies", "/research/filings", "/research/screen", "/uploads/search":
 		return "search"
 	}
 	if readRoute.MatchString(path) {
@@ -53,6 +53,7 @@ var ToolRoutes = map[string][]string{
 	"read_section":     {"GET /research/filings/:id/sections"},
 	"toc":              {"GET /research/filings/:id/toc"},
 	"filings":          {"GET /research/filings"},
+	"screen":           {"GET /research/screen"},
 	"find":             {"GET /research/filings/:id/find"},
 	PublishTool:        {"POST /artifacts"},
 }
@@ -69,8 +70,8 @@ func IsMosaicTool(name string) bool {
 
 // ReadTools are the Mosaic read tools (Story 78.32): they only search and
 // read filings; publish_artifact is not one. filings and find joined in
-// Story 81.4.
-var ReadTools = []string{"search", "companies_search", "companies_get", "read_passage", "read_section", "toc", "filings", "find"}
+// Story 81.4, screen (the company screen, search scope) in v0.2.35.
+var ReadTools = []string{"search", "companies_search", "companies_get", "read_passage", "read_section", "toc", "filings", "screen", "find"}
 
 // IsReadTool reports a Mosaic read tool (by its MCP tool name).
 func IsReadTool(name string) bool { return contains(ReadTools, name) }
