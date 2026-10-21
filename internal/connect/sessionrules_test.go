@@ -30,10 +30,10 @@ func TestBashSessionScope(t *testing.T) {
 		"git status":             {scopePrefix, "git status"},
 		"cat notes.md":           {scopePrefix, "cat"},
 		"npm test":               {scopePrefix, "npm test"},
-		"git -C x log":           {scopePrefix, "git"},
+		"git -C src log":         {scopePrefix, "git"},
 		"grep -n 'a b' file.txt": {scopePrefix, "grep"},
 		"docker ps":              {scopePrefix, "docker ps"},
-		"find . -name x":         {scopePrefix, "find"},
+		"find . -name y":         {scopePrefix, "find"},
 		"/usr/bin/ls -l":         {scopePrefix, "/usr/bin/ls"},
 		// Exact: operators, wrappers, interpreters, assignments, runners.
 		"cd a && make":            {scopeCommand, "cd a && make"},
@@ -84,6 +84,19 @@ func TestBashSessionScope(t *testing.T) {
 		"ltrace ls", "xvfb-run x", "valgrind x", "gdb x", "lldb x", "chroot / ls", "unshare ls", "nsenter ls",
 		"firejail ls", "systemd-run ls", "script out", "expect x", "parallel echo", "entr ls", "sqlite3 a.db",
 		"sqlite a.db",
+		// Run option spellings: go with two dashes, tar and git abbreviations,
+		// tar's old style cluster, and the added options.
+		"go test --exec=x", "go build --toolexec x", "go vet -vettool=x", "tar --to-comm=x -xf a",
+		"tar --use-compress=x -cf a", "tar --checkpoint-act=exec=x -cf a", "tar xIf ./prog a.tar",
+		"tar --rsh-command=x -cf h:a", "git clone --upload=x r", "git add -u", "git clean -fdx",
+		"git difftool --extcmd=x", "git log --output=f", "git rebase --exec x main",
+		// A runner word anywhere after the program word.
+		"pipenv run curl x", "cargo run", "yarn workspace web exec curl x", "ip netns exec foo curl x",
+		"mise tasks run evil", "git bisect run x", "git submodule foreach x", "gcloud compute ssh vm",
+		// Commands that keep the exact command.
+		"sed -n 1p f", "vim f", "awk 1 f", "make", "rm f", "cp a b", "mv a b", "tee f", "curl https://e.com",
+		"wget u", "nc h 1", "scp a h:b", "dd if=a", "chmod 600 f", "Rscript a.R", "busybox ls", "tmux new",
+		"proxychains4 ls", "pypy3 a.py",
 	} {
 		if kind, value := sessionScope("Bash", bashInput(cmd)); kind != scopeCommand || value != cmd {
 			t.Errorf("%q: (%s, %q), want the exact command", cmd, kind, value)
@@ -91,7 +104,12 @@ func TestBashSessionScope(t *testing.T) {
 	}
 	for cmd, want := range map[string]string{
 		"rg -n foo": "rg", "tar -xzf a.tar": "tar", "rsync -av a b": "rsync", "fd -t f": "fd",
-		"git log -n 3": "git log", "go test ./...": "go test", "docker ps": "docker ps",
+		"git log -n 3": "git log", "go test ./...": "go test", "docker ps": "docker ps", "ls -la": "ls",
+		"cat notes.md": "cat", "grep -rn foo src": "grep", "git status": "git status", "npm test": "npm test",
+		"tar xzf a.tar": "tar xzf", "pipenv --version": "pipenv", "cargo -V": "cargo",
+		"yarn workspace web build": "yarn workspace", "ip netns list": "ip netns", "mise tasks ls": "mise tasks",
+		"git bisect start": "git bisect", "git submodule update": "git submodule",
+		"gcloud compute instances list": "gcloud compute",
 	} {
 		if kind, value := sessionScope("Bash", bashInput(cmd)); kind != scopePrefix || value != want {
 			t.Errorf("%q: (%s, %q), want prefix %q", cmd, kind, value, want)
@@ -120,7 +138,9 @@ func TestBashPrefixRules(t *testing.T) {
 	// A later command with an option that runs another program, under an
 	// existing prefix, raises a card.
 	for _, approved := range []string{"rg -n foo", "tar -xzf a.tar", "rsync -av a b", "fd -t f", "git log -n 3",
-		"go test ./...", "find . -name x"} {
+		"go test ./...", "find . -name y", "pipenv --version", "cargo -V", "yarn workspace web build",
+		"ip netns list", "mise tasks ls", "git bisect start", "git submodule update", "gcloud compute instances list",
+		"go build ./..."} {
 		r.remember("Bash", bashInput(approved), true)
 	}
 	for cmd, want := range map[string]bool{
@@ -131,6 +151,14 @@ func TestBashPrefixRules(t *testing.T) {
 		"git log -n 9": true, "git log -c core.pager=x": false, "git log --exec-path=/x": false,
 		"go test ./x": true, "go test -exec x ./x": false, "go test -toolexec=x ./x": false,
 		"find src -type f": true, "find . -fprint out": false,
+		"go test --exec=x ./x": false, "go build --toolexec x ./x": false, "go test -vettool=x ./x": false,
+		"tar --to-comm=sh -xf b": false, "tar --use-compress=x -xf b": false, "tar xIf ./prog b.tar": false,
+		"tar --checkpoint-act=exec=x -xf b": false, "tar xzf b.tar": true, "git log --output=f": false,
+		"git log --ext=x": false, "git log -u": false,
+		"pipenv run curl x": false, "pipenv --help": true, "cargo run": false, "cargo -h": true,
+		"yarn workspace web exec curl x": false, "yarn workspace web test": true, "ip netns exec foo curl x": false,
+		"mise tasks run evil": false, "mise tasks ls": true, "git bisect run x": false, "git bisect good": true,
+		"git submodule foreach x": false, "gcloud compute ssh vm": false, "gcloud compute instances list": true,
 	} {
 		if got := covered(r, "Bash", bashInput(cmd)); got != want {
 			t.Errorf("%q covered %v, want %v", cmd, got, want)

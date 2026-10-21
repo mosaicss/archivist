@@ -194,11 +194,28 @@ var bashWrappers = map[string]bool{
 	"sqlite3": true, "sqlite": true,
 }
 
+// exactPrograms are commands that run scripts or commands given in their
+// arguments, change files outside Edit and Write, or reach the network: an
+// approval of one keeps the exact command, never a prefix.
+var exactPrograms = map[string]bool{
+	"sed": true, "vi": true, "vim": true, "nvim": true, "ex": true, "emacs": true, "zip": true, "awk": true,
+	"gawk": true, "mawk": true, "nawk": true, "make": true, "taskset": true, "chrt": true, "busybox": true,
+	"fakeroot": true, "tmux": true, "screen": true, "hyperfine": true, "pypy": true, "pypy3": true,
+	"numactl": true, "prlimit": true, "runuser": true, "pkexec": true, "sg": true, "unbuffer": true,
+	"proxychains": true, "proxychains4": true, "torsocks": true, "faketime": true, "at": true, "batch": true,
+	"rscript": true, "tclsh": true, "julia": true, "rm": true, "rmdir": true, "dd": true, "shred": true,
+	"truncate": true, "chmod": true, "chown": true, "chgrp": true, "mv": true, "cp": true, "ln": true,
+	"install": true, "tee": true, "curl": true, "wget": true, "nc": true, "ncat": true, "netcat": true,
+	"socat": true, "scp": true, "sftp": true, "ftp": true, "telnet": true,
+}
+
 // runnerSubcommands are subcommand words that, for any program, run
 // another command (mise exec, npm x, uv tool, docker compose, bundle exec,
-// conda run): an approval of one is kept as the exact command.
+// conda run, git submodule foreach, gcloud compute ssh): a command with one
+// after its program word is kept exact and never covered by a prefix.
 var runnerSubcommands = map[string]bool{
-	"exec": true, "x": true, "run": true, "dlx": true, "tool": true, "compose": true, "container": true, "shell": true,
+	"exec": true, "x": true, "run": true, "dlx": true, "tool": true, "compose": true, "container": true,
+	"shell": true, "foreach": true, "ssh": true,
 }
 
 // runnerPrograms have runner subcommands: an approval of one without a
@@ -218,23 +235,33 @@ var findActions = map[string]bool{
 	"-fprint0": true, "-fprintf": true, "-fls": true, "-files0-from": true,
 }
 
-// runOptions are, per program, options that run another program. A one
-// letter option ("-e") also counts inside a cluster of short options
-// ("-avze"); a longer one matches the word or its part before "=".
+// tarRunOptions are the tar options that run another program.
+var tarRunOptions = []string{"--to-command", "--use-compress-program", "-I", "--checkpoint-action",
+	"--info-script", "--new-volume-script", "-F", "--rsh-command"}
+
+// runOptions are, per program, options that run another program or write
+// files. A one letter option ("-e") also counts inside a cluster of short
+// options ("-avze"); a longer one matches the word or its part before "=".
 var runOptions = map[string][]string{
 	"fd":     {"-x", "-X", "--exec", "--exec-batch"},
 	"fdfind": {"-x", "-X", "--exec", "--exec-batch"},
 	"rg":     {"--pre"},
-	"git":    {"-c", "--config-env", "--exec-path", "--upload-pack", "--receive-pack"},
-	"go":     {"-exec", "-toolexec"},
-	"tar": {"--to-command", "--use-compress-program", "-I", "--checkpoint-action", "--info-script",
-		"--new-volume-script", "-F"},
-	"gtar": {"--to-command", "--use-compress-program", "-I", "--checkpoint-action", "--info-script",
-		"--new-volume-script", "-F"},
-	"bsdtar": {"--to-command", "--use-compress-program", "-I", "--checkpoint-action", "--info-script",
-		"--new-volume-script", "-F"},
-	"rsync": {"-e", "--rsh", "--rsync-path"},
+	"git": {"-c", "-u", "-x", "--config-env", "--exec-path", "--upload-pack", "--receive-pack", "--exec",
+		"--extcmd", "--output"},
+	"go":     {"-exec", "-toolexec", "-vettool"},
+	"tar":    tarRunOptions,
+	"gtar":   tarRunOptions,
+	"bsdtar": tarRunOptions,
+	"rsync":  {"-e", "--rsh", "--rsync-path"},
 }
+
+// abbreviating are the programs that accept an unambiguous leading part of
+// a long option ("--to-comm" for "--to-command"); goDashes the one that
+// takes its options with one or two dashes.
+var (
+	abbreviating = map[string]bool{"tar": true, "gtar": true, "bsdtar": true, "git": true}
+	goDashes     = map[string]bool{"go": true}
+)
 
 // programName is a program word's comparable name: its base name, lower
 // case, without ".exe" or a trailing version.
@@ -247,10 +274,12 @@ func programName(word string) string {
 	return base
 }
 
-// isWrapper reports a program word that runs another command.
+// isWrapper reports a program word that runs another command, or one whose
+// approval always keeps the exact command (exactPrograms).
 func isWrapper(word string) bool {
-	base := strings.ToLower(word[strings.LastIndex(word, "/")+1:])
-	return bashWrappers[strings.TrimSuffix(base, ".exe")] || bashWrappers[programName(word)]
+	base := strings.TrimSuffix(strings.ToLower(word[strings.LastIndex(word, "/")+1:]), ".exe")
+	name := programName(word)
+	return bashWrappers[base] || bashWrappers[name] || exactPrograms[base] || exactPrograms[name]
 }
 
 // plainBashWords splits a plain command into its words (quotes kept as
@@ -325,12 +354,17 @@ func bashPrefix(cmd string) string {
 // unquote removes quotes from a word, as the program receives it.
 func unquote(w string) string { return strings.NewReplacer(`'`, "", `"`, "").Replace(w) }
 
-// findAction reports a command no prefix rule may cover: a find with a
-// primary that runs a command, deletes or writes, or a program given one of
-// its options that run another program (runOptions).
+// findAction reports a command no prefix rule may cover: a runner
+// subcommand word after the program word, a find with a primary that runs
+// a command, deletes or writes, or a program given one of its run options.
 func findAction(words []string) bool {
 	if len(words) == 0 {
 		return false
+	}
+	for _, w := range words[1:] {
+		if runnerSubcommands[unquote(w)] {
+			return true
+		}
 	}
 	program := programName(words[0])
 	if findPrograms[program] {
@@ -341,18 +375,41 @@ func findAction(words []string) bool {
 		}
 		return false
 	}
-	options := runOptions[program]
-	for _, w := range words[1:] {
+	for i, w := range words[1:] {
 		w = unquote(w)
-		name, _, _ := strings.Cut(w, "=")
-		for _, o := range options {
-			if name == o {
-				return true
-			}
-			short := len(o) == 2 && o[0] == '-' && o[1] != '-'
-			if short && len(w) > 2 && w[0] == '-' && w[1] != '-' && strings.ContainsRune(w[1:], rune(o[1])) {
-				return true
-			}
+		// tar's old style: a first argument without a dash is a cluster of
+		// short options ("tar xIf prog a.tar").
+		if i == 0 && tarRunOptionsFor(program) && w != "" && w[0] != '-' {
+			w = "-" + w
+		}
+		if runOption(program, w) {
+			return true
+		}
+	}
+	return false
+}
+
+func tarRunOptionsFor(program string) bool {
+	return program == "tar" || program == "gtar" || program == "bsdtar"
+}
+
+// runOption reports one argument word (quotes removed) that is one of the
+// program's run options, in any spelling the program accepts.
+func runOption(program, w string) bool {
+	name, _, _ := strings.Cut(w, "=")
+	for _, o := range runOptions[program] {
+		switch {
+		case name == o:
+			return true
+		case goDashes[program] && strings.HasPrefix(name, "-") && strings.TrimLeft(name, "-") == strings.TrimLeft(o, "-"):
+			return true
+		case abbreviating[program] && strings.HasPrefix(name, "--") && strings.HasPrefix(o, "--") &&
+			len(name) >= 4 && strings.HasPrefix(o, name):
+			return true
+		}
+		short := len(o) == 2 && o[0] == '-' && o[1] != '-'
+		if short && len(w) > 2 && w[0] == '-' && w[1] != '-' && strings.ContainsRune(w[1:], rune(o[1])) {
+			return true
 		}
 	}
 	return false

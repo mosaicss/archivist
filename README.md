@@ -502,9 +502,12 @@ For each "My Claude Code" session the daemon:
   program and its subcommand word, such as `ls` for `ls -la` or `git status`
   for `git status`, matched on whole words, so `ls` never covers `lsof`), or
   the exact command when it has shell operators, redirections, substitutions
-  or an environment assignment, or starts with a wrapper, interpreter or
-  runner (such as `sudo`, `bash`, `python3`, `xargs` or `uv run`); a prefix
-  never covers a `find` that runs commands, deletes or writes files. For Edit
+  or an environment assignment, starts with a wrapper, interpreter or a
+  command that edits files or reaches the network (such as `sudo`, `bash`,
+  `python3`, `xargs`, `sed`, `rm`, `curl`), or has a runner word such as
+  `run`, `exec` or `x` after the program; a prefix never covers a `find` that
+  runs commands, deletes or writes files, or an option that runs another
+  program (such as `git -c`, `tar -I`, `rsync -e`, in any spelling). For Edit
   and Write it is the file path (one rule for both tools), and for Read, Glob,
   Grep and any other tool every later call of that tool. "Deny for session"
   applies to every later call of that tool. Both live in the daemon's memory,
