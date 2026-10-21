@@ -14,28 +14,46 @@ import (
 // first mint, PID start-time guard.
 
 func TestRemoveSessionCwdGuard(t *testing.T) {
-	base := t.TempDir()
+	st, err := OpenStore(filepath.Join(t.TempDir(), "connect"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := st.WorkDir()
 	good := filepath.Join(base, cwdPrefix+"123")
 	other := filepath.Join(base, "projects")
-	for _, d := range []string{good, other} {
+	// Story 94.5: a session folder name outside the work directory (or the
+	// legacy temp directory) is not a session folder.
+	elsewhere := filepath.Join(t.TempDir(), "nested", cwdPrefix+"456")
+	for _, d := range []string{good, other, elsewhere} {
 		if err := os.MkdirAll(d, 0o700); err != nil {
 			t.Fatal(err)
 		}
 	}
 	home, _ := os.UserHomeDir()
-	for _, bad := range []string{"", "relative/" + cwdPrefix + "x", other, "/", home, base} {
-		if removeSessionCwd(bad) {
+	for _, bad := range []string{"", "relative/" + cwdPrefix + "x", other, "/", home, base, elsewhere} {
+		if st.removeSessionCwd(bad) {
 			t.Errorf("removed %q", bad)
 		}
 	}
-	if _, err := os.Stat(other); err != nil {
-		t.Fatal("unrelated directory removed")
+	for _, d := range []string{other, elsewhere} {
+		if _, err := os.Stat(d); err != nil {
+			t.Fatalf("unrelated directory %s removed", d)
+		}
 	}
-	if !removeSessionCwd(good) {
+	if !st.removeSessionCwd(good) {
 		t.Fatal("session cwd not removed")
 	}
 	if _, err := os.Stat(good); !os.IsNotExist(err) {
 		t.Fatal("session cwd still exists")
+	}
+	// A record from before Story 94.5 (a folder in the OS temp directory)
+	// is still a session folder.
+	legacy, err := os.MkdirTemp("", cwdPrefix+"*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !st.removeSessionCwd(legacy) {
+		t.Fatal("legacy temp session cwd not removed")
 	}
 }
 

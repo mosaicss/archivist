@@ -30,7 +30,8 @@ const (
 	ClaudeWebFetchTool  = "WebFetch"
 )
 
-// claudeFlagSettings is the --settings value of every launch (Story 78.32).
+// claudeFlagSettings is the base of every launch's --settings (Story
+// 78.32); Story 94.5 adds the fence to it (fence.go claudeSettings).
 const claudeFlagSettings = `{"useAutoModeDuringPlan":false}`
 
 // DefaultSettingSources keeps user, project and local settings out of the
@@ -61,6 +62,10 @@ type ClaudeConfig struct {
 	// ClaudeLoginConsole when the sandbox home already holds a logged in
 	// login other than claude.ai (a remembered Console login).
 	Login ClaudeLogin
+	// Settings is the launch's --settings value (Story 94.5: the path of
+	// the settings file with the fence's sandbox and deny rules, written
+	// per launch by spawn; "" = the inline base claudeFlagSettings only).
+	Settings string
 	// SignInFile is the sandbox's sign in request file (Story 78.38,
 	// ARCHIVIST_SIGNIN_FILE; "" = none): while a Claude sign in waits the
 	// session polls it for the user's switch to a Console login or to their
@@ -138,8 +143,13 @@ func claudeArgs(cfg ClaudeConfig, mcpConfigPath, guidancePath, cwd, resumeID str
 	// Plan mode (read_only) must never let the auto mode classifier approve
 	// shell commands: set on every launch, so a later switch to plan holds
 	// too (verified on 2.1.280: get_settings reports it from flagSettings
-	// alongside --setting-sources "").
-	args = append(args, "--settings", claudeFlagSettings)
+	// alongside --setting-sources ""). Story 94.5: the same JSON carries the
+	// fence (--settings is its own layer, outside --setting-sources).
+	settings := cfg.Settings
+	if settings == "" {
+		settings = claudeFlagSettings
+	}
+	args = append(args, "--settings", settings)
 	// The file form: no argv length limit, and print mode reads it on resume too.
 	args = append(args, "--append-system-prompt-file", guidancePath)
 	// Last: --add-dir is variadic, so nothing may follow its value.

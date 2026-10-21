@@ -84,7 +84,7 @@ func TestConnectStartMovesAKeychainKeyBeforeTheRelay(t *testing.T) {
 func TestConnectSessionModeLeavesTheKeychain(t *testing.T) {
 	skipShellStubs(t)
 	dir := t.TempDir()
-	script := "#!/bin/sh\ncase \"$1\" in\n--version) echo 'codex-cli 0.160.0';;\n" +
+	script := "#!/bin/sh\ncase \"$1\" in\n--version) echo 'codex-cli 0.163.0';;\n" +
 		"login) echo 'Not logged in' >&2; exit 1;;\n*) exit 2;;\nesac\n"
 	if err := os.WriteFile(filepath.Join(dir, "codex"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)

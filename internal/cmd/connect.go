@@ -72,8 +72,10 @@ archivist connect --web-search in the foreground.
 ARCHIVIST_CONNECT_DEBUG=1 adds debug lines (context use per turn).
 
 Requires an ak_ API key (archivist auth login) on a Pro account, and Claude
-Code logged in with a claude.ai subscription or Codex logged in with
-ChatGPT. API key logins are refused.
+Code 2.1.299 or newer logged in with a claude.ai subscription (on Linux with
+the bubblewrap and socat packages installed) or Codex 0.163.0 or newer
+logged in with ChatGPT. API key logins are refused. Each session works in
+its own folder, ~/.archivist/connect/work/<folder>.
 
   archivist connect --check     report what was detected, connect nothing
   archivist connect             connect and serve sessions until Ctrl-C

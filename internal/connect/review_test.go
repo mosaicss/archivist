@@ -277,8 +277,8 @@ func TestReviewStartupSweepAndCorruptRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 	expired, ended := randomUUID(), randomUUID()
-	expiredCwd := filepath.Join(h.tmp, cwdPrefix+"expired")
-	endedCwd := filepath.Join(h.tmp, cwdPrefix+"ended")
+	expiredCwd := filepath.Join(st.WorkDir(), cwdPrefix+"expired")
+	endedCwd := filepath.Join(st.WorkDir(), cwdPrefix+"ended")
 	for _, d := range []string{expiredCwd, endedCwd} {
 		if err := os.MkdirAll(d, 0o700); err != nil {
 			t.Fatal(err)

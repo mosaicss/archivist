@@ -93,8 +93,29 @@ func TestHarnessMappingTable(t *testing.T) {
 			t.Errorf("%s maps to %s", m, p)
 		}
 	}
-	if claudePermissionMode("bogus") != "plan" || codexApprovalPolicy("bogus") != "never" || codexSandboxMode("bogus") != "read-only" {
+	if claudePermissionMode("bogus") != "plan" || codexApprovalPolicy("bogus") != "never" || codexSandboxMode("bogus") != "read-only" ||
+		codexProfile("bogus") != codexProfileRead {
 		t.Error("an unknown mode must map to the read only harness settings")
+	}
+	// Story 94.5: the permission profile per mode, never sent with a
+	// sandbox or sandbox policy (and the legacy pair never with a profile).
+	for m, want := range map[Mode]string{ModeReadOnly: "archivist-read", ModeAsk: "archivist-write",
+		ModeAutoEdits: "archivist-write", ModeFullAuto: "archivist-full"} {
+		if codexProfile(m) != want {
+			t.Errorf("%s: profile %s, want %s", m, codexProfile(m), want)
+		}
+		if sb, perm := codexThreadIsolation(m, false); sb != "" || perm != want {
+			t.Errorf("%s: thread isolation %q %q", m, sb, perm)
+		}
+		if pol, perm := codexTurnIsolation(m, false); pol != nil || perm != want {
+			t.Errorf("%s: turn isolation %v %q", m, pol, perm)
+		}
+		if sb, perm := codexThreadIsolation(m, true); sb != codexSandboxMode(m) || perm != "" {
+			t.Errorf("%s: legacy thread isolation %q %q", m, sb, perm)
+		}
+		if pol, perm := codexTurnIsolation(m, true); pol["type"] != codexSandboxType(m) || perm != "" {
+			t.Errorf("%s: legacy turn isolation %v %q", m, pol, perm)
+		}
 	}
 }
 
@@ -383,6 +404,7 @@ func TestContextUsageExtraction(t *testing.T) {
 	}
 }
 
+// The legacy sandbox per mode (Windows, codexLegacySandbox).
 func TestThreadProblemPerMode(t *testing.T) {
 	no, yes := false, true
 	thread := func(policy string, sandbox string) codexThreadResult {
@@ -399,7 +421,7 @@ func TestThreadProblemPerMode(t *testing.T) {
 		return th
 	}
 	for _, m := range Modes {
-		if p := threadProblem(thread(codexApprovalPolicy(m), codexSandboxType(m)), "/w", "", m); p != "" {
+		if p := threadProblemFor(thread(codexApprovalPolicy(m), codexSandboxType(m)), "/w", "", m, true); p != "" {
 			t.Errorf("%s: mapped thread failed: %s", m, p)
 		}
 	}
@@ -419,7 +441,7 @@ func TestThreadProblemPerMode(t *testing.T) {
 		}(), ModeReadOnly, "networkAccess is true"},
 		"read_only no network": {func() codexThreadResult { th := thread("never", "readOnly"); th.Sandbox.NetworkAccess = nil; return th }(), ModeReadOnly, "networkAccess not reported"},
 	} {
-		if p := threadProblem(c.th, "/w", "", c.mode); !strings.Contains(p, c.want) {
+		if p := threadProblemFor(c.th, "/w", "", c.mode, true); !strings.Contains(p, c.want) {
 			t.Errorf("%s: %q, want %q", name, p, c.want)
 		}
 	}
@@ -517,7 +539,7 @@ func TestControlsStartWithoutControls(t *testing.T) {
 	h := newHarness(t, nil)
 	h.debugLog = true
 	h.start()
-	if caps := h.relay.lastCaps(); len(caps) != 1 || caps[0] != (Capability{Agent: "claude", Version: "2.1.280", Available: true, LoggedIn: true}) {
+	if caps := h.relay.lastCaps(); len(caps) != 1 || caps[0] != (Capability{Agent: "claude", Version: "2.1.299", Available: true, LoggedIn: true}) {
 		t.Fatalf("capabilities %+v", caps)
 	}
 	waitFor(t, 10*time.Second, "controls frame", func() bool { return h.relay.lastControls() != nil })
@@ -881,7 +903,7 @@ func TestControlsCodexModes(t *testing.T) {
 	sid := h.startWith("codex", "cmd ls", map[string]any{"mode": "read_only", "model": "fake-other", "effort": "medium"})
 	h.waitFinishes(sid, 1)
 	ts := h.threadStart()
-	if ts["approvalPolicy"] != "never" || ts["sandbox"] != "read-only" || ts["model"] != "fake-other" ||
+	if ts["approvalPolicy"] != "never" || !threadIsolationIs(ts, ModeReadOnly) || ts["model"] != "fake-other" ||
 		ts["config"].(map[string]any)["model_reasoning_effort"] != "medium" {
 		t.Fatalf("thread/start %v", ts)
 	}
@@ -910,8 +932,10 @@ func TestControlsCodexModes(t *testing.T) {
 		t.Fatalf("turn/starts %d", len(starts))
 	}
 	for _, p := range starts {
-		sp := p["sandboxPolicy"].(map[string]any)
-		if p["approvalPolicy"] != "never" || sp["type"] != "readOnly" || sp["networkAccess"] != false || p["model"] != "fake-other" || p["effort"] != "medium" {
+		if p["approvalPolicy"] != "never" || !turnIsolationIs(p, ModeReadOnly) || p["model"] != "fake-other" || p["effort"] != "medium" {
+			t.Fatalf("read_only turn/start %v", p)
+		}
+		if sp, ok := p["sandboxPolicy"].(map[string]any); codexLegacySandbox && (!ok || sp["networkAccess"] != false) {
 			t.Fatalf("read_only turn/start %v", p)
 		}
 	}
@@ -931,7 +955,7 @@ func TestControlsCodexModes(t *testing.T) {
 	if text := h.relay.text(sid); !strings.Contains(text, "ran touch b") || !strings.Contains(text, "published") {
 		t.Fatalf("text %q", text)
 	}
-	if p := h.turnStarts()[4]; p["approvalPolicy"] != "never" || p["sandboxPolicy"].(map[string]any)["type"] != "dangerFullAccess" {
+	if p := h.turnStarts()[4]; p["approvalPolicy"] != "never" || !turnIsolationIs(p, ModeFullAuto) {
 		t.Fatalf("full_auto turn/start %v", p)
 	}
 
@@ -941,10 +965,15 @@ func TestControlsCodexModes(t *testing.T) {
 	h.approve(sid, 2, "deny", "user", "")
 	h.waitFinishes(sid, 7)
 	p := h.turnStarts()[6]
-	sp := p["sandboxPolicy"].(map[string]any)
-	if p["approvalPolicy"] != "untrusted" || sp["type"] != "workspaceWrite" || sp["networkAccess"] != false ||
-		sp["excludeSlashTmp"] != true || sp["excludeTmpdirEnvVar"] != true || len(sp["writableRoots"].([]any)) != 0 {
+	if p["approvalPolicy"] != "untrusted" || !turnIsolationIs(p, ModeAsk) {
 		t.Fatalf("ask turn/start %v", p)
+	}
+	if codexLegacySandbox {
+		sp := p["sandboxPolicy"].(map[string]any)
+		if sp["networkAccess"] != false || sp["excludeSlashTmp"] != true || sp["excludeTmpdirEnvVar"] != true ||
+			len(sp["writableRoots"].([]any)) != 0 {
+			t.Fatalf("ask turn/start %v", p)
+		}
 	}
 	if len(h.relay.invalid) != 0 {
 		t.Fatalf("invalid events %v", h.relay.invalid)
@@ -961,11 +990,11 @@ func TestControlsCodexCeilingAndCatalogue(t *testing.T) {
 	h.setMode(sid, ModeFullAuto)
 	h.message(sid, "echo two")
 	h.waitFinishes(sid, 2)
-	if ts := h.threadStart(); ts["approvalPolicy"] != "untrusted" || ts["sandbox"] != "workspace-write" {
+	if ts := h.threadStart(); ts["approvalPolicy"] != "untrusted" || !threadIsolationIs(ts, ModeAutoEdits) {
 		t.Fatalf("thread/start %v", ts)
 	}
 	for _, p := range h.turnStarts() {
-		if p["approvalPolicy"] != "untrusted" || p["sandboxPolicy"].(map[string]any)["type"] != "workspaceWrite" {
+		if p["approvalPolicy"] != "untrusted" || !turnIsolationIs(p, ModeAutoEdits) {
 			t.Fatalf("turn/start above the ceiling %v", p)
 		}
 	}
@@ -1106,7 +1135,7 @@ func TestControlsCodexAutoEdits(t *testing.T) {
 	h.start()
 	sid := h.startWith("codex", "file a.txt", map[string]any{"mode": "auto_edits"})
 	h.waitFinishes(sid, 1)
-	if ts := h.threadStart(); ts["approvalPolicy"] != "untrusted" || ts["sandbox"] != "workspace-write" {
+	if ts := h.threadStart(); ts["approvalPolicy"] != "untrusted" || !threadIsolationIs(ts, ModeAutoEdits) {
 		t.Fatalf("thread/start %v", ts)
 	}
 	if h.cards(sid) != 0 || !strings.Contains(h.relay.text(sid), "wrote a.txt") {
@@ -1415,11 +1444,11 @@ func TestControlsMachineEffortDroppedForSessionModel(t *testing.T) {
 func TestControlsPre7832RecordResumesAsk(t *testing.T) {
 	h := newHarness(t, nil)
 	sess := h.api.addSession("claude")
-	cwd, err := os.MkdirTemp(h.tmp, cwdPrefix+"*")
+	st, err := OpenStore(filepath.Join(h.home, ".archivist", "connect"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	st, err := OpenStore(filepath.Join(h.home, ".archivist", "connect"))
+	cwd, err := os.MkdirTemp(st.WorkDir(), cwdPrefix+"*")
 	if err != nil {
 		t.Fatal(err)
 	}

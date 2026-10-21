@@ -1,4 +1,4 @@
-// Command fakecodex imitates the codex-cli 0.160.0 app-server surface used
+// Command fakecodex imitates the codex-cli 0.163.0 app-server surface used
 // by archivist connect (newline-delimited JSON-RPC on stdio), for tests
 // only. It never calls a model.
 //
@@ -58,9 +58,13 @@
 // cap).
 // Replies to requests the fake no longer waits for are recorded in
 // late-replies.jsonl. thread/start and thread/resume answer the sandbox
-// they were asked for (read-only, workspace-write, danger-full-access) and
-// every turn/start's params are appended to turn-start.jsonl (Story
-// 78.32). The fake asks approvals whatever the approval policy, so tests
+// they were asked for (read-only, workspace-write, danger-full-access), or
+// with permissions (Story 94.5) the activePermissionProfile of that id
+// (extends from its -c permissions.<id>.extends; an id without one is an
+// error, as is permissions together with sandbox; config.json
+// activeProfile overrides the reported id) and the legacy sandbox it
+// implies; every turn/start's params are appended to turn-start.jsonl
+// (Story 78.32), and turn/start refuses permissions with sandboxPolicy. The fake asks approvals whatever the approval policy, so tests
 // see the daemon's own backstop.
 // config/read (Story 78.33) reports web_search from the -c override with
 // origin sessionFlags (no override: "cached", the default, with no
@@ -127,6 +131,9 @@ type config struct {
 	ConfigReadOrigin    string `json:"configReadOrigin"`
 	ConfigReadError     string `json:"configReadError"`
 	ConfigReadMissing   bool   `json:"configReadMissing"`
+	// ActiveProfile overrides the activePermissionProfile id thread/start
+	// and thread/resume report (Story 94.5).
+	ActiveProfile string `json:"activeProfile"`
 }
 
 var (
@@ -138,7 +145,7 @@ var (
 )
 
 func loadConfig() config {
-	c := config{Version: "0.160.0", AccountType: "chatgpt", ModelProvider: "openai"}
+	c := config{Version: "0.163.0", AccountType: "chatgpt", ModelProvider: "openai"}
 	if b, err := os.ReadFile(filepath.Join(base, "config.json")); err == nil {
 		_ = json.Unmarshal(b, &c)
 	}
@@ -498,16 +505,42 @@ func (s *server) handle(id json.RawMessage, method string, params json.RawMessag
 		case "danger-full-access":
 			sandbox = map[string]any{"type": "dangerFullAccess"}
 		}
+		var active any
+		if profile, ok := p["permissions"].(string); ok && profile != "" {
+			if _, both := p["sandbox"]; both {
+				replyErr(id, -32600, "`permissions` cannot be combined with `sandbox`")
+				return
+			}
+			var extends string
+			if json.Unmarshal([]byte(s.overrides["permissions."+profile+".extends"]), &extends) != nil {
+				replyErr(id, -32600, "unknown permissions profile "+profile)
+				return
+			}
+			network := s.overrides["permissions."+profile+".network.enabled"] == "true"
+			sandbox = map[string]any{"type": "workspaceWrite", "writableRoots": []string{}, "networkAccess": network,
+				"excludeTmpdirEnvVar": false, "excludeSlashTmp": false}
+			if extends == ":read-only" {
+				sandbox = map[string]any{"type": "readOnly", "networkAccess": network}
+			}
+			if cfg.ActiveProfile != "" {
+				profile = cfg.ActiveProfile
+			}
+			active = map[string]any{"id": profile, "extends": extends}
+		}
 		reply(id, map[string]any{"thread": map[string]any{"id": tid, "cwd": s.cwd}, "model": model,
 			"modelProvider": cfg.ModelProvider, "cwd": s.cwd, "instructionSources": sources,
 			"approvalPolicy": p["approvalPolicy"], "approvalsReviewer": p["approvalsReviewer"],
-			"sandbox": sandbox, "reasoningEffort": nil})
+			"sandbox": sandbox, "activePermissionProfile": active, "reasoningEffort": nil})
 		s.startMCP()
 	case "turn/start":
 		_ = os.MkdirAll(base, 0o700)
 		if fh, err := os.OpenFile(filepath.Join(base, "turn-start.jsonl"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600); err == nil {
 			_, _ = fh.Write(append(append([]byte(nil), params...), '\n'))
 			_ = fh.Close()
+		}
+		if _, both := p["sandboxPolicy"]; both && p["permissions"] != nil {
+			replyErr(id, -32600, "`permissions` cannot be combined with `sandboxPolicy`")
+			return
 		}
 		input, _ := p["input"].([]any)
 		text := ""

@@ -90,7 +90,7 @@ func fakeSessionAPI(t *testing.T, status int, body string) (*httptest.Server, fu
 func TestConnectSessionModeChecksTheSessionFirst(t *testing.T) {
 	skipShellStubs(t)
 	dir := t.TempDir()
-	script := "#!/bin/sh\ncase \"$1\" in\n--version) echo 'codex-cli 0.160.0';;\n" +
+	script := "#!/bin/sh\ncase \"$1\" in\n--version) echo 'codex-cli 0.163.0';;\n" +
 		"login) echo 'Not logged in' >&2; exit 1;;\n*) exit 2;;\nesac\n"
 	if err := os.WriteFile(filepath.Join(dir, "codex"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
@@ -124,7 +124,7 @@ func TestConnectSessionModeRefusesUnusableHarness(t *testing.T) {
 		code   int
 	}{
 		"missing":     {"", cmd.ExitNotFound},
-		"api key":     {"#!/bin/sh\ncase \"$1\" in\n--version) echo 'codex-cli 0.160.0';;\nlogin) echo 'Logged in using an API key' >&2;;\n*) exit 2;;\nesac\n", cmd.ExitAuthError},
+		"api key":     {"#!/bin/sh\ncase \"$1\" in\n--version) echo 'codex-cli 0.163.0';;\nlogin) echo 'Logged in using an API key' >&2;;\n*) exit 2;;\nesac\n", cmd.ExitAuthError},
 		"below floor": {"#!/bin/sh\ncase \"$1\" in\n--version) echo 'codex-cli 0.100.0';;\nlogin) echo 'Not logged in' >&2; exit 1;;\n*) exit 2;;\nesac\n", cmd.ExitGenericError},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -165,7 +165,7 @@ func TestConnectMaxPermissionReachesTheDaemon(t *testing.T) {
 		{nil, "permission ceiling full_auto;"},
 	} {
 		dir := t.TempDir()
-		script := "#!/bin/sh\ncase \"$1\" in\n--version) echo 'codex-cli 0.160.0';;\n" +
+		script := "#!/bin/sh\ncase \"$1\" in\n--version) echo 'codex-cli 0.163.0';;\n" +
 			"login) echo 'Not logged in' >&2; exit 1;;\n*) exit 2;;\nesac\n"
 		if err := os.WriteFile(filepath.Join(dir, "codex"), []byte(script), 0o755); err != nil {
 			t.Fatal(err)
@@ -198,7 +198,7 @@ func TestConnectWebSearchReachesTheDaemon(t *testing.T) {
 		{[]string{"--web-search"}, "; web search on;"},
 	} {
 		dir := t.TempDir()
-		script := "#!/bin/sh\ncase \"$1\" in\n--version) echo 'codex-cli 0.160.0';;\n" +
+		script := "#!/bin/sh\ncase \"$1\" in\n--version) echo 'codex-cli 0.163.0';;\n" +
 			"login) echo 'Not logged in' >&2; exit 1;;\n*) exit 2;;\nesac\n"
 		if err := os.WriteFile(filepath.Join(dir, "codex"), []byte(script), 0o755); err != nil {
 			t.Fatal(err)
@@ -224,7 +224,7 @@ func TestConnectWebSearchReachesTheDaemon(t *testing.T) {
 func TestConnectResumeAndActivityReachTheDaemon(t *testing.T) {
 	skipShellStubs(t)
 	dir := t.TempDir()
-	script := "#!/bin/sh\ncase \"$1\" in\n--version) echo 'codex-cli 0.160.0';;\n" +
+	script := "#!/bin/sh\ncase \"$1\" in\n--version) echo 'codex-cli 0.163.0';;\n" +
 		"login) echo 'Not logged in' >&2; exit 1;;\n*) exit 2;;\nesac\n"
 	if err := os.WriteFile(filepath.Join(dir, "codex"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
@@ -253,12 +253,13 @@ func TestConnectResumeAndActivityReachTheDaemon(t *testing.T) {
 func consoleClaude(t *testing.T) {
 	t.Helper()
 	dir := t.TempDir()
-	script := "#!/bin/sh\ncase \"$1\" in\n--version) echo '2.1.289 (Claude Code)';;\n" +
+	script := "#!/bin/sh\ncase \"$1\" in\n--version) echo '2.1.304 (Claude Code)';;\n" +
 		"auth) echo '{\"loggedIn\":true,\"authMethod\":\"api_key\",\"apiProvider\":\"firstParty\",\"apiKeySource\":\"/login managed key\"}';;\n" +
 		"*) exit 2;;\nesac\n"
 	if err := os.WriteFile(filepath.Join(dir, "claude"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	sandboxToolStubs(t, dir)
 	t.Setenv("PATH", dir)
 }
 

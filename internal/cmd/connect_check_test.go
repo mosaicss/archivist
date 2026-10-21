@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -17,6 +18,9 @@ func detectWith(found []string, claudeVersion, authJSON, codexVersion string) co
 			if f == file {
 				return "/opt/bin/" + file, nil
 			}
+		}
+		if file == "bwrap" || file == "socat" {
+			return "/usr/bin/" + file, nil // Story 94.5: the Linux sandbox programs
 		}
 		return "", errors.New("not found")
 	}
@@ -58,19 +62,19 @@ func TestConnectCheckOutputAndExitCodes(t *testing.T) {
 		exit     int
 		contains []string
 	}{
-		{"usable", detectWith([]string{"claude", "codex"}, "2.1.280 (Claude Code)", sub, "codex-cli 0.160.0"), 0, []string{
-			"path:     /opt/bin/claude", "version:  2.1.280", "floor:    2.1.280 (ok)", "loggedIn: true",
+		{"usable", detectWith([]string{"claude", "codex"}, "2.1.299 (Claude Code)", sub, "codex-cli 0.163.0"), 0, []string{
+			"path:     /opt/bin/claude", "version:  2.1.299", "floor:    2.1.299 (ok)", "loggedIn: true",
 			"authMethod: claude.ai", "subscriptionType: max", "status:   usable",
-			"path:     /opt/bin/codex", "version:  0.160.0", "floor:    0.160.0 (ok)", "not usable: the Codex home directory is unknown"}},
+			"path:     /opt/bin/codex", "version:  0.163.0", "floor:    0.163.0 (ok)", "not usable: the Codex home directory is unknown"}},
 		{"missing", detectWith(nil, "", "", ""), ExitNotFound, []string{
 			"claude\n  path:     not found", "not usable: Claude Code (claude) was not found on PATH",
 			"codex\n  path:     not found"}},
-		{"below floor", detectWith([]string{"claude"}, "2.1.279 (Claude Code)", sub, ""), ExitGenericError, []string{
-			"version:  2.1.279", "floor:    2.1.280 (below floor)", "not usable: Claude Code 2.1.279 is older than the supported floor 2.1.280"}},
-		{"not subscription", detectWith([]string{"claude"}, "2.1.288 (Claude Code)", `{"loggedIn":true,"authMethod":"console","subscriptionType":""}`, ""), ExitAuthError, []string{
-			"floor:    2.1.280 (ok)", "loggedIn: true", "authMethod: console", "subscriptionType: -",
+		{"below floor", detectWith([]string{"claude"}, "2.1.298 (Claude Code)", sub, ""), ExitGenericError, []string{
+			"version:  2.1.298", "floor:    2.1.299 (below floor)", "not usable: Claude Code 2.1.298 is older than the supported floor 2.1.299"}},
+		{"not subscription", detectWith([]string{"claude"}, "2.1.303 (Claude Code)", `{"loggedIn":true,"authMethod":"console","subscriptionType":""}`, ""), ExitAuthError, []string{
+			"floor:    2.1.299 (ok)", "loggedIn: true", "authMethod: console", "subscriptionType: -",
 			"not usable: Claude Code is logged in with \"console\""}},
-		{"logged out", detectWith([]string{"claude"}, "2.1.280 (Claude Code)", `{"loggedIn":false}`, ""), ExitAuthError, []string{
+		{"logged out", detectWith([]string{"claude"}, "2.1.299 (Claude Code)", `{"loggedIn":false}`, ""), ExitAuthError, []string{
 			"loggedIn: false", "authMethod: -", "not usable: Claude Code is not logged in"}},
 	}
 	for _, c := range cases {
@@ -87,12 +91,43 @@ func TestConnectCheckOutputAndExitCodes(t *testing.T) {
 	}
 }
 
-func TestConnectCheckShowsCodexLogin(t *testing.T) {
+// Story 94.5: on Linux, --check names the two packages a Claude Code
+// session needs when either is missing; Codex is unaffected.
+func TestConnectCheckShowsLinuxPackages(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux only")
+	}
 	sub := `{"loggedIn":true,"authMethod":"claude.ai","subscriptionType":"max"}`
-	det := detectWith([]string{"claude", "codex"}, "2.1.280 (Claude Code)", sub, "codex-cli 0.160.0")
+	look := func(file string) (string, error) {
+		if file == "claude" || file == "bwrap" {
+			return "/opt/bin/" + file, nil
+		}
+		return "", errors.New("not found")
+	}
+	run := func(_ context.Context, _ []string, _ string, _ string, args ...string) ([]byte, error) {
+		if len(args) == 1 {
+			return []byte("2.1.306 (Claude Code)"), nil
+		}
+		return []byte(sub), nil
+	}
+	det := connect.Detect(context.Background(), look, run, nil, "/")
 	var out bytes.Buffer
 	printDetection(&out, det)
-	if !strings.Contains(out.String(), "codex\n  path:     /opt/bin/codex\n  version:  0.160.0\n  floor:    0.160.0 (ok)\n  loggedIn: true\n  login:    Logged in using ChatGPT\n  status:   not usable") {
+	want := "status:   not usable: Claude Code needs two Linux packages, bubblewrap and socat. Install them, for example: sudo apt install bubblewrap socat"
+	if !strings.Contains(out.String(), want) || det.Claude.Usable() {
+		t.Fatalf("--check:\n%s", out.String())
+	}
+	if got := exitOf(connectExit(det)); got != ExitGenericError {
+		t.Fatalf("exit %d", got)
+	}
+}
+
+func TestConnectCheckShowsCodexLogin(t *testing.T) {
+	sub := `{"loggedIn":true,"authMethod":"claude.ai","subscriptionType":"max"}`
+	det := detectWith([]string{"claude", "codex"}, "2.1.299 (Claude Code)", sub, "codex-cli 0.163.0")
+	var out bytes.Buffer
+	printDetection(&out, det)
+	if !strings.Contains(out.String(), "codex\n  path:     /opt/bin/codex\n  version:  0.163.0\n  floor:    0.163.0 (ok)\n  loggedIn: true\n  login:    Logged in using ChatGPT\n  status:   not usable") {
 		t.Fatalf("codex block:\n%s", out.String())
 	}
 }

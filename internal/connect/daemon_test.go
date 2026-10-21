@@ -130,11 +130,14 @@ func (h *harness) start() {
 		if file == "codex" && h.codex {
 			return testCodexBinary(h.t), nil
 		}
+		if file == "bwrap" || file == "socat" {
+			return "/usr/bin/" + file, nil // Story 94.5: the Linux sandbox programs
+		}
 		return "", exec.ErrNotFound
 	}
 	var codexCfg CodexConfig
 	if h.codex && !h.codexOff {
-		codexCfg = CodexConfig{Bin: testCodexBinary(h.t), Version: "0.160.0", Model: h.codexModel, Effort: h.codexEffort,
+		codexCfg = CodexConfig{Bin: testCodexBinary(h.t), Version: "0.163.0", Model: h.codexModel, Effort: h.codexEffort,
 			OwnerHome: h.codexOwner(), Executable: archivistBin, BaseURL: h.api.srv.URL}
 	}
 	logger := NewLogger(h.log)
@@ -165,7 +168,6 @@ func (h *harness) start() {
 			return Detect(ctx, lookPath, ExecRunner, childEnv, h.home)
 		},
 		Environ:    func() []string { return env },
-		TempDir:    h.tmp,
 		ChatAPIURL: h.api.srv.URL,
 		OnPause:    h.onPause,
 	})
@@ -298,7 +300,7 @@ func TestDaemonSessionLifecycle(t *testing.T) {
 	h := newHarness(t, nil)
 	h.start()
 	caps := h.relay.lastCaps()
-	if len(caps) != 1 || caps[0] != (Capability{Agent: "claude", Version: "2.1.280", Available: true, LoggedIn: true}) {
+	if len(caps) != 1 || caps[0] != (Capability{Agent: "claude", Version: "2.1.299", Available: true, LoggedIn: true}) {
 		t.Fatalf("capabilities %+v", caps)
 	}
 
@@ -352,14 +354,15 @@ func TestDaemonSessionLifecycle(t *testing.T) {
 			t.Errorf("args missing %q: %s", want, args)
 		}
 	}
-	// makeCwd resolves the temp dir (EvalSymlinks), which on Windows also
+	// makeCwd resolves the work dir (EvalSymlinks), which on Windows also
 	// expands an 8.3 short name (RUNNER~1) to the long one: compare the
-	// resolved forms.
-	tmp, err := filepath.EvalSymlinks(h.tmp)
+	// resolved forms. Story 94.5: session folders sit in the state
+	// directory's work folder.
+	work, err := filepath.EvalSymlinks(filepath.Join(h.home, ".archivist", "connect", "work"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if runs[0].Cwd != rec.Cwd || !strings.HasPrefix(rec.Cwd, tmp) {
+	if runs[0].Cwd != rec.Cwd || filepath.Dir(rec.Cwd) != work {
 		t.Errorf("cwd %q, record %q", runs[0].Cwd, rec.Cwd)
 	}
 	runDir := filepath.Join(h.home, ".archivist", "connect", "run", sid)

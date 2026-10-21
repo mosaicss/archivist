@@ -11,6 +11,12 @@ var codexPlatformConfig = [][2]string{
 	{"windows.sandbox", `"unelevated"`},
 }
 
+// codexLegacySandbox is true on Windows (Story 94.5): the unelevated
+// sandbox does not take deny read profiles, so sessions keep the sandbox
+// mode and sandboxPolicy of their mode; the daemon backstop and the
+// floors still apply.
+const codexLegacySandbox = true
+
 // codexTempEnv points the session's temp directory variables at its .tmp
 // inside the cwd (the sandbox's writable root): TMPDIR as on Unix, plus
 // TEMP and TMP, which Windows programs read.

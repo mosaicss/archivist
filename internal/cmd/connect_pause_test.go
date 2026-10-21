@@ -647,11 +647,17 @@ func TestConnectDaemonPausesFromTheRelayAndReconnects(t *testing.T) {
 	fastPause(t)
 	home := sandbox(t)
 	dir := t.TempDir()
-	script := "#!/bin/sh\ncase \"$1\" in\n--version) echo '2.1.280 (Claude Code)';;\n" +
+	script := "#!/bin/sh\ncase \"$1\" in\n--version) echo '2.1.299 (Claude Code)';;\n" +
 		"auth) echo '{\"loggedIn\":true,\"authMethod\":\"claude.ai\",\"subscriptionType\":\"max\"}';;\n" +
 		"*) exit 2;;\nesac\n"
 	if err := os.WriteFile(filepath.Join(dir, "claude"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
+	}
+	// A Linux Claude Code needs bwrap and socat on PATH (Story 94.5).
+	for _, tool := range []string{"bwrap", "socat"} {
+		if err := os.WriteFile(filepath.Join(dir, tool), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
 	t.Setenv("PATH", dir+":/usr/bin:/bin")
 	chat := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -93,13 +93,16 @@ type codexReasoningEffortOption struct {
 // approvalPolicy travels here (never in -c or config, where "untrusted" is
 // a retired value Codex refuses).
 type codexThreadParams struct {
-	ThreadID          string         `json:"threadId,omitempty"`
-	Model             string         `json:"model"`
-	Cwd               string         `json:"cwd"`
-	ApprovalPolicy    string         `json:"approvalPolicy"`
-	ApprovalsReviewer string         `json:"approvalsReviewer"`
-	Sandbox           string         `json:"sandbox"`
-	Config            map[string]any `json:"config,omitempty"`
+	ThreadID          string `json:"threadId,omitempty"`
+	Model             string `json:"model"`
+	Cwd               string `json:"cwd"`
+	ApprovalPolicy    string `json:"approvalPolicy"`
+	ApprovalsReviewer string `json:"approvalsReviewer"`
+	// Permissions is the permission profile id (Story 94.5, macOS and
+	// Linux); Sandbox the legacy sandbox mode (Windows). Codex refuses both.
+	Permissions string         `json:"permissions,omitempty"`
+	Sandbox     string         `json:"sandbox,omitempty"`
+	Config      map[string]any `json:"config,omitempty"`
 	// DeveloperInstructions is Mosaic's research guidance (Story 78.31): a
 	// separate developer message that keeps Codex's base prompt
 	// (baseInstructions would replace it, so it is never sent).
@@ -128,7 +131,15 @@ type codexThreadResult struct {
 		ExcludeSlashTmp     *bool `json:"excludeSlashTmp"`
 		ExcludeTmpdirEnvVar *bool `json:"excludeTmpdirEnvVar"`
 	} `json:"sandbox"`
-	ReasoningEffort *string `json:"reasoningEffort"`
+	// ActivePermissionProfile is the profile in force (Story 94.5).
+	ActivePermissionProfile *codexActiveProfile `json:"activePermissionProfile"`
+	ReasoningEffort         *string             `json:"reasoningEffort"`
+}
+
+// codexActiveProfile is a thread result's activePermissionProfile.
+type codexActiveProfile struct {
+	ID      string  `json:"id"`
+	Extends *string `json:"extends"`
 }
 
 // codexTextInput is one turn/start input item.
@@ -144,9 +155,11 @@ type codexTurnStartParams struct {
 	ThreadID       string           `json:"threadId"`
 	Input          []codexTextInput `json:"input"`
 	ApprovalPolicy string           `json:"approvalPolicy,omitempty"`
-	SandboxPolicy  map[string]any   `json:"sandboxPolicy,omitempty"`
-	Model          string           `json:"model,omitempty"`
-	Effort         string           `json:"effort,omitempty"`
+	// Permissions (Story 94.5) or, on Windows, the legacy SandboxPolicy.
+	Permissions   string         `json:"permissions,omitempty"`
+	SandboxPolicy map[string]any `json:"sandboxPolicy,omitempty"`
+	Model         string         `json:"model,omitempty"`
+	Effort        string         `json:"effort,omitempty"`
 }
 
 type codexTurnRef struct {

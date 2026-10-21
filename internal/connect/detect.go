@@ -10,14 +10,24 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
 )
 
-// ClaudeFloor is the oldest Claude Code the adapter drives: the version the
-// 78.3 spike (S4) proved. Newer versions are reported, not blocked.
-const ClaudeFloor = "2.1.280"
+// ClaudeFloor is the oldest Claude Code the adapter drives: Story 94.5's
+// fence needs 2.1.299, where sandboxed commands on macOS can no longer reach
+// a denied path through a symbolic link. Newer versions are reported, not
+// blocked.
+const ClaudeFloor = "2.1.299"
+
+// ClaudeLinuxPackages is the problem of a Linux Claude Code without the two
+// programs its sandbox runs on (Story 94.5: bwrap from bubblewrap, socat).
+const ClaudeLinuxPackages = "Claude Code needs two Linux packages, bubblewrap and socat. Install them, for example: sudo apt install bubblewrap socat"
+
+// claudeSandboxTools are the programs Claude Code's Linux sandbox runs.
+var claudeSandboxTools = []string{"bwrap", "socat"}
 
 // detectTimeout bounds each detection command.
 const detectTimeout = 20 * time.Second
@@ -118,17 +128,19 @@ type ClaudeInfo struct {
 	Auth      *AuthStatus
 	// Problem names why Claude is not usable ("" when usable).
 	Problem string
-	// ProblemCode classifies Problem: "missing", "version", "auth".
+	// ProblemCode classifies Problem: "missing", "version", "packages"
+	// (Linux: bubblewrap or socat missing), "auth".
 	ProblemCode string
 }
 
 // Usable reports whether sessions may start with this Claude Code.
 func (c ClaudeInfo) Usable() bool { return c.Problem == "" }
 
-// CodexFloor is the oldest Codex CLI the adapter drives: the version whose
-// app-server protocol Story 78.17 was built and verified against. Newer
-// versions are reported, not blocked.
-const CodexFloor = "0.160.0"
+// CodexFloor is the oldest Codex CLI the adapter drives: Story 94.5's
+// permission profiles were verified on 0.163.0 (below 0.162 the Linux
+// sandbox does not start with two or more denied files). Newer versions are
+// reported, not blocked.
+const CodexFloor = "0.163.0"
 
 // CodexInfo is what detection learned about a local Codex CLI.
 type CodexInfo struct {
@@ -393,6 +405,8 @@ func detectClaude(ctx context.Context, lookPath LookPath, run Runner, env []stri
 	switch {
 	case !c.VersionOK:
 		c.Problem, c.ProblemCode = fmt.Sprintf("Claude Code %s is older than the supported floor %s; update Claude Code", c.Version, ClaudeFloor), "version"
+	case runtime.GOOS == "linux" && !claudeSandboxToolsFound(lookPath):
+		c.Problem, c.ProblemCode = ClaudeLinuxPackages, "packages"
 	case authErr != nil:
 		c.Problem, c.ProblemCode = "claude auth status failed: "+authErr.Error(), "auth"
 	case !auth.LoggedIn:
@@ -401,6 +415,17 @@ func detectClaude(ctx context.Context, lookPath LookPath, run Runner, env []stri
 		c.Problem, c.ProblemCode = fmt.Sprintf("Claude Code is logged in with %q; archivist connect only drives a claude.ai subscription login", auth.AuthMethod), "auth"
 	}
 	return c
+}
+
+// claudeSandboxToolsFound reports bwrap and socat on the PATH (Story 94.5:
+// the Linux sandbox Claude Code sessions require).
+func claudeSandboxToolsFound(lookPath LookPath) bool {
+	for _, tool := range claudeSandboxTools {
+		if _, err := lookPath(tool); err != nil {
+			return false
+		}
+	}
+	return true
 }
 
 // ClaudeAuthStatus runs `claude auth status --json` with env and dir.

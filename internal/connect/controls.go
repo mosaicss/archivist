@@ -139,7 +139,25 @@ func codexApprovalPolicy(m Mode) string {
 	return "never"
 }
 
-// codexSandboxMode is thread/start's sandbox (a kebab string).
+// codexThreadIsolation is thread/start's (and thread/resume's) sandbox
+// mode or permission profile for a mode: the profile (Story 94.5), or the
+// legacy sandbox mode on Windows. Never both.
+func codexThreadIsolation(m Mode, legacy bool) (sandbox, permissions string) {
+	if legacy {
+		return codexSandboxMode(m), ""
+	}
+	return "", codexProfile(m)
+}
+
+// codexTurnIsolation is turn/start's sandboxPolicy or permission profile.
+func codexTurnIsolation(m Mode, legacy bool) (policy map[string]any, permissions string) {
+	if legacy {
+		return codexSandboxPolicy(m), ""
+	}
+	return nil, codexProfile(m)
+}
+
+// codexSandboxMode is thread/start's legacy sandbox (a kebab string).
 func codexSandboxMode(m Mode) string {
 	switch m {
 	case ModeAsk, ModeAutoEdits:

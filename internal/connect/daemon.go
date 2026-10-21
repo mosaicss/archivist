@@ -42,8 +42,6 @@ type Config struct {
 	Runner Runner
 	// Environ is the daemon environment the child allowlist reads.
 	Environ func() []string
-	// TempDir is the parent of per-session working directories ("" = system).
-	TempDir string
 	// ChatAPIURL is the chat-api base URL data-artifact read urls hang off
 	// ("" = ARCHIVIST_BASE_URL or the production endpoint).
 	ChatAPIURL string
@@ -97,7 +95,6 @@ type Daemon struct {
 	detect      func(ctx context.Context) Detection
 	runner      Runner
 	environ     func() []string
-	tempDir     string
 	chatAPIURL  string
 	// fetchGuidance returns the research guidance for a spawn (Story 78.31).
 	fetchGuidance func(ctx context.Context, surface, form string, web bool) guidance.Text
@@ -163,7 +160,7 @@ func New(cfg Config) (*Daemon, error) {
 	d := &Daemon{api: cfg.API, relayURL: cfg.RelayURL, claude: cfg.Claude, codex: cfg.Codex, appVersion: cfg.AppVersion,
 		maxSessions: cfg.MaxSessions,
 		log:         cfg.Log, parser: parser, store: store, detect: cfg.Detect, runner: cfg.Runner,
-		environ: cfg.Environ, tempDir: cfg.TempDir, dial: cfg.Dial, signIn: cfg.SignIn, chatAPIURL: cfg.ChatAPIURL,
+		environ: cfg.Environ, dial: cfg.Dial, signIn: cfg.SignIn, chatAPIURL: cfg.ChatAPIURL,
 		sessions: map[string]*session{}, starting: map[string]bool{}, tokens: map[string]bool{},
 		maxMode: cfg.MaxMode, webSearch: cfg.WebSearch, activityFile: cfg.ActivityFile, codexProbed: make(chan struct{}),
 		counters: newCounterStore(store.Dir()), onPause: cfg.OnPause}
@@ -238,6 +235,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	// and inactive or expired records lose their cwd.
 	if recs, err := d.store.List(); err == nil {
 		now := time.Now().UnixMilli()
+		var activeCwds []string
 		for _, rec := range recs {
 			if rec.Status == "active" && rec.ExpiresAt <= now {
 				rec.Status = "ended"
@@ -246,7 +244,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 			d.revokeLeftoverToken(rec.SessionID)
 			d.store.RemoveRunDir(rec.SessionID)
 			if rec.Status != "active" {
-				removeSessionCwd(rec.Cwd)
+				d.store.removeSessionCwd(rec.Cwd)
 				d.store.RemoveCodexHome(rec.SessionID)
 				// Story 94.6: an ended or failed record is kept for a week.
 				if time.UnixMilli(max(rec.CreatedAt, rec.ExpiresAt)).Add(pruneAfter).Before(time.Now()) {
@@ -259,8 +257,11 @@ func (d *Daemon) Run(ctx context.Context) error {
 			if d.reclamp(rec) {
 				_ = d.store.Save(rec) // a lowered ceiling holds for the resumed session
 			}
+			activeCwds = append(activeCwds, rec.Cwd)
 			d.attach(sessCtx, rec, "", false, resumeStart{})
 		}
+		// Story 94.5: session folders no active record names are removed.
+		d.store.sweepWork(activeCwds)
 	}
 
 	d.startCodexProbe(sessCtx)
@@ -587,14 +588,18 @@ func (d *Daemon) agentUsable(agent string) bool {
 	return false
 }
 
-// makeCwd creates a private temp working directory, resolved through
-// symlinks so the path Claude sees equals the one passed to --add-dir.
+// makeCwd creates a private session folder (0700) in the state
+// directory's work folder (Story 94.5), resolved through symlinks so the
+// path Claude sees equals the one passed to --add-dir.
 func (d *Daemon) makeCwd() (string, error) {
-	dir, err := os.MkdirTemp(d.tempDir, cwdPrefix+"*")
+	dir, err := os.MkdirTemp(d.store.WorkDir(), cwdPrefix+"*")
 	if err != nil {
 		return "", err
 	}
 	resolved, err := filepath.EvalSymlinks(dir)
+	if err == nil {
+		err = os.Chmod(resolved, 0o700)
+	}
 	if err != nil {
 		_ = os.RemoveAll(dir)
 		return "", err

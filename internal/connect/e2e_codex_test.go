@@ -97,7 +97,7 @@ func TestE2EFakeCodex(t *testing.T) {
 	chk := exec.Command(archivistBin, "connect", "--check")
 	chk.Env = daemonEnv
 	out, err := chk.CombinedOutput()
-	if err != nil || !strings.Contains(string(out), "codex\n  path:     "+codexBin) || !strings.Contains(string(out), "floor:    0.160.0 (ok)") ||
+	if err != nil || !strings.Contains(string(out), "codex\n  path:     "+codexBin) || !strings.Contains(string(out), "floor:    0.163.0 (ok)") ||
 		strings.Count(string(out), "status:   usable") != 2 {
 		t.Fatalf("--check: %v\n%s", err, out)
 	}

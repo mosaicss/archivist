@@ -129,6 +129,26 @@
    "title": "AccountUpdatedNotification",
    "type": "object"
   },
+  "ActivePermissionProfile": {
+   "properties": {
+    "extends": {
+     "default": null,
+     "description": "Parent profile identifier from the selected permissions profile's `extends` setting, when present.",
+     "type": [
+      "string",
+      "null"
+     ]
+    },
+    "id": {
+     "description": "Identifier from `default_permissions` or the implicit built-in default, such as `:workspace` or a user-defined `[permissions.\u003cid\u003e]` profile.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "id"
+   ],
+   "type": "object"
+  },
   "AgentMessageDeltaNotification": {
    "$schema": "http://json-schema.org/draft-07/schema#",
    "properties": {
@@ -3260,6 +3280,24 @@
       "kind": {
        "$ref": "#/definitions/SubAgentActivityKind"
       },
+      "model": {
+       "description": "Resolved model at sub-agent creation; absent from older records and other activities.",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "reasoningEffort": {
+       "anyOf": [
+        {
+         "$ref": "#/definitions/ReasoningEffort"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Resolved reasoning effort at sub-agent creation, when known."
+      },
       "type": {
        "enum": [
         "subAgentActivity"
@@ -4278,6 +4316,13 @@
      "default": "full",
      "description": "Describes how much of `items` has been loaded for this turn."
     },
+    "rootTurnId": {
+     "description": "ID of the first turn in the chain of work that led to this turn. Pass this as `rootTurnId` when starting work on behalf of this turn. May be null in older history or a `review/start` response.",
+     "type": [
+      "string",
+      "null"
+     ]
+    },
     "startedAt": {
      "description": "Unix timestamp (in seconds) when the turn started.",
      "format": "int64",
@@ -4452,7 +4497,7 @@
        "type": "null"
       }
      ],
-     "description": "EXPERIMENTAL - Request a workspace-authorized cyber program for this turn. Omission preserves automatic behavior. This does not grant access."
+     "description": "EXPERIMENTAL - Request an authorized cyber program for this turn. Omission preserves automatic behavior. This does not grant access."
     },
     "disabledPluginIds": {
      "description": "Replace this thread's disabled plugin IDs. Omitted/null preserves the list; [] clears it.",
@@ -4512,6 +4557,13 @@
     "outputSchema": {
      "description": "Optional JSON Schema used to constrain the final assistant message for this turn."
     },
+    "parentTurnId": {
+     "description": "ID of the turn that caused this new turn to start.\n\nSet this when starting work on behalf of another turn, such as delegated work in a different thread. Leave unset for work started directly by the user. Ignored when this request adds input to an active turn.",
+     "type": [
+      "string",
+      "null"
+     ]
+    },
     "permissions": {
      "description": "Select a named permissions profile id for this turn and subsequent turns. Cannot be combined with `sandboxPolicy`.",
      "type": [
@@ -4537,6 +4589,13 @@
      "description": "Optional metadata to enrich Codex's ResponsesAPI turn metadata.\n\nEntries are flattened into the JSON string sent as `client_metadata[\"x-codex-turn-metadata\"]` on ResponsesAPI HTTP and websocket requests.\n\nThey are not sent as top-level ResponsesAPI `client_metadata` keys, and reserved keys such as `session_id`, `thread_id`, `turn_id`, and `window_id` cannot be overridden.",
      "type": [
       "object",
+      "null"
+     ]
+    },
+    "rootTurnId": {
+     "description": "ID of the first turn in the chain of work that led to this new turn.\n\nWhen setting `parentTurnId`, set this to the parent turn's `rootTurnId` when known. This keeps descendant work attributed to the original turn. If omitted, the new turn becomes its own root. Ignored when this request adds input to an active turn.",
+     "type": [
+      "string",
       "null"
      ]
     },
@@ -4973,6 +5032,7 @@
    "initialized"
   ],
   "ClientRequest": [
+   "account/bedrock/checkGovCloudRequirements",
    "account/bedrock/discover",
    "account/bedrock/setup",
    "account/gatewayOAuth/cancel",
@@ -5082,6 +5142,7 @@
    "thread/attachment/add",
    "thread/attachment/list",
    "thread/attachment/remove",
+   "thread/attachmentOwner/list",
    "thread/backgroundTerminals/clean",
    "thread/backgroundTerminals/list",
    "thread/backgroundTerminals/terminate",
@@ -5095,11 +5156,13 @@
    "thread/increment_elicitation",
    "thread/inject_items",
    "thread/items/list",
+   "thread/items/read",
    "thread/list",
    "thread/loaded/list",
    "thread/memoryMode/set",
    "thread/metadata/update",
    "thread/name/set",
+   "thread/prediction/request",
    "thread/queue/add",
    "thread/queue/delete",
    "thread/queue/list",
@@ -5107,6 +5170,7 @@
    "thread/queue/start",
    "thread/queue/update",
    "thread/read",
+   "thread/readState/update",
    "thread/realtime/appendAudio",
    "thread/realtime/appendSpeech",
    "thread/realtime/appendText",
@@ -5198,8 +5262,10 @@
    "thread/goal/cleared",
    "thread/goal/updated",
    "thread/name/updated",
+   "thread/prediction/updated",
    "thread/project/updated",
    "thread/queue/changed",
+   "thread/readState/changed",
    "thread/realtime/closed",
    "thread/realtime/error",
    "thread/realtime/item/completed",
@@ -5240,5 +5306,5 @@
    "mcpServer/elicitation/request"
   ]
  },
- "source": "codex-cli 0.160.0 generate-json-schema --experimental"
+ "source": "codex-cli 0.163.0 generate-json-schema --experimental"
 }
