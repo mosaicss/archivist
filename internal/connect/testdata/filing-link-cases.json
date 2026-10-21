@@ -172,6 +172,30 @@
       "expected": {
         "message": "Digit before scheme 1(source link removed) and letter before scheme xhttps://(source link removed)"
       }
+    },
+    {
+      "input": {
+        "command": "curl https://ſec.gov/a and <https://www.ſec.gov/b> and www.ſec.gov/c and https://%C5%BFec.gov/d"
+      },
+      "expected": {
+        "command": "curl (source link removed) and (source link removed) and (source link removed) and (source link removed)"
+      }
+    },
+    {
+      "input": {
+        "message": "[10-K](https://𝐬𝐞𝐜.𝐠𝐨𝐯/a) and ![chart](https://ⓢⓔⓒ.gov/c.png)\n[r]: https://ˢᵉᶜ.gov/d\nand https://sec.ⓖⓞⓥ/e"
+      },
+      "expected": {
+        "message": "10-K and chart\n(source link removed)\nand (source link removed)"
+      }
+    },
+    {
+      "input": {
+        "message": "Non-ASCII host https://bücher.example/a, path only https://example.com/ſec.gov and [ok](https://example.com/ü)"
+      },
+      "expected": {
+        "message": "Non-ASCII host (source link removed), path only https://example.com/ſec.gov and [ok](https://example.com/ü)"
+      }
     }
   ]
 }

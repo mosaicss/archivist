@@ -59,10 +59,13 @@ type fakeRelay struct {
 	// context is the context blocks the signer signs in front of a turn's
 	// text (Story 94.7 A1; "" = none).
 	context string
-	// noSigningFlag answers a dial with the signing query flag HTTP 400, as
-	// a relay before Story 94.7 A1 does; queries lists each dial's query.
-	noSigningFlag bool
-	queries       []string
+	// refuseSigning, when set, answers a dial with the signing query flag
+	// HTTP 400 with this error code (a relay before Story 94.7 A1 answers
+	// INVALID_QUERY); refuseSigningDials > 0 limits that to the next so many
+	// such dials. queries lists each dial's query.
+	refuseSigning      string
+	refuseSigningDials int
+	queries            []string
 	// userKinds lists the user socket's report frames in arrival order.
 	userKinds []string
 }
@@ -90,10 +93,21 @@ func (r *fakeRelay) serve(w http.ResponseWriter, req *http.Request) {
 	}
 	r.mu.Lock()
 	r.queries = append(r.queries, req.URL.RawQuery)
-	refuse := r.noSigningFlag && req.URL.Query().Has("signing")
+	refuse := r.refuseSigning
+	if refuse == "" || !req.URL.Query().Has("signing") {
+		refuse = ""
+	} else if r.refuseSigningDials > 0 {
+		r.refuseSigningDials--
+		if r.refuseSigningDials == 0 {
+			r.refuseSigning = ""
+		}
+	}
 	r.mu.Unlock()
-	if refuse {
-		http.Error(w, `{"code":"INVALID_QUERY"}`, http.StatusBadRequest)
+	if refuse != "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		body, _ := json.Marshal(map[string]string{"error": refuse, "code": refuse})
+		_, _ = w.Write(body)
 		return
 	}
 	sid := ""

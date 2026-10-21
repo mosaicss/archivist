@@ -163,6 +163,7 @@ func newSession(d *Daemon, rec *SessionRecord) *session {
 	runID := s.outbox.RunID()
 	s.tr.TurnID = func(n int) string { return "claude-" + runID + "-turn-" + strconv.Itoa(n) }
 	s.link = newLink("session socket", SessionSocket, rec.SessionID, d.api, d.relayURL, s.outbox, log)
+	s.link.signingOnce = &d.signingOnce
 	s.link.onCommand = func(l *live, in *Inbound) {
 		select {
 		case s.cmds <- sessionCmd{l, in}:

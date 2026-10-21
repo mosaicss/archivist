@@ -26,7 +26,9 @@ import (
 // an autolink, a reference definition and a bare scheme:// or www. address
 // become "(source link removed)". Where Go's URL reading may differ from a
 // browser's, the check leans toward removing: it removes at least what the
-// workspace removes.
+// workspace removes. In particular any link whose host has a non-ASCII
+// character is removed, whatever host a browser maps it to (this only
+// changes what the card shows).
 
 // filingSourceHosts are the workspace's FILING_SOURCE_HOSTS
 // (testdata/filing-source-hosts.json holds the shared copy).
@@ -316,6 +318,9 @@ func isFilingSourceURL(raw string) bool {
 	if !schemeSlashesRe.MatchString(text) {
 		withScheme = "https://" + strings.TrimPrefix(text, "//")
 	}
+	if nonASCIIHost(text) || nonASCIIHost(withScheme) {
+		return true
+	}
 	loose := false
 	for _, r := range []linkReading{readLink(withScheme, false), readLink(text, false), readLink(text, true)} {
 		if r.state == readingOK && isFilingHost(r.host, r.path) {
@@ -326,6 +331,37 @@ func isFilingSourceURL(raw string) bool {
 		}
 	}
 	return loose && namesFilingHost(raw)
+}
+
+// nonASCIIHost reports whether the host of URL s, as written (after a
+// browser's input cleanup, the scheme and the slashes before the host,
+// before the path, query or fragment, without user info), has a non-ASCII
+// character or the percent escape of one. A browser maps such a host to
+// ASCII by Unicode rules Go does not repeat here, so such a link counts as
+// a filing source link.
+func nonASCIIHost(s string) bool {
+	s = strings.Map(func(r rune) rune {
+		if r == '\t' || r == '\n' || r == '\r' {
+			return -1
+		}
+		return r
+	}, strings.TrimFunc(s, func(r rune) bool { return r <= ' ' }))
+	if _, rest, ok := splitScheme(s); ok {
+		s = rest
+	}
+	s = strings.TrimLeft(s, `/\`)
+	if i := strings.IndexAny(s, `/\?#`); i >= 0 {
+		s = s[:i]
+	}
+	if i := strings.LastIndexByte(s, '@'); i >= 0 {
+		s = s[i+1:]
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] >= utf8.RuneSelf || s[i] == '%' && i+1 < len(s) && strings.IndexByte("89abcdefABCDEF", s[i+1]) >= 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // namesFilingHost is the workspace's check for a link that does not parse:

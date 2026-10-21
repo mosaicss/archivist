@@ -45,11 +45,12 @@ func TestSignedTurnWithContext(t *testing.T) {
 }
 
 // A relay that does not know the signing flag answers the upgrade HTTP
-// 400: each socket dials again without it at once, logs that once and
-// keeps it off for the rest of its life (a reconnect included).
+// 400 with code INVALID_QUERY: that dial is made again at once without the
+// flag, the daemon logs it once, and every later dial (a reconnect
+// included) asks for the flag first again.
 func TestSignedRelayWithoutSigningFlag(t *testing.T) {
 	h := newHarness(t, nil)
-	h.relay.set(func(r *fakeRelay) { r.noSigningFlag = true })
+	h.relay.set(func(r *fakeRelay) { r.refuseSigning = "INVALID_QUERY" })
 	h.start()
 	sid := h.startSession("echo still works")
 	h.waitFinishes(sid, 1)
@@ -72,14 +73,36 @@ func TestSignedRelayWithoutSigningFlag(t *testing.T) {
 			t.Fatalf("dial query %q", q)
 		}
 	}
-	// One refused flagged dial per socket (user and session), then plain.
-	if flagged != 2 || plain < 3 {
+	// Each dial (user, session, user again) asks with the flag, then
+	// without it.
+	if flagged < 3 || plain != flagged {
 		t.Fatalf("dials %v", queries)
 	}
+	if log := h.log.String(); strings.Count(log, "the relay does not take the signing flag") != 1 {
+		t.Fatalf("fallback not logged once:\n%s", log)
+	}
+}
+
+// A 400 with another code is an ordinary dial failure: the daemon does not
+// drop the flag, and retries with it.
+func TestSignedRelayOtherRefusalKeepsSigningFlag(t *testing.T) {
+	h := newHarness(t, nil)
+	h.relay.set(func(r *fakeRelay) { r.refuseSigning, r.refuseSigningDials = "INVALID_ROLE", 2 })
+	h.start()
+	h.relay.mu.Lock()
+	queries := append([]string(nil), h.relay.queries...)
+	h.relay.mu.Unlock()
+	if len(queries) < 3 {
+		t.Fatalf("dials %v", queries)
+	}
+	for _, q := range queries {
+		if q != "role=daemon&signing=1" {
+			t.Fatalf("dial query %q in %v", q, queries)
+		}
+	}
 	log := h.log.String()
-	if strings.Count(log, "user socket: the relay refused the signing flag") != 1 ||
-		strings.Count(log, "session socket: the relay refused the signing flag") != 1 {
-		t.Fatalf("refusal not logged once per socket:\n%s", log)
+	if strings.Count(log, "relay dial failed (HTTP 400") != 2 || strings.Contains(log, "does not take the signing flag") {
+		t.Fatalf("log:\n%s", log)
 	}
 }
 

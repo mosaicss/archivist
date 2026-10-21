@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math/rand"
 	"net/http"
 	"net/url"
@@ -226,10 +227,9 @@ type link struct {
 	// socket's signing frame check, Story 94.7).
 	onPing func(l *live)
 	dial   func(ctx context.Context, u string, opts *websocket.DialOptions) (*websocket.Conn, *http.Response, error)
-	// noSigning is set once the relay refused the signing query flag
-	// (HTTP 400, a relay before Story 94.7 A1): this link then dials
-	// without it for the rest of its life.
-	noSigning bool
+	// signingOnce logs the first dial that falls back to no signing flag
+	// (shared by the daemon's links, so the daemon logs it once).
+	signingOnce *sync.Once
 	// connected is closed after the first successful dial (tests, status).
 	connectedOnce sync.Once
 	connected     chan struct{}
@@ -237,7 +237,7 @@ type link struct {
 
 func newLink(name string, socket Socket, sessionID string, api API, relayURL string, outbox *Outbox, log *Logger) *link {
 	return &link{name: name, socket: socket, sessionID: sessionID, api: api, relayURL: strings.TrimRight(relayURL, "/"),
-		outbox: outbox, log: log, dial: websocket.Dial, connected: make(chan struct{})}
+		outbox: outbox, log: log, dial: websocket.Dial, signingOnce: new(sync.Once), connected: make(chan struct{})}
 }
 
 // signingQuery is the query flag that tells the relay this daemon checks
@@ -245,11 +245,9 @@ func newLink(name string, socket Socket, sessionID string, api API, relayURL str
 // their `sig`; to a socket without it, the relay leaves `sig` out.
 const signingQuery = "&signing=1"
 
+// socketURL is the socket's URL without the signing flag.
 func (k *link) socketURL(ticket string) (string, error) {
 	query := "?role=daemon"
-	if !k.noSigning {
-		query += signingQuery
-	}
 	if k.socket == SessionSocket {
 		return k.relayURL + "/sessions/" + url.PathEscape(k.sessionID) + "/ws" + query, nil
 	}
@@ -299,29 +297,13 @@ func (k *link) run(ctx context.Context) error {
 		if err != nil {
 			return &FatalError{Code: "BAD_TICKET", Message: err.Error()}
 		}
-		ws, resp, err := k.dial(ctx, u, &websocket.DialOptions{
-			HTTPHeader: http.Header{"Authorization": []string{"Bearer " + ticket.Ticket}},
-		})
+		ws, status, err := k.dialSigning(ctx, u, ticket.Ticket)
 		if err != nil {
-			status := 0
-			if resp != nil {
-				status = resp.StatusCode
-				if resp.Body != nil {
-					_ = resp.Body.Close()
-				}
-			}
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
 			if k.socket == SessionSocket && (status == http.StatusNotFound || status == http.StatusConflict) {
 				return ErrSessionInactive
-			}
-			if status == http.StatusBadRequest && !k.noSigning {
-				// An older relay refuses the unknown query flag: dial again
-				// without it, now, and from then on for this link.
-				k.noSigning = true
-				k.log.Printf("%s: the relay refused the signing flag (an older relay); connecting without it", k.name)
-				continue
 			}
 			k.log.Printf("%s: relay dial failed (HTTP %d, ticket fp:%s), retrying: %v", k.name, status, TicketFingerprint(ticket.Ticket), err)
 			if err := retry(); err != nil {
@@ -375,6 +357,48 @@ func (k *link) run(ctx context.Context) error {
 			return err
 		}
 	}
+}
+
+// dialSigning dials u with the signing flag. When the relay refuses the
+// flag as an unknown query field (HTTP 400 with code INVALID_QUERY, a
+// relay before Story 94.7 A1), it dials u once more without the flag; the
+// next dial asks for the flag again. status is the refused dial's HTTP
+// status (0 when there was none).
+func (k *link) dialSigning(ctx context.Context, u, ticket string) (ws *websocket.Conn, status int, err error) {
+	for _, query := range []string{signingQuery, ""} {
+		var resp *http.Response
+		ws, resp, err = k.dial(ctx, u+query, &websocket.DialOptions{
+			HTTPHeader: http.Header{"Authorization": []string{"Bearer " + ticket}},
+		})
+		if err == nil {
+			return ws, 0, nil
+		}
+		status = 0
+		refused := false
+		if resp != nil {
+			status = resp.StatusCode
+			if resp.Body != nil {
+				refused = query != "" && status == http.StatusBadRequest && invalidQuery(resp.Body)
+				_ = resp.Body.Close()
+			}
+		}
+		if !refused || ctx.Err() != nil {
+			return nil, status, err
+		}
+		k.signingOnce.Do(func() {
+			k.log.Printf("%s: the relay does not take the signing flag (an older relay); connecting without it", k.name)
+		})
+	}
+	return nil, status, err
+}
+
+// invalidQuery reports a relay error body ({"error", "code"}) with code
+// INVALID_QUERY.
+func invalidQuery(body io.Reader) bool {
+	var e struct {
+		Code string `json:"code"`
+	}
+	return json.NewDecoder(io.LimitReader(body, 4096)).Decode(&e) == nil && e.Code == "INVALID_QUERY"
 }
 
 func (k *link) read(ctx context.Context, l *live) {

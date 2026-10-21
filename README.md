@@ -445,14 +445,17 @@ instead, with no session rule kept.
   the browser sent.
 - **Delivery.** `archivist connect` asks the relay for signed commands
   (`signing=1` on its sockets). A relay that does not know that request
-  refuses the connection (HTTP 400); `archivist connect` then connects
-  without it, logs that once, and keeps working as before for that socket.
+  refuses the connection (HTTP 400, `INVALID_QUERY`); `archivist connect`
+  then connects without it for that attempt and logs that once. Every new
+  connection asks again, so signed commands resume as soon as the relay
+  knows the request.
 - **Filing links on approval cards.** Links to filing sources (regulator,
   exchange and filing vendor document URLs) are removed from an approval
   card before it is sent and signed, the same way Mosaic removes them from
   agent answers: a command such as `curl https://www.sec.gov/...` shows as
-  `curl (source link removed)`. Allowing it still runs the command the
-  agent asked for, unchanged.
+  `curl (source link removed)`; a link whose host name holds a character
+  outside ASCII is removed from the card too. Allowing it still runs the
+  command the agent asked for, unchanged.
 
 The browsers this computer knows are listed in
 `~/.archivist/connect/browsers.json` (0600; at most 32, the oldest dropped).

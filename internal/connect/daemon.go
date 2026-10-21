@@ -111,6 +111,9 @@ type Daemon struct {
 	// controls and signing frames (refusalWindow).
 	controlsWin refusalWindow
 	signingWin  refusalWindow
+	// signingOnce logs once per daemon that the relay does not take the
+	// signing query flag (link.dialSigning).
+	signingOnce sync.Once
 	// counters guards signed command counters (Story 94.7, browsers.go).
 	counters *counterStore
 	// signingLive and signingSent are the user socket and the computer id
@@ -243,6 +246,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 
 	d.startCodexProbe(sessCtx)
 	user := newLink("user socket", UserSocket, "", d.api, d.relayURL, nil, d.log)
+	user.signingOnce = &d.signingOnce
 	if d.dial != nil {
 		user.dial = d.dial
 	}
