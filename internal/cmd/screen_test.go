@@ -98,6 +98,13 @@ func TestScreenListValuesAndScopeFlags(t *testing.T) {
 	if code != 0 || !strings.Contains(stderr, "No companies matched") || stdout != "Matched 0 companies (as of 2026-10-20)\n\nCoverage: c\n" {
 		t.Errorf("none: exit %d %q %q", code, stdout, stderr)
 	}
+	// A body without total_matched says nothing about the count, so no
+	// "No companies matched" line.
+	missing := newStub(t, 200, nil, `{"as_of_used":"2026-10-20","rows":[],"next_cursor":null}`)
+	_, stderr, code = runVerb(t, missing.URL, "screen", "--industry", "gold", "--format", "table")
+	if code != 0 || strings.Contains(stderr, "No companies matched") {
+		t.Errorf("missing total_matched: exit %d %q", code, stderr)
+	}
 }
 
 func TestScreenIncludeInactiveSentOnlyWhenSet(t *testing.T) {

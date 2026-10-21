@@ -180,7 +180,9 @@ func runScreen(cmd *cobra.Command, version string, f *screenFlags) error {
 	}
 	var resp struct {
 		page
-		TotalMatched int `json:"total_matched"`
+		// A pointer: only a total_matched that is present and 0 means
+		// nothing matched; a body without it says nothing about the count.
+		TotalMatched *int `json:"total_matched"`
 	}
 	if err := decodeBody(cmd, body, &resp, format); err != nil {
 		return err
@@ -204,7 +206,7 @@ func runScreen(cmd *cobra.Command, version string, f *screenFlags) error {
 	if err != nil {
 		return err
 	}
-	if resp.TotalMatched == 0 {
+	if resp.TotalMatched != nil && *resp.TotalMatched == 0 {
 		_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "No companies matched")
 	}
 	return nil
