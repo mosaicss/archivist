@@ -103,8 +103,8 @@ jobs:
         env:
           # Read-only token: the changelog reads the GitHub API.
           GITHUB_TOKEN: ${{ github.token }}
-          # Build the pushed tag even when another tag (a release candidate)
-          # points at the same commit.
+          # Keep the build on the pushed tag. The release process still puts
+          # no second tag (such as a release candidate) on the release commit.
           GORELEASER_CURRENT_TAG: ${{ github.ref_name }}
         run: goreleaser release --clean --skip=validate,publish,announce --config goreleaser.yaml
 
