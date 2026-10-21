@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"regexp"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -189,4 +192,36 @@ func walkAndAssertAnnotations(t *testing.T, c *cobra.Command) {
 // type satisfies the error interface (defensive — easy to miss on refactor).
 func TestExitErrorImplementsErrorInterface(t *testing.T) {
 	var _ error = &ExitError{Code: ExitNotImplemented}
+}
+
+// A plain http:// ARCHIVIST_BASE_URL that is not loopback fails every
+// command with a usage error naming the variable, before any request.
+func TestRootRefusesPlainHTTPBaseURL(t *testing.T) {
+	sandbox(t)
+	t.Setenv("ARCHIVIST_TOKEN", "ak_test")
+	t.Setenv("ARCHIVIST_BASE_URL", "http://example.com")
+	for _, args := range [][]string{
+		{"search", "revenue"}, {"doctor"}, {"connect", "--check"}, {"usage"},
+	} {
+		out, code := runRoot(t, args...)
+		if code != ExitUsageError || !strings.Contains(out, "ARCHIVIST_BASE_URL") {
+			t.Fatalf("%v: exit %d, output %q", args, code, out)
+		}
+	}
+	// version makes no request and stays usable.
+	if out, code := runRoot(t, "version"); code != 0 {
+		t.Fatalf("version: exit %d, output %q", code, out)
+	}
+	// A loopback http:// URL passes the check and the command reaches it.
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv("ARCHIVIST_BASE_URL", srv.URL)
+	out, code := runRoot(t, "usage")
+	if code == ExitUsageError || strings.Contains(out, "ARCHIVIST_BASE_URL") || hits.Load() == 0 {
+		t.Fatalf("loopback: exit %d, %d requests, output %q", code, hits.Load(), out)
+	}
 }

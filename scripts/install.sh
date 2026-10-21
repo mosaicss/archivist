@@ -7,8 +7,10 @@
 # Installs or updates archivist, then with --pair redeems the pairing code
 # from the Mosaic workspace (archivist connect --pair), installs the
 # background service (archivist connect --install) and reports it
-# (archivist connect --status). Every downloaded archive is checked against
-# the release's archivist_v<ver>_SHA256SUMS before anything is installed.
+# (archivist connect --status). Every download is checked before anything
+# is installed: the release's archivist_v<ver>_SHA256SUMS must carry a valid
+# signature (archivist_v<ver>_SHA256SUMS.sig, checked with openssl against
+# the release key below), and each archive must match its line in it.
 #
 # Options:
 #   --pair CODE    pair this machine with the code shown in Mosaic
@@ -18,14 +20,19 @@
 #
 # Environment:
 #   ARCHIVIST_INSTALL_DIR       install directory (default ~/.local/bin)
-#   ARCHIVIST_INSTALL_VERSION   install this tag (e.g. v0.2.26) instead of the
-#                               version this script was released with
+#   ARCHIVIST_INSTALL_VERSION   install this tag (v0.2.35 or later, e.g.
+#                               v0.2.35) instead of the version this script
+#                               was released with; earlier tags have no
+#                               SHA256SUMS.sig, so use that release's own
+#                               .../releases/download/<tag>/install.sh
 #   ARCHIVIST_RELEASE_BASE_URL  release base URL (default
 #                               https://github.com/mosaicss/archivist/releases);
 #                               assets are read from <base>/download/<tag>/,
 #                               the latest tag from the <base>/latest redirect.
-#                               For local testing against a fake release.
+#                               It must be https://, or http:// to 127.0.0.1,
+#                               ::1 or localhost (a local test release).
 #
+# Needs curl, tar and openssl (macOS and most Linux systems have all three).
 # Bash, not sh: pipefail is not POSIX and /bin/sh is often dash.
 
 set -euo pipefail
@@ -36,6 +43,28 @@ ARCHIVIST_STAMPED_VERSION="__ARCHIVIST_VERSION__"
 
 RELEASE_BASE="${ARCHIVIST_RELEASE_BASE_URL:-https://github.com/mosaicss/archivist/releases}"
 RELEASE_BASE="${RELEASE_BASE%/}"
+# curl protocol limits; check_release_base widens them only for a loopback
+# http:// override.
+CURL_PROTO=(--proto "=https" --proto-redir "=https")
+
+# The release signing public key (internal/release/keys/ in the archivist
+# repository). archivist_v<ver>_SHA256SUMS.sig must verify with it.
+# BEGIN ARCHIVIST RELEASE KEY
+RELEASE_KEY='-----BEGIN PUBLIC KEY-----
+MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEA24JUQPGXSMAjvWXAA1FX
+l6AbLkIKZm37+4d0UFV8mnaqmA7RH0fTwljB+lGJnQH9IuTpX78vcGzklcUAtwnu
+j0AbGpSm0X9Tt9FdTXddhcaDqLVgczGY+yvDAgGnTGZJ8P8X3gdDprhMmRgPhkLM
+pky+9Q97wO+/gnlP56CzEvmy/8fWBGa2UyqL5r7WDdPiRcQky0DL1igzfn1unfRp
+t2AuWx+ESToLmYcOrJv8pJVtHkj+BIbLg5/fJxtyRcDyYMpFLNoZIPMst70/lhYZ
+ctj9fsiUIxqq1mxh2VW7XwqpJKUbT1m8JiYngfnXf3yVKrRE/YerMMhOZcTO8Dvr
+MSrfxpEvSVIeCfirl/UFh3WyUbX103CgWxeSraFDrTqW9Rx/gM6PEz4dS4AiLE3e
+Ch7+fuw//hJITDtZCXSYJwXs7KFzf0mMLholKMb6h5tOU5uidlHX0jU35MhxFNaD
+BWv83CrGWMUq/XESPMS7ck5qkHO8er6ASNKAtN88prwS1FVYyipdNOYypOBWrrO3
+i1ndsweLQUbZWTAJQIb33XkMmxNKRRZwuby8TubCkx3SJplUWHJBpkmdJMgBxxHk
+V3qHbZdexrqVN1QudVPQaLhPC1wrrlA48fqY4snH8swyq1RlOunPUfotZhp51SiU
+79cGp1UbOABChqsxhL4DthMCAwEAAQ==
+-----END PUBLIC KEY-----'
+# END ARCHIVIST RELEASE KEY
 BREW_FORMULA="mosaic-finance-inc/tap/archivist"
 # The cask token (brew/Casks/archivist.rb); `brew list --cask` with it
 # succeeds only while the cask is actually installed.
@@ -90,13 +119,39 @@ parse_args() {
   done
 }
 
-# curl_get URL OUT: HTTPS only unless a release base override is in use.
+# check_release_base: the release base must be https:// with a host and no
+# user info, or http:// to a loopback host (127.0.0.1, ::1, localhost).
+check_release_base() {
+  local rest authority host
+  case "$RELEASE_BASE" in
+    https://*) rest="${RELEASE_BASE#https://}" ;;
+    http://*) rest="${RELEASE_BASE#http://}" ;;
+    *) die "ARCHIVIST_RELEASE_BASE_URL must start with https://" ;;
+  esac
+  authority="${rest%%/*}"
+  authority="${authority%%\?*}"
+  authority="${authority%%#*}"
+  case "$authority" in
+    "" | *@*) die "ARCHIVIST_RELEASE_BASE_URL must name a host, without user info" ;;
+  esac
+  case "$authority" in
+    \[*\]*) host="${authority%%]*}]" ;;
+    *) host="${authority%%:*}" ;;
+  esac
+  [ -n "$host" ] || die "ARCHIVIST_RELEASE_BASE_URL must name a host"
+  case "$RELEASE_BASE" in
+    http://*)
+      case "$host" in
+        127.0.0.1 | localhost | "[::1]") CURL_PROTO=(--proto "=http,https" --proto-redir "=http,https") ;;
+        *) die "ARCHIVIST_RELEASE_BASE_URL must start with https:// (http:// is only for 127.0.0.1, ::1 or localhost)" ;;
+      esac
+      ;;
+  esac
+}
+
+# curl_get URL OUT: HTTPS only unless the release base is a loopback http://.
 curl_get() {
-  local proto="=https"
-  if [ -n "${ARCHIVIST_RELEASE_BASE_URL:-}" ]; then
-    proto="=http,https"
-  fi
-  curl -fsSL --proto "$proto" --retry 2 -o "$2" "$1"
+  curl -fsSL "${CURL_PROTO[@]}" --retry 2 -o "$2" "$1"
 }
 
 detect_platform() {
@@ -132,7 +187,7 @@ resolve_version() {
       v[0-9]*) VERSION="$ARCHIVIST_STAMPED_VERSION" ;;
       *)
         local effective
-        effective="$(curl -fsSIL --proto '=http,https' -o /dev/null -w '%{url_effective}' "${RELEASE_BASE}/latest")" \
+        effective="$(curl -fsSIL "${CURL_PROTO[@]}" -o /dev/null -w '%{url_effective}' "${RELEASE_BASE}/latest")" \
           || die "could not resolve the latest release from ${RELEASE_BASE}/latest"
         VERSION="${effective##*/}"
         ;;
@@ -171,9 +226,20 @@ verify() {
   [ "$actual" = "$expected" ] || die "checksum mismatch for $2 (expected ${expected}, got ${actual}). Nothing was installed."
 }
 
-# download_and_verify fetches the binary archive (and the skill bundle when
-# ~/.claude/skills exists), verifies both, and test runs the binary. Nothing
-# is installed until all of that passed.
+# verify_sums: the SHA256SUMS file must carry a valid signature by the
+# release key. openssl's exit status decides (its message differs between
+# OpenSSL and LibreSSL).
+verify_sums() {
+  printf '%s\n' "$RELEASE_KEY" > "${TMP}/release-key.pem"
+  if ! openssl dgst -sha256 -verify "${TMP}/release-key.pem" -signature "${TMP}/${SUMS}.sig" \
+    "${TMP}/${SUMS}" >/dev/null 2>&1; then
+    die "the release checksums could not be verified (${SUMS}.sig). Nothing was installed."
+  fi
+}
+
+# download_and_verify fetches the signed checksums, the binary archive (and
+# the skill bundle when ~/.claude/skills exists), verifies all of them, and
+# test runs the binary. Nothing is installed until all of that passed.
 download_and_verify() {
   local base="${RELEASE_BASE}/download/${VERSION}"
   ARCHIVE="archivist_v${VER}_${PLATFORM}.tar.gz"
@@ -182,6 +248,8 @@ download_and_verify() {
 
   say "Downloading archivist ${VERSION} (${PLATFORM})..."
   curl_get "${base}/${SUMS}" "${TMP}/${SUMS}" || die "download failed: ${base}/${SUMS}"
+  curl_get "${base}/${SUMS}.sig" "${TMP}/${SUMS}.sig" || die "download failed: ${base}/${SUMS}.sig"
+  verify_sums
   curl_get "${base}/${ARCHIVE}" "${TMP}/${ARCHIVE}" || die "download failed: ${base}/${ARCHIVE}"
   verify "${TMP}/${ARCHIVE}" "$ARCHIVE"
 
@@ -199,7 +267,7 @@ download_and_verify() {
       say "Note: the Claude Code skill bundle could not be downloaded; skipped."
     fi
   fi
-  say "Checksums verified."
+  say "Download verified."
 }
 
 install_binary() {
@@ -242,6 +310,7 @@ service_installed() {
 
 main() {
   parse_args "$@"
+  check_release_base
   command -v curl >/dev/null 2>&1 || die "curl is required"
   detect_platform
 
@@ -255,6 +324,7 @@ main() {
     && brew list --cask "$BREW_CASK" >/dev/null 2>&1; then
     brew_update
   else
+    command -v openssl >/dev/null 2>&1 || die "openssl is needed to check the download"
     resolve_version
     download_and_verify
     install_binary

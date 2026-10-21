@@ -461,7 +461,14 @@ func runConnect(cmd *cobra.Command, version string, check bool, f connectFlags) 
 	log := connect.NewLogger(stderr)
 	debug, _ := strconv.ParseBool(os.Getenv("ARCHIVIST_CONNECT_DEBUG")) // unset or invalid: off
 	log.SetDebug(debug)
-	baseURL := os.Getenv("ARCHIVIST_BASE_URL")
+	// Handed to each session's MCP server; the same rule as the root check.
+	baseURL := os.Getenv(client.BaseURLEnv)
+	if baseURL != "" {
+		if err := client.CheckBaseURL(baseURL); err != nil {
+			_, _ = fmt.Fprintf(stderr, "archivist connect: %v\n", err)
+			return &ExitError{Code: ExitUsageError}
+		}
+	}
 	cfg := connect.Config{
 		API:        api,
 		RelayURL:   relayURL,

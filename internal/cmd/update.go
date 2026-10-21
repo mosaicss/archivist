@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -19,14 +20,26 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mosaicss/archivist/internal/release"
 	"github.com/mosaicss/archivist/internal/service"
 	"github.com/spf13/cobra"
 )
 
-const (
-	archivistReleaseAPI = "https://api.github.com/repos/mosaicss/archivist/releases/latest"
-	archivistRepo       = "mosaicss/archivist"
+// Release locations and the checksum verifier; package variables so tests
+// can point them at a local release signed by a test key.
+var (
+	// releaseAPIURL answers with the latest release's tag.
+	releaseAPIURL = "https://api.github.com/repos/mosaicss/archivist/releases/latest"
+	// releaseDownloadBase serves the assets as <base>/<tag>/<name>.
+	releaseDownloadBase = "https://github.com/mosaicss/archivist/releases/download"
+	// releaseVerifier checks a SHA256SUMS signature.
+	releaseVerifier = release.Verify
+	// executablePath is the binary a self update replaces.
+	executablePath = os.Executable
 )
+
+// maxReleaseAsset caps one downloaded release file.
+const maxReleaseAsset = 512 << 20
 
 // NewUpdateCmd returns the `archivist update` command.
 func NewUpdateCmd(currentVersion string) *cobra.Command {
@@ -63,16 +76,22 @@ func NewUpdateCmd(currentVersion string) *cobra.Command {
 
 // runUpdateCheck prints whether an update is available without installing.
 func runUpdateCheck(ctx context.Context, cmd *cobra.Command, current string) error {
-	latest, _, err := fetchLatestVersion(ctx)
+	latest, err := fetchLatestVersion(ctx)
 	if err != nil {
+		_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "archivist update --check: failed to fetch release info:", err)
 		return &ExitError{Code: ExitServerError}
 	}
 
 	normalCurrent := strings.TrimPrefix(current, "v")
 	normalLatest := strings.TrimPrefix(latest, "v")
 
-	if normalCurrent == normalLatest {
+	switch compareToCurrent(latest, current) {
+	case 0:
 		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Up to date: v%s\n", normalCurrent)
+		return &ExitError{Code: ExitNotFound}
+	case -1:
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Up to date: v%s is newer than the latest release (v%s)\n",
+			normalCurrent, normalLatest)
 		return &ExitError{Code: ExitNotFound}
 	}
 	_, _ = fmt.Fprintf(cmd.OutOrStdout(),
@@ -83,7 +102,7 @@ func runUpdateCheck(ctx context.Context, cmd *cobra.Command, current string) err
 
 // runUpdateSkill downloads and installs only the skill-bundle.
 func runUpdateSkill(ctx context.Context, cmd *cobra.Command, current string) error {
-	latest, _, err := fetchLatestVersion(ctx)
+	latest, err := fetchLatestVersion(ctx)
 	if err != nil {
 		_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "archivist update --skill: failed to fetch release info:", err)
 		return &ExitError{Code: ExitServerError}
@@ -91,7 +110,6 @@ func runUpdateSkill(ctx context.Context, cmd *cobra.Command, current string) err
 
 	ver := strings.TrimPrefix(latest, "v")
 	skillArchive := fmt.Sprintf("archivist_v%s_skill-bundle.tar.gz", ver)
-	url := fmt.Sprintf("https://github.com/%s/releases/download/%s/%s", archivistRepo, latest, skillArchive)
 
 	skillDir, err := skillInstallDir()
 	if err != nil || skillDir == "" {
@@ -99,14 +117,25 @@ func runUpdateSkill(ctx context.Context, cmd *cobra.Command, current string) err
 		return nil
 	}
 
+	sums, err := fetchVerifiedSums(ctx, latest)
+	if err != nil {
+		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "archivist update --skill: %v\n", err)
+		return &ExitError{Code: ExitServerError}
+	}
+
 	tmpFile, err := os.CreateTemp("", "archivist-skill-*.tar.gz")
 	if err != nil {
 		return &ExitError{Code: ExitServerError}
 	}
+	_ = tmpFile.Close()
 	defer func() { _ = os.Remove(tmpFile.Name()) }()
 
-	if err := downloadTo(ctx, url, tmpFile.Name()); err != nil {
+	if err := downloadTo(ctx, assetURL(latest, skillArchive), tmpFile.Name()); err != nil {
 		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "archivist update --skill: download failed: %v\n", err)
+		return &ExitError{Code: ExitServerError}
+	}
+	if err := checkAgainstSums(sums, skillArchive, tmpFile.Name()); err != nil {
+		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "archivist update --skill: %v\n", err)
 		return &ExitError{Code: ExitServerError}
 	}
 
@@ -123,21 +152,70 @@ func runUpdateSkill(ctx context.Context, cmd *cobra.Command, current string) err
 	return nil
 }
 
+// compareToCurrent compares the latest release tag with this build's
+// version: 1 when the release is newer, 0 when equal, -1 when this build is
+// newer. A build version that does not parse (such as "dev") counts as
+// older than any release unless it equals the tag.
+func compareToCurrent(latest, current string) int {
+	if strings.TrimPrefix(latest, "v") == strings.TrimPrefix(current, "v") {
+		return 0
+	}
+	lv, err := release.ParseTag(latest)
+	if err != nil {
+		return 1
+	}
+	cv, err := release.ParseVersion(current)
+	if err != nil {
+		return 1
+	}
+	return lv.Compare(cv)
+}
+
+// assetURL is the download URL of one asset of the release tag.
+func assetURL(tag, name string) string {
+	return releaseDownloadBase + "/" + tag + "/" + name
+}
+
+// fetchVerifiedSums downloads the release's SHA256SUMS and its signature
+// (SHA256SUMS.sig) and returns SHA256SUMS once the signature verifies.
+func fetchVerifiedSums(ctx context.Context, tag string) ([]byte, error) {
+	name := fmt.Sprintf("archivist_v%s_SHA256SUMS", strings.TrimPrefix(tag, "v"))
+	sums, err := fetchBytes(ctx, assetURL(tag, name))
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch SHA256SUMS: %w", err)
+	}
+	sig, err := fetchBytes(ctx, assetURL(tag, name+".sig"))
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch the SHA256SUMS signature: %w", err)
+	}
+	if err := releaseVerifier(sums, sig); err != nil {
+		return nil, fmt.Errorf("the release checksums could not be verified: %w", err)
+	}
+	return sums, nil
+}
+
+// checkAgainstSums checks the file at path against name's line in the
+// verified SHA256SUMS.
+func checkAgainstSums(sums []byte, name, path string) error {
+	expected, err := extractHashFromSums(sums, name)
+	if err != nil {
+		return err
+	}
+	return verifySHA256(path, expected)
+}
+
 // runUpdate performs the self-replace update, routing on install channel.
 func runUpdate(ctx context.Context, cmd *cobra.Command, current string) error {
 	channel := readInstallChannel()
 
-	switch channel {
-	case "brew":
+	if channel == "brew" {
 		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Run: brew upgrade mosaic-finance-inc/tap/archivist")
-		return nil
-	case "npm":
-		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Run: npx -y @mosaic-finance/archivist@latest install")
 		return nil
 	}
 
-	// Self-replace path: curl-sh, github-releases, unknown, or absent channel
-	latest, sumsURL, err := fetchLatestVersion(ctx)
+	// Self-replace path: curl-sh, powershell, npm, github-releases, unknown,
+	// or absent channel.
+	latest, err := fetchLatestVersion(ctx)
 	if err != nil {
 		_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "archivist update: failed to fetch release info:", err)
 		return &ExitError{Code: ExitServerError}
@@ -146,8 +224,14 @@ func runUpdate(ctx context.Context, cmd *cobra.Command, current string) error {
 	normalCurrent := strings.TrimPrefix(current, "v")
 	normalLatest := strings.TrimPrefix(latest, "v")
 
-	if normalCurrent == normalLatest {
+	switch compareToCurrent(latest, current) {
+	case 0:
 		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Already up to date: v%s\n", normalCurrent)
+		return &ExitError{Code: ExitNotFound}
+	case -1:
+		_, _ = fmt.Fprintf(cmd.ErrOrStderr(),
+			"archivist update: this build (v%s) is newer than the latest release (v%s); nothing was changed.\n",
+			normalCurrent, normalLatest)
 		return &ExitError{Code: ExitNotFound}
 	}
 
@@ -161,32 +245,27 @@ func runUpdate(ctx context.Context, cmd *cobra.Command, current string) error {
 
 	ver := strings.TrimPrefix(latest, "v")
 	archiveName := fmt.Sprintf("archivist_v%s_%s.%s", ver, platform, archiveExt)
-	archiveURL := fmt.Sprintf("https://github.com/%s/releases/download/%s/%s", archivistRepo, latest, archiveName)
 
-	// Download archive
-	tmpArchive, err := os.CreateTemp("", "archivist-update-*."+archiveExt)
-	if err != nil {
-		return &ExitError{Code: ExitServerError}
-	}
-	defer func() { _ = os.Remove(tmpArchive.Name()) }()
-
-	if err := downloadTo(ctx, archiveURL, tmpArchive.Name()); err != nil {
-		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "archivist update: download failed: %v\n", err)
-		return &ExitError{Code: ExitServerError}
-	}
-
-	// Download and verify SHA256
-	sumsData, err := fetchBytes(ctx, sumsURL)
-	if err != nil {
-		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "archivist update: failed to fetch SHA256SUMS: %v\n", err)
-		return &ExitError{Code: ExitServerError}
-	}
-	expectedHash, err := extractHashFromSums(sumsData, archiveName)
+	// The signed SHA256SUMS first: nothing is downloaded into place, or
+	// extracted, unless it verifies and the archive matches it.
+	sumsData, err := fetchVerifiedSums(ctx, latest)
 	if err != nil {
 		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "archivist update: %v\n", err)
 		return &ExitError{Code: ExitServerError}
 	}
-	if err := verifySHA256(tmpArchive.Name(), expectedHash); err != nil {
+
+	tmpArchive, err := os.CreateTemp("", "archivist-update-*."+archiveExt)
+	if err != nil {
+		return &ExitError{Code: ExitServerError}
+	}
+	_ = tmpArchive.Close()
+	defer func() { _ = os.Remove(tmpArchive.Name()) }()
+
+	if err := downloadTo(ctx, assetURL(latest, archiveName), tmpArchive.Name()); err != nil {
+		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "archivist update: download failed: %v\n", err)
+		return &ExitError{Code: ExitServerError}
+	}
+	if err := checkAgainstSums(sumsData, archiveName, tmpArchive.Name()); err != nil {
 		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "archivist update: %v\n", err)
 		return &ExitError{Code: ExitServerError}
 	}
@@ -220,7 +299,7 @@ func runUpdate(ctx context.Context, cmd *cobra.Command, current string) error {
 	}
 
 	// Get current binary path
-	currentBin, err := os.Executable()
+	currentBin, err := executablePath()
 	if err != nil {
 		return &ExitError{Code: ExitServerError}
 	}
@@ -258,6 +337,7 @@ func runUpdate(ctx context.Context, cmd *cobra.Command, current string) error {
 	// POSIX: atomic rename (src and dst must be on the same filesystem)
 	newPath := currentBin + ".new"
 	if err := copyFile(tmpBin.Name(), newPath); err != nil {
+		_ = os.Remove(newPath)
 		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "archivist update: failed to stage new binary: %v\n", err)
 		return &ExitError{Code: ExitServerError}
 	}
@@ -391,44 +471,58 @@ func readInstallChannel() string {
 	return strings.TrimSpace(string(data))
 }
 
-// githubRelease is a minimal JSON shape from the GitHub releases API.
+// githubRelease is the part of the GitHub releases API answer update reads.
 type githubRelease struct {
 	TagName string `json:"tag_name"`
-	Assets  []struct {
-		Name               string `json:"name"`
-		BrowserDownloadURL string `json:"browser_download_url"`
-	} `json:"assets"`
 }
 
-// fetchLatestVersion queries GitHub API and returns (tag, sha256sums_url, error).
-func fetchLatestVersion(ctx context.Context) (string, string, error) {
-	data, err := fetchBytes(ctx, archivistReleaseAPI)
+// fetchLatestVersion queries the GitHub API for the latest release's tag,
+// which must be a release tag (vX.Y.Z or vX.Y.Z-pre).
+func fetchLatestVersion(ctx context.Context) (string, error) {
+	data, err := fetchBytes(ctx, releaseAPIURL)
 	if err != nil {
-		return "", "", err
+		return "", err
 	}
 	var rel githubRelease
 	if err := json.Unmarshal(data, &rel); err != nil {
-		return "", "", fmt.Errorf("parse release JSON: %w", err)
+		return "", fmt.Errorf("parse release JSON: %w", err)
 	}
 	if rel.TagName == "" {
-		return "", "", fmt.Errorf("empty tag_name in release response")
+		return "", fmt.Errorf("empty tag_name in release response")
 	}
-	var sumsURL string
-	ver := strings.TrimPrefix(rel.TagName, "v")
-	for _, a := range rel.Assets {
-		if a.Name == fmt.Sprintf("archivist_v%s_SHA256SUMS", ver) {
-			sumsURL = a.BrowserDownloadURL
-			break
-		}
+	if _, err := release.ParseTag(rel.TagName); err != nil {
+		return "", fmt.Errorf("unexpected release tag: %w", err)
 	}
-	if sumsURL == "" {
-		sumsURL = fmt.Sprintf("https://github.com/%s/releases/download/%s/archivist_v%s_SHA256SUMS",
-			archivistRepo, rel.TagName, ver)
-	}
-	return rel.TagName, sumsURL, nil
+	return rel.TagName, nil
 }
 
-// fetchBytes downloads a URL into memory.
+// updateHTTPClient follows redirects only to https:// (or plain http:// on a
+// loopback host, for local test releases).
+var updateHTTPClient = &http.Client{
+	CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 10 {
+			return errors.New("too many redirects")
+		}
+		switch {
+		case req.URL.Scheme == "https":
+			return nil
+		case req.URL.Scheme == "http" && isLoopbackHost(req.URL.Hostname()):
+			return nil
+		}
+		return fmt.Errorf("redirect to %s:// refused", req.URL.Scheme)
+	},
+}
+
+// isLoopbackHost reports whether host is localhost or a loopback IP.
+func isLoopbackHost(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// fetchBytes downloads a URL into memory (at most maxReleaseAsset bytes).
 func fetchBytes(ctx context.Context, url string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -436,7 +530,7 @@ func fetchBytes(ctx context.Context, url string) ([]byte, error) {
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", "archivist-update/1.0")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := updateHTTPClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("fetch %s: %w", url, err)
 	}
@@ -444,7 +538,14 @@ func fetchBytes(ctx context.Context, url string) ([]byte, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("fetch %s: HTTP %d", url, resp.StatusCode)
 	}
-	return io.ReadAll(resp.Body)
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxReleaseAsset+1))
+	if err != nil {
+		return nil, fmt.Errorf("fetch %s: %w", url, err)
+	}
+	if len(data) > maxReleaseAsset {
+		return nil, fmt.Errorf("fetch %s: larger than %d bytes", url, maxReleaseAsset)
+	}
+	return data, nil
 }
 
 // downloadTo downloads url to dest file path.
@@ -506,14 +607,8 @@ func extractBinaryFromTarGz(archivePath, binaryName, destPath string) error {
 		if err != nil {
 			return err
 		}
-		if filepath.Base(hdr.Name) == binaryName {
-			out, err := os.Create(destPath)
-			if err != nil {
-				return err
-			}
-			defer func() { _ = out.Close() }()
-			_, err = io.Copy(out, tr)
-			return err
+		if filepath.Base(hdr.Name) == binaryName && hdr.Typeflag == tar.TypeReg {
+			return writeExecutable(destPath, tr)
 		}
 	}
 	return fmt.Errorf("binary %q not found in archive", binaryName)
@@ -533,13 +628,7 @@ func extractBinaryFromZip(archivePath, binaryName, destPath string) error {
 				return err
 			}
 			defer func() { _ = src.Close() }()
-			out, err := os.Create(destPath)
-			if err != nil {
-				return err
-			}
-			defer func() { _ = out.Close() }()
-			_, err = io.Copy(out, src)
-			return err
+			return writeExecutable(destPath, src)
 		}
 	}
 	return fmt.Errorf("binary %q: %w", binaryName, errBinaryNotInZip)
@@ -548,20 +637,32 @@ func extractBinaryFromZip(archivePath, binaryName, destPath string) error {
 // errBinaryNotInZip means the archive holds no file of that name.
 var errBinaryNotInZip = errors.New("not found in zip archive")
 
-// copyFile copies src to dst.
+// copyFile copies the executable src to dst, which ends up mode 0755.
 func copyFile(src, dst string) error {
 	in, err := os.Open(src)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = in.Close() }()
-	out, err := os.Create(dst)
+	return writeExecutable(dst, in)
+}
+
+// writeExecutable writes r to path (created or truncated) with mode 0755:
+// set explicitly, so the umask cannot leave a binary that does not run.
+func writeExecutable(path string, r io.Reader) error {
+	out, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o755)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = out.Close() }()
-	_, err = io.Copy(out, in)
-	return err
+	if _, err := io.Copy(out, r); err != nil {
+		_ = out.Close()
+		return err
+	}
+	if err := out.Chmod(0o755); err != nil && runtime.GOOS != "windows" {
+		_ = out.Close()
+		return err
+	}
+	return out.Close()
 }
 
 // extractTarGz extracts all files from a tar.gz into destDir (flat, no subdirs).

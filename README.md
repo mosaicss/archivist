@@ -17,9 +17,10 @@ curl -fsSL https://github.com/mosaicss/archivist/releases/latest/download/instal
 ```
 
 The script installs or updates archivist (`~/.local/bin`, or
-`%LOCALAPPDATA%\Programs\archivist` on Windows) after checking the archive
-against the release's `SHA256SUMS`, and adds the Claude Code skill when
-`~/.claude/skills` exists. A Homebrew install is upgraded with `brew upgrade`
+`%LOCALAPPDATA%\Programs\archivist` on Windows) after checking the download
+(see [Verifying a release](#verifying-a-release)), and adds the Claude Code
+skill when `~/.claude/skills` exists. `install.sh` needs `curl`, `tar` and
+`openssl`, which macOS and most Linux systems include. A Homebrew install is upgraded with `brew upgrade`
 instead (only while the cask is still installed). With a pairing code from the Mosaic workspace it also connects this
 machine; see [One-step connect](#one-step-connect).
 
@@ -34,14 +35,19 @@ Code skill in `~/.claude/skills/archivist/`.
 
 ### GitHub Releases (macOS, Linux, Windows)
 
-Download the archive for your platform and the checksum file from
-https://github.com/mosaicss/archivist/releases, verify, and put the binary on
-your PATH. For example, Linux amd64:
+Download the archive for your platform, the checksum file and its signature
+from https://github.com/mosaicss/archivist/releases, verify, and put the
+binary on your PATH. For example, Linux amd64:
 
 ```sh
-VER=0.2.23
-curl -fsSLO https://github.com/mosaicss/archivist/releases/download/v${VER}/archivist_v${VER}_linux_amd64.tar.gz
-curl -fsSLO https://github.com/mosaicss/archivist/releases/download/v${VER}/archivist_v${VER}_SHA256SUMS
+VER=0.2.35
+BASE=https://github.com/mosaicss/archivist/releases/download/v${VER}
+curl -fsSLO ${BASE}/archivist_v${VER}_linux_amd64.tar.gz
+curl -fsSLO ${BASE}/archivist_v${VER}_SHA256SUMS
+curl -fsSLO ${BASE}/archivist_v${VER}_SHA256SUMS.sig
+# archivist-release-1.pem: internal/release/keys/ in this repository
+openssl dgst -sha256 -verify archivist-release-1.pem \
+  -signature archivist_v${VER}_SHA256SUMS.sig archivist_v${VER}_SHA256SUMS
 grep "archivist_v${VER}_linux_amd64.tar.gz" archivist_v${VER}_SHA256SUMS | sha256sum -c -
 tar -xzf archivist_v${VER}_linux_amd64.tar.gz archivist
 install -m 0755 archivist ~/.local/bin/archivist
@@ -59,6 +65,29 @@ archivist update --skill
 go install github.com/mosaicss/archivist/cmd/archivist@latest
 archivist update --skill   # optional: the Claude Code skill
 ```
+
+### Verifying a release
+
+Each release's `archivist_v<version>_SHA256SUMS` lists the SHA-256 of every
+archive and the skill bundle, and `archivist_v<version>_SHA256SUMS.sig` is its
+signature (RSA, SHA-256, PKCS#1 v1.5) by the Archivist release key. The public
+key is in [`internal/release/keys/`](internal/release/keys/) and is also built
+into `install.sh`, `install.ps1` and the `archivist` binary.
+
+- `install.sh` and `install.ps1` check the signature (with `openssl`, or .NET
+  on Windows), then each download against `SHA256SUMS`, before anything is
+  installed.
+- `archivist update` and `archivist update --skill` do the same with the key
+  built into the running binary. `archivist update` also keeps the installed
+  version when the latest release is older, and leaves an executable binary.
+- The Homebrew cask and the npm package check the skill bundle against the
+  hash written into them at release time.
+- The release files also carry GitHub build provenance:
+  `gh attestation verify archivist_v<version>_linux_amd64.tar.gz -R mosaicss/archivist`.
+
+`ARCHIVIST_RELEASE_BASE_URL` (both install scripts) and `ARCHIVIST_BASE_URL`
+(the binary) must be `https://` URLs; plain `http://` is accepted only for
+`127.0.0.1`, `::1` or `localhost`, for local testing.
 
 ## Authenticating
 
@@ -380,9 +409,12 @@ so SmartScreen or Smart App Control may warn about it or block it.
 
 Install script options: `--pair CODE`, `--no-service` (pair only).
 `ARCHIVIST_INSTALL_DIR` changes the install directory,
-`ARCHIVIST_INSTALL_VERSION` installs a given tag, and
-`ARCHIVIST_RELEASE_BASE_URL` points the script at another release host (for
-testing). Each released script is stamped with its own tag.
+`ARCHIVIST_INSTALL_VERSION` installs a given tag (v0.2.35 or later: earlier
+releases have no `SHA256SUMS.sig`; for those run that release's own script,
+`https://github.com/mosaicss/archivist/releases/download/<tag>/install.sh` or
+`.../install.ps1`), and `ARCHIVIST_RELEASE_BASE_URL` points the script at another release host (for
+testing; `https://`, or `http://` to a loopback host). Each released script is
+stamped with its own tag.
 
 ### Running it yourself
 
@@ -768,9 +800,13 @@ exactly that version. Lint and release config checks match CI:
 
 ```sh
 golangci-lint run                 # v2.14.0
-goreleaser check
+goreleaser check                  # v2.18.2
 goreleaser build --snapshot --clean
 ```
+
+CI and the release workflow install exactly these versions from their
+release tarballs, checked against pinned SHA-256 digests
+(`scripts/install-release-tools.sh`).
 
 ## Release process
 
@@ -781,13 +817,25 @@ git tag v0.2.23
 git push origin v0.2.23
 ```
 
-`.github/workflows/release.yml` runs goreleaser: 5 platform binaries plus a
-universal macOS binary, `archivist_v<version>_SHA256SUMS`,
-`archivist_v<version>_skill-bundle.tar.gz`, a GitHub Release, SLSA build
-provenance, and the Homebrew cask `Casks/archivist.rb` pushed to
-`mosaic-finance-inc/homebrew-tap` (needs the `HOMEBREW_TAP_GITHUB_TOKEN`
-secret). macOS signing and notarization run only when the `APPLE_*` secrets are
-set.
+`.github/workflows/release.yml` runs four jobs, each with only the
+permissions and secrets it uses, and every action pinned by commit SHA:
+
+1. `build` (read only, no secrets): checks the tag, verifies the Go modules,
+   and runs goreleaser v2.18.2 without publishing: 5 platform binaries plus a
+   universal macOS binary (built with `-trimpath` and the commit's date),
+   `archivist_v<version>_SHA256SUMS`,
+   `archivist_v<version>_skill-bundle.tar.gz`, the stamped installers, the
+   changelog and the Homebrew cask.
+2. `sign` (the `release` environment, which admits `v*` tags only and holds
+   the signing key): checks the files against `SHA256SUMS`, writes
+   `archivist_v<version>_SHA256SUMS.sig`, verifies it with the committed public
+   key, and records SLSA build provenance for every release file.
+3. `publish`: verifies again, creates the GitHub Release with every asset, and
+   pushes `Casks/archivist.rb` to `mosaic-finance-inc/homebrew-tap` (needs the
+   `HOMEBREW_TAP_GITHUB_TOKEN` secret).
+4. `npm`: publishes the npm package only when the `NPM_TOKEN` secret is set.
+
+macOS signing and notarization are not part of the workflow.
 
 ## Architecture
 

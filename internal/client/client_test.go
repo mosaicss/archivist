@@ -399,6 +399,39 @@ func TestResolveBaseURL(t *testing.T) {
 	}
 }
 
+// The chat-api URL override must be https with a host and no user info, or
+// plain http to a loopback host.
+func TestCheckBaseURL(t *testing.T) {
+	for _, ok := range []string{
+		"https://chat-api.example.com", "https://example.com:8443/prefix", "http://127.0.0.1:8080",
+		"http://127.1.2.3", "http://[::1]:9", "http://localhost:9", client.DefaultBaseURL,
+	} {
+		if err := client.CheckBaseURL(ok); err != nil {
+			t.Errorf("%q refused: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{
+		"http://example.com", "http://127.0.0.1.example.com", "http://localhost.example.com",
+		"https://user:pass@example.com", "http://user@127.0.0.1:9", "ftp://example.com", "https://",
+		"example.com", "https:example.com", "//example.com", "ws://127.0.0.1", "http://0.0.0.0:9",
+	} {
+		err := client.CheckBaseURL(bad)
+		if err == nil {
+			t.Errorf("%q accepted", bad)
+		} else if !strings.Contains(err.Error(), "ARCHIVIST_BASE_URL") {
+			t.Errorf("%q: error does not name the variable: %v", bad, err)
+		}
+	}
+	t.Setenv("ARCHIVIST_BASE_URL", "")
+	if err := client.CheckBaseURLEnv(); err != nil {
+		t.Errorf("unset: %v", err)
+	}
+	t.Setenv("ARCHIVIST_BASE_URL", "http://example.com")
+	if err := client.CheckBaseURLEnv(); err == nil {
+		t.Error("env http://example.com accepted")
+	}
+}
+
 func TestErrUnauthorizedNamesAccountURL(t *testing.T) {
 	if !strings.Contains(client.ErrUnauthorized.Error(), client.AccountURL) {
 		t.Errorf("ErrUnauthorized must point at AccountURL: %q", client.ErrUnauthorized.Error())

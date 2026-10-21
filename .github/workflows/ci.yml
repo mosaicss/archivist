@@ -18,10 +18,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: true
@@ -35,7 +37,7 @@ jobs:
         run: GOOS=windows go vet ./...
 
       - name: Set up Node for versioned Mosaic contract
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24"
 
@@ -47,17 +49,23 @@ jobs:
 
       - name: Upload coverage
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: coverage
           path: coverage.out
           if-no-files-found: ignore
 
-      - name: Install golangci-lint v2
+      # Pinned tarballs checked against their SHA-256 (the release workflow
+      # installs goreleaser the same way).
+      - name: Install golangci-lint and goreleaser
         run: |
-          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh \
-            | sh -s -- -b $(go env GOPATH)/bin v2.14.0
+          bash scripts/install-release-tools.sh "$RUNNER_TEMP/bin" golangci-lint goreleaser
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      - name: Tool versions
+        run: |
           golangci-lint --version
+          goreleaser --version
 
       - name: golangci-lint
         run: golangci-lint run
@@ -70,11 +78,7 @@ jobs:
       # registered in Claude Code from any install channel). Snapshot-build
       # the archives and assert the bundle ships a discoverable skill.
       - name: Snapshot build (skill bundle gate)
-        uses: goreleaser/goreleaser-action@v7
-        with:
-          distribution: goreleaser
-          version: "~> v2"
-          args: release --snapshot --clean --skip=validate --config goreleaser.yaml
+        run: goreleaser release --snapshot --clean --skip=validate --config goreleaser.yaml
 
       - name: Verify skill bundle contents
         run: |
@@ -85,6 +89,24 @@ jobs:
           grep -q "^name: archivist$" /tmp/skill-check/SKILL.md || { echo "FAIL: frontmatter missing name"; exit 1; }
           grep -q "^<!-- version: " /tmp/skill-check/SKILL.md || { echo "FAIL: version marker missing"; exit 1; }
           echo "skill bundle OK: SKILL.md present with frontmatter + version marker"
+          # The cask unpacks the skill bundle only when it matches this hash.
+          SUM=$(sha256sum "$BUNDLE" | cut -d' ' -f1)
+          grep -q "skill_sha256 = \"${SUM}\"" dist/homebrew/Casks/archivist.rb \
+            || { echo "FAIL: the cask does not carry the skill bundle sha256"; cat dist/homebrew/Casks/archivist.rb; exit 1; }
+          echo "cask OK: carries the skill bundle sha256"
+
+      # The npm job's hash injection, against the snapshot SHA256SUMS on
+      # scratch copies of the package files.
+      - name: npm hash injection (snapshot)
+        run: |
+          SUMS=$(ls dist/archivist_v*_SHA256SUMS)
+          VER=$(basename "$SUMS" _SHA256SUMS)
+          VER="${VER#archivist_v}"
+          SCRATCH="$RUNNER_TEMP/npm-inject"
+          mkdir -p "$SCRATCH"
+          cp packages/npm-orchestrator/bin/archivist-install.js packages/npm-orchestrator/package.json "$SCRATCH/"
+          bash scripts/inject-npm-hashes.sh "$SUMS" "$VER" "$SCRATCH/archivist-install.js" "$SCRATCH/package.json"
+          node --check "$SCRATCH/archivist-install.js"
 
       # Story 78.34: the Windows zip carries archivist.exe and the
       # console-less archivistw.exe (GUI subsystem) the logon task runs.
@@ -112,7 +134,7 @@ jobs:
           sudo apt-get install -y shellcheck
 
       - name: shellcheck install.sh
-        run: shellcheck scripts/install.sh scripts/test-install.sh
+        run: shellcheck scripts/install.sh scripts/test-install.sh scripts/install-release-tools.sh scripts/inject-npm-hashes.sh
 
       - name: install.sh replay (fake release, stub service managers)
         run: bash scripts/test-install.sh
@@ -162,10 +184,12 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: true

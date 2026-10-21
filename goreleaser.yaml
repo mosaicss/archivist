@@ -2,17 +2,22 @@
 #
 # Builds 5 platform targets (darwin arm64/amd64, linux arm64/amd64, windows
 # amd64) plus the console-less archivistw.exe (windows amd64), produces .tar.gz + .zip archives, emits a single SHA256SUMS file,
-# a universal macOS binary, a skill-bundle.tar.gz release asset, SLSA
-# provenance attestation (via release.yml), and optional macOS notarization
-# (conditional on APPLE_API_KEY_ID being set — see operator checklist).
+# a universal macOS binary, a skill-bundle.tar.gz release asset and SLSA
+# provenance attestation (via release.yml). The release workflow does not
+# run macOS notarization: its build job holds no APPLE_* secret, so the
+# notarize block below stays disabled; a later change adds it in its own job.
+#
+# release.yml runs `goreleaser release --skip=validate,publish,announce` in a
+# read-only build job: goreleaser builds and writes dist/ (archives,
+# SHA256SUMS, skill bundle, CHANGELOG.md, homebrew/Casks/archivist.rb) and
+# publishes nothing; later jobs sign SHA256SUMS, create the GitHub release
+# and push the cask. Builds are reproducible: -trimpath, the commit's
+# timestamp and date, and no `go mod tidy` before the build (the workflow
+# checks go.mod and go.sum instead).
 
 version: 2
 
 project_name: archivist
-
-before:
-  hooks:
-    - go mod tidy
 
 builds:
   - id: archivist
@@ -30,11 +35,13 @@ builds:
     ignore:
       - goos: windows
         goarch: arm64
+    flags:
+      - -trimpath
     ldflags:
       - -s -w
       - -X main.version={{.Version}}
       - -X main.commit={{.ShortCommit}}
-      - -X main.date={{ time "2006-01-02" }}
+      - -X main.date={{ slice .CommitDate 0 10 }}
     mod_timestamp: "{{ .CommitTimestamp }}"
 
   # Story 78.34: the console-less Windows companion. Same main, linked for
@@ -49,11 +56,13 @@ builds:
       - windows
     goarch:
       - amd64
+    flags:
+      - -trimpath
     ldflags:
       - -s -w -H windowsgui
       - -X main.version={{.Version}}
       - -X main.commit={{.ShortCommit}}
-      - -X main.date={{ time "2006-01-02" }}
+      - -X main.date={{ slice .CommitDate 0 10 }}
     mod_timestamp: "{{ .CommitTimestamp }}"
 
 universal_binaries:
@@ -122,9 +131,9 @@ changelog:
     - title: Other changes
       order: 999
 
-# macOS notarization — conditional on APPLE_API_KEY_ID being set.
-# Operator must provision all APPLE_* secrets in the mosaicss/archivist
-# repo settings before this takes effect. See RELEASE_OPS_36_11.md.
+# macOS notarization, enabled only when APPLE_API_KEY_ID is set. The release
+# workflow passes no APPLE_* secret to goreleaser, so it does not run there;
+# a later change adds notarization in its own job. See RELEASE_OPS_36_11.md.
 notarize:
   macos:
     - enabled: '{{ isEnvSet "APPLE_API_KEY_ID" }}'
@@ -142,8 +151,11 @@ notarize:
 # tap's Casks/ directory
 # (the goreleaser default — no `directory:` override). The cask DSL has no
 # `test do` block, so the old formula-only test was dropped here.
-# Publishing requires the mosaic-finance-inc/homebrew-tap repo and the
-# HOMEBREW_TAP_GITHUB_TOKEN secret — see RELEASE_OPS_36_11.md §4.
+# goreleaser only writes dist/homebrew/Casks/archivist.rb (publishing is
+# skipped); release.yml's publish job pushes it to
+# mosaic-finance-inc/homebrew-tap with the HOMEBREW_TAP_GITHUB_TOKEN secret
+# (see RELEASE_OPS_36_11.md §4). The token below is read only when
+# goreleaser itself publishes, which the workflow never does.
 homebrew_casks:
   - name: archivist
     ids:
@@ -168,22 +180,35 @@ homebrew_casks:
                            args: ["-dr", "com.apple.quarantine", "#{staged_path}/archivist"]
           end
           # Fetch the matching Claude skill bundle when ~/.claude/skills
-          # exists (same semantics as the pre-cask formula post_install).
+          # exists into a private temporary directory, and unpack it only
+          # when it matches this release's skill bundle checksum (written
+          # into the cask at release time); otherwise skip the skill.
           if File.directory?(File.expand_path("~/.claude/skills"))
-            skill_dir = File.expand_path("~/.claude/skills/archivist")
-            FileUtils.mkdir_p skill_dir
-            system_command "/usr/bin/curl",
-                           args: ["-fsSL", "-o", "/tmp/archivist-skill.tar.gz",
-                                  "https://github.com/mosaicss/archivist/releases/download/v#{version}/archivist_v#{version}_skill-bundle.tar.gz"]
-            system_command "/usr/bin/tar",
-                           args: ["-xzf", "/tmp/archivist-skill.tar.gz", "-C", skill_dir]
-            FileUtils.rm_f "/tmp/archivist-skill.tar.gz"
+            require "digest"
+            require "tmpdir"
+            skill_sha256 = "{{ sha256 (printf "dist/archivist_v%s_skill-bundle.tar.gz" .Version) }}"
+            Dir.mktmpdir("archivist-skill") do |dir|
+              bundle = File.join(dir, "skill-bundle.tar.gz")
+              fetched = system_command("/usr/bin/curl",
+                                       args: ["-fsSL", "--proto", "=https", "--proto-redir", "=https", "-o", bundle,
+                                              "https://github.com/mosaicss/archivist/releases/download/v#{version}/archivist_v#{version}_skill-bundle.tar.gz"],
+                                       must_succeed: false).success?
+              if fetched && File.file?(bundle) && Digest::SHA256.file(bundle).hexdigest == skill_sha256
+                skill_dir = File.expand_path("~/.claude/skills/archivist")
+                FileUtils.mkdir_p skill_dir
+                system_command "/usr/bin/tar", args: ["-xzf", bundle, "-C", skill_dir]
+              else
+                opoo "The Claude Code skill bundle could not be installed; skipped. Run: archivist update --skill"
+              end
+            end
           end
           # Stamp the install channel so `archivist update` routes users to
           # `brew upgrade` instead of self-replacing the binary.
           FileUtils.mkdir_p File.expand_path("~/.archivist")
           File.write File.expand_path("~/.archivist/install-channel"), "brew\n"
 
+# Not used by release.yml, which skips publishing and creates the release
+# with gh (assets include the installers and SHA256SUMS.sig).
 release:
   github:
     owner: mosaicss

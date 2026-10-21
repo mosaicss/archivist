@@ -7,7 +7,9 @@
 //   npx -y @mosaic-finance/archivist@x.y.z install
 //
 // Zero runtime dependencies. All SHA256 hashes are injected by the release
-// workflow at publish time (placeholders below are replaced by sed before npm publish).
+// workflow at publish time (placeholders below are replaced by sed before npm
+// publish) from the release's signed SHA256SUMS, so the archive and the skill
+// bundle are checked against hashes shipped inside the package itself.
 
 'use strict';
 
@@ -23,21 +25,28 @@ const VERSION = PKG.version;
 const REPO = 'mosaicss/archivist';
 
 // SHA256 hashes injected by the release workflow.
-// Placeholders follow the pattern: SHA256_<PLATFORM_UPPER>
-// where PLATFORM_UPPER = DARWIN_ARM64, DARWIN_AMD64, LINUX_ARM64, LINUX_AMD64, WINDOWS_AMD64
+// Placeholders follow the pattern SHA256_<ASSET_UPPER>, where ASSET_UPPER is
+// the asset name after archivist_v<ver>_ without its extension: DARWIN_ALL
+// (one universal macOS archive), LINUX_ARM64, LINUX_AMD64, WINDOWS_AMD64 and
+// SKILL_BUNDLE.
 const HASHES = {
-  darwin_arm64:   'SHA256_DARWIN_ARM64',
-  darwin_amd64:   'SHA256_DARWIN_AMD64',
+  darwin_all:     'SHA256_DARWIN_ALL',
   linux_arm64:    'SHA256_LINUX_ARM64',
   linux_amd64:    'SHA256_LINUX_AMD64',
   windows_amd64:  'SHA256_WINDOWS_AMD64',
 };
+const SKILL_BUNDLE_HASH = 'SHA256_SKILL_BUNDLE';
+
+// isPlaceholder: the release workflow did not fill this hash.
+function isPlaceholder(hash) {
+  return !/^[0-9a-f]{64}$/.test(hash);
+}
 
 function detectPlatform() {
   const plat = process.platform;
   const arch = process.arch;
-  if (plat === 'darwin' && arch === 'arm64') return 'darwin_arm64';
-  if (plat === 'darwin' && arch === 'x64')   return 'darwin_amd64';
+  // One universal binary (arm64 and amd64) per release.
+  if (plat === 'darwin' && (arch === 'arm64' || arch === 'x64')) return 'darwin_all';
   if (plat === 'linux'  && arch === 'arm64') return 'linux_arm64';
   if (plat === 'linux'  && arch === 'x64')   return 'linux_amd64';
   if (plat === 'win32'  && arch === 'x64')   return 'windows_amd64';
@@ -49,23 +58,45 @@ function archiveFilename(platform) {
   return `archivist_v${VERSION}_${platform}.${ext}`;
 }
 
+// downloadFile fetches an https:// URL (following up to 10 https://
+// redirects) into dest.
 function downloadFile(url, dest) {
   return new Promise((resolve, reject) => {
-    const file = fs.createWriteStream(dest);
-    function get(u) {
-      https.get(u, (res) => {
-        if (res.statusCode === 301 || res.statusCode === 302) {
-          return get(res.headers.location);
+    function get(u, redirects) {
+      let parsed;
+      try {
+        parsed = new URL(u);
+      } catch (err) {
+        reject(err);
+        return;
+      }
+      if (parsed.protocol !== 'https:') {
+        reject(new Error(`refusing a non-https download: ${u}`));
+        return;
+      }
+      https.get(parsed, (res) => {
+        if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location) {
+          res.resume();
+          if (redirects >= 10) {
+            reject(new Error(`too many redirects downloading ${url}`));
+            return;
+          }
+          get(new URL(res.headers.location, parsed).toString(), redirects + 1);
+          return;
         }
         if (res.statusCode !== 200) {
+          res.resume();
           reject(new Error(`HTTP ${res.statusCode} downloading ${u}`));
           return;
         }
+        const file = fs.createWriteStream(dest);
+        file.on('error', reject);
+        res.on('error', reject);
         res.pipe(file);
-        file.on('finish', () => file.close(resolve));
+        file.on('finish', () => file.close((err) => (err ? reject(err) : resolve())));
       }).on('error', reject);
     }
-    get(url);
+    get(url, 0);
   });
 }
 
@@ -105,26 +136,36 @@ function extractArchive(archive, dest, platform) {
   }
 }
 
-function installSkill() {
+// installSkill downloads the skill bundle into tmpDir and unpacks it into
+// ~/.claude/skills/archivist only when it matches SKILL_BUNDLE_HASH. Any
+// failure skips the skill with a note; the binary install stands.
+async function installSkill(tmpDir) {
   const skillBase = path.join(os.homedir(), '.claude', 'skills');
   if (!fs.existsSync(skillBase)) return;
 
   const skillDir = path.join(skillBase, 'archivist');
   const skillArchive = `archivist_v${VERSION}_skill-bundle.tar.gz`;
   const skillUrl = `https://github.com/${REPO}/releases/download/v${VERSION}/${skillArchive}`;
-  const tmpSkill = path.join(os.tmpdir(), skillArchive);
+  const tmpSkill = path.join(tmpDir, skillArchive);
+  const skipped = 'Note: the Claude Code skill bundle could not be installed; skipped. Run: archivist update --skill';
 
+  if (isPlaceholder(SKILL_BUNDLE_HASH)) {
+    console.log(skipped);
+    return;
+  }
   try {
     console.log('Installing Claude Code skill...');
-    downloadFile(skillUrl, tmpSkill).then(() => {
-      fs.mkdirSync(skillDir, { recursive: true });
-      execFileSync('tar', ['-xzf', tmpSkill, '-C', skillDir]);
-      fs.unlinkSync(tmpSkill);
-      console.log(`Skill installed at ${skillDir}`);
-    }).catch(() => {
-      // Silent skip if skill bundle download fails
-    });
-  } catch (_) { /* silent */ }
+    await downloadFile(skillUrl, tmpSkill);
+    if (sha256File(tmpSkill) !== SKILL_BUNDLE_HASH) {
+      console.log(skipped);
+      return;
+    }
+    fs.mkdirSync(skillDir, { recursive: true });
+    execFileSync('tar', ['-xzf', tmpSkill, '-C', skillDir]);
+    console.log(`Skill installed at ${skillDir}`);
+  } catch (_) {
+    console.log(skipped);
+  }
 }
 
 function recordChannel() {
@@ -144,7 +185,7 @@ async function main() {
   const expectedHash = HASHES[platform];
 
   // If the hash is still a placeholder (not injected by release workflow), fail loud
-  if (expectedHash.startsWith('SHA256_')) {
+  if (isPlaceholder(expectedHash)) {
     console.error('Error: This package was not built by the official release pipeline (SHA256 hashes are placeholders).');
     console.error(`Download manually from https://github.com/${REPO}/releases`);
     process.exit(1);
@@ -186,7 +227,7 @@ async function main() {
 
     console.log(`Installed: ${dest}`);
     recordChannel();
-    installSkill();
+    await installSkill(tmpDir);
 
     console.log('');
     console.log(`Archivist v${VERSION} installed successfully.`);

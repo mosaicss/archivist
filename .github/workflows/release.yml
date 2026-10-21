@@ -5,64 +5,86 @@ on:
     tags:
       - "v*"
 
-permissions:
-  contents: write
-  id-token: write
-  attestations: write
+# Every job names the permissions it needs; nothing is granted by default.
+permissions: {}
+
+# Four jobs, each holding only what it uses:
+#   build    read-only: builds with goreleaser (no publishing) and uploads
+#            the release files as a workflow artifact. No secrets.
+#   sign     the `release` environment (admits v* tags only) holds the
+#            signing key: checks the files against SHA256SUMS, signs it
+#            (archivist_v<ver>_SHA256SUMS.sig), verifies the signature with
+#            the committed public key and attests build provenance.
+#   publish  contents: write: re-verifies, creates the GitHub release with
+#            every asset, then pushes the Homebrew cask.
+#   npm      publishes the npm package only when NPM_TOKEN is set.
+# Tools are pinned: actions by commit SHA, goreleaser by tarball digest
+# (scripts/install-release-tools.sh).
 
 jobs:
-  release:
-    name: goreleaser release
+  build:
+    name: Build
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: read
     env:
-      # Pulled to job-level env so step-level `if:` can read them via
-      # ${{ env.X != '' }}. GH Actions rejects `${{ secrets.X != '' }}`
-      # in step `if:` conditions ("Unrecognized named-value: 'secrets'").
-      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+      TAG: ${{ github.ref_name }}
     steps:
-      - uses: actions/checkout@v7
+      - name: Check the tag
+        run: |
+          # Strict semver, as release.ParseTag: no leading zeros in numbers or
+          # numeric prerelease ids, no empty ids, no build suffix.
+          num='(0|[1-9][0-9]*)'
+          id="(0|[1-9][0-9]*|[0-9]*[A-Za-z][0-9A-Za-z]*)"
+          re="^v${num}\.${num}\.${num}(-${id}(\.${id})*)?$"
+          if ! [[ "$TAG" =~ $re ]]; then
+            echo "FAIL: '$TAG' is not a release tag (vX.Y.Z or vX.Y.Z-pre)"
+            exit 1
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           # go.mod's `toolchain` directive wins over its `go` line, so the
           # release builds with exactly the pinned toolchain (go1.27.1).
           go-version-file: go.mod
-          cache: true
+          cache: false
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v7
-        with:
-          node-version: "24"
-          registry-url: "https://registry.npmjs.org"
+      - name: Verify modules
+        run: |
+          go mod verify
+          go mod tidy -diff
+
+      - name: Install goreleaser
+        run: |
+          bash scripts/install-release-tools.sh "$RUNNER_TEMP/bin" goreleaser
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
 
       - name: Inject version into SKILL.md
         run: |
-          VERSION="${{ github.ref_name }}"
           # Target the marker line, NOT line 1 — line 1 is the YAML frontmatter
-          # delimiter Claude Code requires for skill discovery. The pre-fix
-          # "1s" form clobbered whatever sat on line 1.
-          sed -i "s|^<!-- version: .* -->$|<!-- version: ${VERSION} -->|" skill/SKILL.md
+          # delimiter Claude Code requires for skill discovery.
+          sed -i "s|^<!-- version: .* -->$|<!-- version: ${TAG} -->|" skill/SKILL.md
           # Fail loud if the marker wasn't found/replaced.
-          grep -q "^<!-- version: ${VERSION} -->$" skill/SKILL.md
+          grep -q "^<!-- version: ${TAG} -->$" skill/SKILL.md
           # And the frontmatter must have survived intact.
           head -1 skill/SKILL.md | grep -qx -- "---"
 
       # Story 78.30: the one-step installers ship as release assets
       # (releases/latest/download/install.sh and install.ps1), stamped with
-      # this tag so a copy always installs the binaries it was released
-      # with. goreleaser uploads them (release.extra_files) with the
-      # archives, so the latest release never lacks them.
+      # this tag so a copy always installs the binaries it was released with.
       - name: Stamp installers
         run: |
-          VERSION="${{ github.ref_name }}"
           mkdir -p build/installers
           for f in install.sh install.ps1; do
-            sed "s|__ARCHIVIST_VERSION__|${VERSION}|g" "scripts/${f}" > "build/installers/${f}"
-            grep -qF "${VERSION}" "build/installers/${f}"
+            sed "s|__ARCHIVIST_VERSION__|${TAG}|g" "scripts/${f}" > "build/installers/${f}"
+            grep -qF "${TAG}" "build/installers/${f}"
             if grep -q "__ARCHIVIST_VERSION__" "build/installers/${f}"; then
               echo "FAIL: ${f} still carries the version placeholder"
               exit 1
@@ -70,61 +92,218 @@ jobs:
           done
           bash -n build/installers/install.sh
 
-      - name: Run goreleaser
-        uses: goreleaser/goreleaser-action@v7
-        with:
-          distribution: goreleaser
-          version: "~> v2"
-          # --skip=validate bypasses the dirty-git check; the "Inject
-          # version into SKILL.md" step deliberately modifies the file
-          # in-workflow, which is a trusted modification, not user drift.
-          # Homebrew cask publishing is LIVE (Story 39.9): goreleaser pushes
-          # Casks/archivist.rb to mosaic-finance-inc/homebrew-tap on every tag,
-          # so the repo + HOMEBREW_TAP_GITHUB_TOKEN secret must exist or the
-          # release fails. See RELEASE_OPS_36_11.md §4.
-          args: release --clean --skip=validate --config goreleaser.yaml
+      # --skip=validate: the two steps above deliberately change tracked
+      # files. Nothing is published from this job.
+      - name: Run goreleaser (build only)
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
-          APPLE_DEVELOPER_ID_CERT_P12_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_CERT_P12_BASE64 }}
-          APPLE_DEVELOPER_ID_CERT_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_CERT_PASSWORD }}
-          APPLE_API_KEY_ISSUER: ${{ secrets.APPLE_API_KEY_ISSUER }}
-          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
-          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          # Read-only token: the changelog reads the GitHub API.
+          GITHUB_TOKEN: ${{ github.token }}
+        run: goreleaser release --clean --skip=validate,publish,announce --config goreleaser.yaml
+
+      - name: Collect the release files
+        run: |
+          VER="${TAG#v}"
+          mkdir -p out/assets out/meta
+          find dist -maxdepth 1 -type f -name "archivist_v${VER}_*" -exec cp {} out/assets/ \;
+          cp build/installers/install.sh build/installers/install.ps1 out/assets/
+          cp dist/CHANGELOG.md out/meta/CHANGELOG.md
+          cp dist/homebrew/Casks/archivist.rb out/meta/archivist.rb
+          test -f "out/assets/archivist_v${VER}_SHA256SUMS"
+          test -f "out/assets/archivist_v${VER}_skill-bundle.tar.gz"
+          grep -qF "$(sha256sum "out/assets/archivist_v${VER}_skill-bundle.tar.gz" | cut -d' ' -f1)" out/meta/archivist.rb
+          ls -l out/assets out/meta
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-files
+          path: out/
+          if-no-files-found: error
+          retention-days: 7
+
+  sign:
+    name: Sign and attest
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # The only job with the signing key; the environment admits v* tags only.
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    env:
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-files
+          path: out
+
+      # The committed public keys, to check the new signature.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: src
+          persist-credentials: false
+          sparse-checkout: internal/release/keys
+          sparse-checkout-cone-mode: false
+
+      - name: Check the files against SHA256SUMS
+        working-directory: out/assets
+        run: sha256sum -c --strict "archivist_v${TAG#v}_SHA256SUMS"
+
+      - name: Sign SHA256SUMS
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.ARCHIVIST_RELEASE_SIGNING_KEY }}
+        run: |
+          umask 077
+          key="$RUNNER_TEMP/release-signing-key.pem"
+          trap 'rm -f "$key"' EXIT
+          if [ -z "$RELEASE_SIGNING_KEY" ]; then
+            echo "FAIL: the release environment has no ARCHIVIST_RELEASE_SIGNING_KEY"
+            exit 1
+          fi
+          printf '%s\n' "$RELEASE_SIGNING_KEY" > "$key"
+          sums="out/assets/archivist_v${TAG#v}_SHA256SUMS"
+          openssl dgst -sha256 -sign "$key" -out "$sums.sig" "$sums"
+          rm -f "$key"
+
+      - name: Verify the signature with the committed key
+        run: |
+          sums="out/assets/archivist_v${TAG#v}_SHA256SUMS"
+          for key in src/internal/release/keys/*.pem; do
+            if openssl dgst -sha256 -verify "$key" -signature "$sums.sig" "$sums"; then
+              echo "verified with $key"
+              exit 0
+            fi
+          done
+          echo "FAIL: no committed release key verifies the new signature"
+          exit 1
 
       - name: Attest build provenance
-        uses: actions/attest-build-provenance@v4
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          # The archives, SHA256SUMS and the stamped installers.
+          # The archives, skill bundle, SHA256SUMS, its signature and the
+          # stamped installers.
           subject-path: |
-            dist/archivist_v*_*
-            build/installers/install.sh
-            build/installers/install.ps1
+            out/assets/archivist_v*
+            out/assets/install.sh
+            out/assets/install.ps1
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-signature
+          path: out/assets/archivist_v*_SHA256SUMS.sig
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish
+    needs: [build, sign]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-files
+          path: out
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-signature
+          path: out/assets
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: src
+          persist-credentials: false
+          sparse-checkout: internal/release/keys
+          sparse-checkout-cone-mode: false
+
+      - name: Re-verify the signature and checksums
+        run: |
+          sums="out/assets/archivist_v${TAG#v}_SHA256SUMS"
+          ok=0
+          for key in src/internal/release/keys/*.pem; do
+            if openssl dgst -sha256 -verify "$key" -signature "$sums.sig" "$sums"; then ok=1; fi
+          done
+          [ "$ok" = 1 ] || { echo "FAIL: the signature does not verify"; exit 1; }
+          (cd out/assets && sha256sum -c --strict "archivist_v${TAG#v}_SHA256SUMS")
+
+      # gh uploads the assets to a draft and then publishes it, as immutable
+      # releases require. A rerun after a later step failed finds the release
+      # and leaves it as it is.
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "Note: release $TAG already exists; creation skipped"
+            exit 0
+          fi
+          flags=()
+          case "$TAG" in *-*) flags+=(--prerelease) ;; esac
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --title "$TAG" \
+            --notes-file out/meta/CHANGELOG.md "${flags[@]}" out/assets/*
+
+      - name: Push the Homebrew cask
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "FAIL: HOMEBREW_TAP_GITHUB_TOKEN is not set"
+            exit 1
+          fi
+          path=repos/mosaic-finance-inc/homebrew-tap/contents/Casks/archivist.rb
+          args=(-X PUT "$path" -f "message=Brew cask update for archivist version ${TAG}"
+            -f "content=$(base64 -w0 out/meta/archivist.rb)")
+          if sha="$(gh api "$path" --jq .sha 2>/dev/null)" && [ -n "$sha" ]; then
+            args+=(-f "sha=${sha}")
+          fi
+          gh api "${args[@]}" > /dev/null
+          echo "Casks/archivist.rb updated"
+
+  npm:
+    name: npm package
+    needs: [build, publish]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-files
+          path: out
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
 
       - name: Inject SHA256 hashes into npm package
         run: |
-          VERSION="${{ github.ref_name }}"
-          # Strip leading v for the SUMS file name
-          VER="${VERSION#v}"
-          SUMS_FILE="dist/archivist_v${VER}_SHA256SUMS"
-          if [ ! -f "$SUMS_FILE" ]; then
-            echo "SHA256SUMS file not found: $SUMS_FILE"
-            exit 1
-          fi
-          while IFS='  ' read -r hash filename; do
-            # Replace placeholder tokens like SHA256_DARWIN_ARM64 with the real hash
-            PLACEHOLDER=$(echo "$filename" | sed 's/archivist_v[0-9._]*_//; s/\.\(tar\.gz\|zip\)//' | tr '[:lower:]' '[:upper:]' | tr '-' '_')
-            sed -i "s|SHA256_${PLACEHOLDER}|${hash}|g" \
-              packages/npm-orchestrator/bin/archivist-install.js
-          done < "$SUMS_FILE"
-          # Also inject the version into package.json
-          sed -i "s/\"version\": \"0.0.0\"/\"version\": \"${VER}\"/" \
-            packages/npm-orchestrator/package.json
+          bash scripts/inject-npm-hashes.sh "out/assets/archivist_v${TAG#v}_SHA256SUMS" "${TAG#v}" \
+            packages/npm-orchestrator/bin/archivist-install.js packages/npm-orchestrator/package.json
 
       - name: Publish npm package
-        if: ${{ env.NPM_TOKEN != '' }}
-        run: |
-          cd packages/npm-orchestrator
-          npm publish --access public --provenance
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "$NPM_TOKEN" ]; then
+            echo "NPM_TOKEN is not set; npm publish skipped"
+            exit 0
+          fi
+          cd packages/npm-orchestrator
+          NODE_AUTH_TOKEN="$NPM_TOKEN" npm publish --access public --provenance
