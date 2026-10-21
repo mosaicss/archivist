@@ -26,6 +26,15 @@ func TestSessionBusWithoutSecretServiceIsNoKeychain(t *testing.T) {
 		// A session bus that cannot be reached (stale address).
 		&net.OpError{Op: "dial", Net: "unix", Err: os.NewSyscallError("connect", syscall.ENOENT)},
 		&net.OpError{Op: "dial", Net: "unix", Err: os.NewSyscallError("connect", syscall.ECONNREFUSED)},
+		// A session bus this process cannot use (godbus v5.2.4 wording).
+		errors.New("dbus: authentication failed"),
+		fmt.Errorf("connect: %w", errors.New("dbus: authentication protocol error")),
+		errors.New("dbus: invalid bus address (invalid or unsupported transport)"),
+		errors.New("dbus: invalid bus address (no transport)"),
+		errors.New("dbus: invalid address (neither path nor abstract set)"),
+		errors.New("dbus: invalid address (both path and abstract set)"),
+		errors.New("dbus: unsupported address (must set host and port)"),
+		errors.New("dbus: couldn't determine address of session bus"),
 	} {
 		if !noKeychain(err) {
 			t.Errorf("%v: want no keychain", err)
@@ -35,6 +44,8 @@ func TestSessionBusWithoutSecretServiceIsNoKeychain(t *testing.T) {
 		errors.New("no answer within 5s"),
 		dbus.Error{Name: "org.freedesktop.DBus.Error.NoReply"},
 		dbus.Error{Name: "org.freedesktop.Secret.Error.IsLocked"},
+		dbus.Error{Name: "org.freedesktop.DBus.Error.AccessDenied"},
+		errors.New("dbus: connection closed by user"),
 		keyring.ErrNotFound,
 	} {
 		if noKeychain(err) {
@@ -50,6 +61,10 @@ func TestSavedTokenWithoutSecretServiceIsNoToken(t *testing.T) {
 	t.Setenv("USERPROFILE", "")
 	MockKeychainForTest(t, false)
 	keyring.MockInitWithError(dbus.Error{Name: "org.freedesktop.DBus.Error.ServiceUnknown"})
+	// With the marker, so the keychain is really asked.
+	if err := writeKeychainMarker(); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := SavedToken(); !errors.Is(err, ErrNoToken) {
 		t.Fatalf("SavedToken: got %v, want ErrNoToken", err)
 	}

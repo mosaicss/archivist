@@ -190,8 +190,8 @@ func (r *fakeRelay) lastSigning() map[string]any {
 	return r.signing[len(r.signing)-1]
 }
 
-// userFrameKinds lists the user socket's signing, capabilities and
-// controls frames in arrival order.
+// userFrameKinds lists the user socket's features, signing, capabilities
+// and controls frames in arrival order.
 func (r *fakeRelay) userFrameKinds() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()

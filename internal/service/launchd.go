@@ -50,6 +50,12 @@ const (
 	launchdBootstraps   = 4
 	launchdBootstrapGap = time.Second
 	launchdStartWait    = 20 // polls (5 s) for a just started daemon's pid
+	// launchdExitTimeOut is the plist's ExitTimeOut: how long launchd lets
+	// the daemon finish after SIGTERM before it kills it (seconds).
+	launchdExitTimeOut = 30
+	// launchdStopWait bounds Uninstall's wait for the job to leave the
+	// domain and its daemon to exit: ExitTimeOut plus 5 s, in polls.
+	launchdStopWait = (launchdExitTimeOut + 5) * int(time.Second/launchdPoll)
 )
 
 // Install writes the plist, boots out a loaded copy and waits until it has
@@ -112,9 +118,11 @@ func (l *launchd) Install(ctx context.Context) (InstallReport, error) {
 	return rep, err
 }
 
-// Uninstall boots the job out, waits (about 10 s, like Install) until it
-// has left the domain and its daemon (service.pid) has exited, so nothing
-// still writes state when the caller removes it, and removes the plist.
+// Uninstall boots the job out, waits until it has left the domain and its
+// daemon (service.pid) has exited, so nothing still writes state when the
+// caller removes it, and removes the plist. The wait lasts as long as the
+// plist lets the daemon finish (ExitTimeOut) plus 5 s; a launchctl print
+// that fails counts as still loaded.
 func (l *launchd) Uninstall(ctx context.Context) (bool, error) {
 	path := l.Path()
 	was, err := l.loaded(ctx)
@@ -135,15 +143,16 @@ func (l *launchd) Uninstall(ctx context.Context) (bool, error) {
 			stopErr = commandError("launchctl bootout "+l.target(), r)
 		default:
 			gone := false
-			for i := 0; i <= launchdUnloadWait; i++ {
-				still, _ := l.loaded(ctx)
-				if gone = !still && (old <= 0 || !l.opts.alive(old)); gone || i == launchdUnloadWait {
+			for i := 0; i <= launchdStopWait; i++ {
+				still, err := l.loaded(ctx)
+				still = still || err != nil
+				if gone = !still && (old <= 0 || !l.opts.alive(old)); gone || i == launchdStopWait || ctx.Err() != nil {
 					break
 				}
 				l.opts.sleep(launchdPoll)
 			}
 			if !gone {
-				stopErr = errors.New("background connect did not stop within 10 s")
+				stopErr = fmt.Errorf("background connect did not stop within %d s", launchdExitTimeOut+5)
 			}
 		}
 	}

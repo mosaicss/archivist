@@ -95,7 +95,13 @@ func newFakePauseRelay(t *testing.T) *fakePauseRelay {
 func (f *fakePauseRelay) wsURL() string { return "ws" + strings.TrimPrefix(f.srv.URL, "http") }
 
 func (f *fakePauseRelay) serve(w http.ResponseWriter, r *http.Request) {
-	if r.Header.Get("Authorization") != "Bearer "+testTicket(pauseOwner) || r.URL.RawQuery != "role=daemon" {
+	// The pause routes take exactly role=daemon; the user socket may also
+	// carry the signing flag (Story 94.7).
+	query := r.URL.RawQuery
+	if strings.HasSuffix(r.URL.Path, "/ws") {
+		query = strings.TrimSuffix(query, "&signing=1")
+	}
+	if r.Header.Get("Authorization") != "Bearer "+testTicket(pauseOwner) || query != "role=daemon" {
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}

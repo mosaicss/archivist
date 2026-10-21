@@ -274,6 +274,14 @@ func (d *Daemon) Run(ctx context.Context) error {
 	// trusts; announced again when the list changes (checked at each ping).
 	user.onPing = d.announceSigning
 	user.onConnect = func(l *live) {
+		// Story 94.6: Pause from the workspace, declared first, so an older
+		// relay's refusals arrive in send order (features, signing,
+		// controls) and each is claimed by its own frame.
+		if d.onPause != nil {
+			if sent := d.featuresWin.arm(); !l.Send(featuresFrame(FeaturePause)) {
+				d.featuresWin.disarm(sent)
+			}
+		}
 		d.announceSigning(l)
 		det := d.detect(ctx)
 		caps := det.Capabilities()
@@ -284,13 +292,6 @@ func (d *Daemon) Run(ctx context.Context) error {
 		}
 		l.Send(capabilitiesFrame(caps))
 		d.log.Printf("capabilities reported: %+v", caps)
-		// Story 94.6: Pause from the workspace, declared before the
-		// controls so an older relay's refusal of it comes first.
-		if d.onPause != nil {
-			if sent := d.featuresWin.arm(); !l.Send(featuresFrame(FeaturePause)) {
-				d.featuresWin.disarm(sent)
-			}
-		}
 		// Then the session controls (Story 78.32), once the Codex model
 		// list probe is done (bounded); the capabilities never wait.
 		d.wg.Add(1)

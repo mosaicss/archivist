@@ -65,8 +65,8 @@ func TestStoreRemove(t *testing.T) {
 	}
 }
 
-// A daemon with OnPause declares the feature after its capabilities and
-// calls OnPause on the relay's {kind:"pause"}; one without (the v0.2.34
+// A daemon with OnPause declares the feature first (before the signing
+// and capabilities frames) and calls OnPause on the relay's {kind:"pause"}; one without (the v0.2.34
 // shape) declares nothing and ignores a pause.
 func TestDaemonDeclaresPauseAndCallsOnPause(t *testing.T) {
 	h := newHarness(t, nil)
@@ -82,6 +82,9 @@ func TestDaemonDeclaresPauseAndCallsOnPause(t *testing.T) {
 	h.relay.set(func(r *fakeRelay) { frame = r.features[0] })
 	if b, _ := json.Marshal(frame); string(b) != `{"features":["pause"],"kind":"features"}` {
 		t.Fatalf("features frame %s", b)
+	}
+	if order := h.relay.userFrameKinds(); len(order) < 3 || order[0] != "features" || order[1] != "signing" || order[2] != "capabilities" {
+		t.Fatalf("user frames %v, want features, signing, capabilities first", order)
 	}
 	h.relay.sendRaw("", `{"kind":"pause"}`)
 	waitFor(t, 10*time.Second, "OnPause", func() bool { return paused.Load() == 1 })
@@ -119,6 +122,37 @@ func TestDaemonOldRelayRefusesFeatures(t *testing.T) {
 	})
 	if strings.Count(h.log.String(), "relay error INVALID_FRAME") != 0 {
 		t.Fatalf("an unattributed refusal:\n%s", h.log.String())
+	}
+}
+
+// A relay with signing (94.7) but without features (94.6) refuses only the
+// features frame: the refusal is claimed as the features frame's, never the
+// signing frame's, and the signing frame stays accepted.
+func TestDaemonRelayWithoutFeaturesRefusesOnlyFeatures(t *testing.T) {
+	h := newHarness(t, nil)
+	h.onPause = func() {}
+	h.relay.set(func(r *fakeRelay) { r.refuseFeatures = true })
+	h.start()
+	waitFor(t, 10*time.Second, "features refusal", func() bool {
+		return strings.Contains(h.log.String(), "the relay refused the features frame")
+	})
+	waitFor(t, 10*time.Second, "controls frame", func() bool {
+		var n int
+		h.relay.set(func(r *fakeRelay) { n = len(r.controls) })
+		return n >= 1
+	})
+	log := h.log.String()
+	if strings.Contains(log, "the relay refused the signing frame") || strings.Contains(log, "the relay refused the controls frame") ||
+		strings.Contains(log, "relay error INVALID_FRAME") {
+		t.Fatalf("refusal claimed by the wrong frame:\n%s", log)
+	}
+	if h.relay.lastSigning() == nil {
+		t.Fatal("no signing frame accepted")
+	}
+	// Every window is settled: the features refusal was taken, the signing
+	// window stays armed only until its own refusal window passes.
+	if h.d.featuresWin.sentAt.Load() != 0 {
+		t.Fatal("the features window is still armed")
 	}
 }
 

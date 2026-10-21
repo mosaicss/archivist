@@ -12,6 +12,7 @@ import (
 
 	"github.com/mosaicss/archivist/internal/auth"
 	"github.com/mosaicss/archivist/internal/client"
+	"github.com/mosaicss/archivist/internal/connect"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )
@@ -130,7 +131,17 @@ func loginWithToken(cmd *cobra.Command, version, token string) error {
 		return failErr
 	}
 
-	loc, err := auth.SaveToken(token)
+	// Story 94.6: a computer that runs connect keeps its key in the
+	// credentials file, never the keychain.
+	save := auth.SaveToken
+	connectHere := connectSetUpHere()
+	if connectHere {
+		save = auth.SaveTokenToFile
+	}
+	loc, err := save(token)
+	if err == nil && connectHere {
+		_ = auth.DeleteKeychainKey()
+	}
 	if err != nil {
 		_, _ = fmt.Fprintf(cmd.ErrOrStderr(),
 			"Token verified but saving failed: %v\nSet ARCHIVIST_TOKEN=ak_... as a workaround.\n", err)
@@ -145,6 +156,21 @@ func loginWithToken(cmd *cobra.Command, version, token string) error {
 		"Token verified and saved.\n  Account: %s (tier: %s)\n  Key:     %s\n%sEvery new terminal can now run archivist without setup.\n",
 		account, resp.Tier, auth.MaskToken(token), savedLine(loc))
 	return nil
+}
+
+// connectSetUpHere reports whether this computer runs connect: the
+// background service is installed or ~/.archivist/connect exists (an
+// existing credentials file keeps the file store in auth.SaveToken itself).
+func connectSetUpHere() bool {
+	if pairServiceInstalled() {
+		return true
+	}
+	dir, err := connect.DefaultStateDir()
+	if err != nil {
+		return false
+	}
+	_, err = os.Lstat(dir)
+	return err == nil
 }
 
 // deletedKeyWhere names what logout deleted: where from

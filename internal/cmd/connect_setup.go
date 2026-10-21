@@ -324,7 +324,8 @@ func savePairedKey(cmd *cobra.Command, version string, res *client.PairingResult
 		return pairNotNamed(stderr)
 	}
 	previous, perr := auth.SavedToken()
-	loc, err := auth.SaveToken(res.Key)
+	// Connect keeps its key in the credentials file, never the keychain.
+	loc, err := auth.SaveTokenToFile(res.Key)
 	if err != nil {
 		// The new key is unusable without the file: remove it too.
 		_ = revokeKey(cmd.Context(), version, res.Key)
@@ -336,6 +337,10 @@ func savePairedKey(cmd *cobra.Command, version string, res *client.PairingResult
 		name = res.KeyID
 	}
 	_, _ = fmt.Fprintf(stdout, "Paired as %s.\n  Account: %s\n  Key:     %s\n%s", name, email, auth.MaskToken(res.Key), savedLine(loc))
+	// An earlier key may have been in the keychain: the file holds the key
+	// now, so that item goes (best effort, asked only when Archivist saved
+	// one there; a failure is retried at every connect start).
+	_ = auth.DeleteKeychainKey()
 	if err := pairBrowsers(email, browser); err != nil {
 		_, _ = fmt.Fprintf(stderr, "Note: the list of browsers that can use this computer was not updated (%v). In Mosaic, open Connect your computer to add this browser.\n", err)
 	} else if browser != "" {
@@ -744,8 +749,9 @@ func askStartAtLogin(cmd *cobra.Command) (bool, error) {
 // ceiling; --max-permission auto_edits returns to the default. With ask
 // (the installers' first install, Story 94.6) and no service installed yet,
 // it first asks whether to start Archivist when the computer starts; no
-// installs nothing and exits 0. A key saved in the credentials file moves
-// into the keychain where one is usable.
+// installs nothing and exits 0. Connect keeps its key in the credentials
+// file: a saved key held in the keychain moves there, and an item left in
+// the keychain is deleted.
 func runServiceInstall(cmd *cobra.Command, maxPermission string, ask bool) error {
 	stderr, stdout := cmd.ErrOrStderr(), cmd.OutOrStdout()
 	if !connect.Supported() {
@@ -775,10 +781,12 @@ func runServiceInstall(cmd *cobra.Command, maxPermission string, ask bool) error
 			return nil
 		}
 	}
-	if moved, err := auth.MigrateToKeychain(); moved {
-		_, _ = fmt.Fprintln(stdout, "The saved key moved to the keychain.")
+	// Connect keeps its key in the credentials file (Story 94.6).
+	if moved, err := auth.MoveKeychainKeyToFile(); moved {
+		path, _ := auth.CredentialsPath()
+		_, _ = fmt.Fprintf(stdout, "The saved key moved to %s, where connect keeps it.\n", path)
 	} else if err != nil {
-		_, _ = fmt.Fprintf(stderr, "Note: the saved key stays in its file: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "Note: the key saved in the keychain could not be moved or removed (%v); background connect tries again when it starts.\n", err)
 	}
 	kept := false
 	if maxPermission == "" {
@@ -904,10 +912,16 @@ func removeSavedKey(cmd *cobra.Command, version string) bool {
 	} else {
 		_, _ = fmt.Fprintf(stderr, "Note: the saved key could not be read, so it was not revoked: %v\n", err)
 	}
-	if existed, where, derr := auth.DeleteCredentials(); derr != nil {
-		_, _ = fmt.Fprintf(stderr, "Note: the saved key could not be removed: %v\n", derr)
-	} else if existed {
+	// Each store is reported on its own: a file removed while the keychain
+	// copy stays says both.
+	existed, where, derr := auth.DeleteCredentials()
+	if existed {
 		_, _ = fmt.Fprintf(stdout, "Removed the saved key from %s.\n", where)
+	}
+	if derr != nil {
+		for _, line := range strings.Split(derr.Error(), "\n") {
+			_, _ = fmt.Fprintf(stderr, "Note: %s\n", line)
+		}
 	}
 	return revoked
 }

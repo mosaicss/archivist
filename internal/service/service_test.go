@@ -17,6 +17,7 @@ type fakeRunner struct {
 	calls   []string
 	answers map[string][]Result // consumed in order; the last one repeats
 	missing map[string]bool     // binaries that are "not found"
+	failing map[string]int      // line prefixes whose next so many calls fail to run
 }
 
 func (f *fakeRunner) run(_ context.Context, name string, args ...string) (Result, error) {
@@ -24,6 +25,12 @@ func (f *fakeRunner) run(_ context.Context, name string, args ...string) (Result
 	f.calls = append(f.calls, line)
 	if f.missing[name] {
 		return Result{}, errors.New("executable file not found in $PATH")
+	}
+	for prefix, n := range f.failing {
+		if n > 0 && strings.HasPrefix(line, prefix) {
+			f.failing[prefix] = n - 1
+			return Result{}, errors.New("signal: killed")
+		}
 	}
 	for prefix, rs := range f.answers {
 		if strings.HasPrefix(line, prefix) {
@@ -361,8 +368,38 @@ func TestLaunchdStatusAndUninstall(t *testing.T) {
 	if !removed || err == nil || !strings.Contains(err.Error(), "did not stop") || fileExists(m.Path()) {
 		t.Fatalf("stuck job: %v %v", removed, err)
 	}
-	if n := f.called("launchctl print"); n != launchdUnloadWait+2 {
+	// It waits as long as the plist lets the daemon finish (ExitTimeOut)
+	// plus 5 s, polling every launchdPoll.
+	if n := f.called("launchctl print"); n != launchdStopWait+2 {
 		t.Fatalf("polls %d", n)
+	}
+	if time.Duration(launchdStopWait)*launchdPoll != (launchdExitTimeOut+5)*time.Second || !strings.Contains(err.Error(), "35 s") {
+		t.Fatalf("wait %s (%v), want ExitTimeOut plus 5 s", time.Duration(launchdStopWait)*launchdPoll, err)
+	}
+	if !strings.Contains(RenderLaunchdPlist(testBinary, opts.Home, LogPath(opts.Home), nil, nil), "<key>ExitTimeOut</key>\n\t<integer>30</integer>") {
+		t.Fatal("the plist's ExitTimeOut is not the one the wait uses")
+	}
+	// A launchctl print that fails while waiting counts as still loaded.
+	if _, err := m.Install(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	f.answers["launchctl print"] = []Result{{}, {}, {ExitCode: 113}}
+	m.opts.Alive = func(int) bool { return false }
+	f.failing = map[string]int{}
+	f.calls = nil
+	sleeps := 0
+	m.opts.Sleep = func(time.Duration) {
+		// After the first poll (still loaded) the next two prints fail to run.
+		if sleeps++; sleeps == 1 {
+			f.failing["launchctl print"] = 2
+		}
+	}
+	removed, err = m.Uninstall(context.Background())
+	if !removed || err != nil || fileExists(m.Path()) {
+		t.Fatalf("print errors: %v %v", removed, err)
+	}
+	if n := f.called("launchctl print"); n != 5 {
+		t.Fatalf("a failed print was taken as unloaded: prints %d (%v)", n, f.calls)
 	}
 }
 

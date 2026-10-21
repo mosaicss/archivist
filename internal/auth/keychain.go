@@ -14,17 +14,25 @@ import (
 	"github.com/zalando/go-keyring"
 )
 
-// The saved key lives in the operating system's keychain where one is usable
-// (Story 94.6): the macOS login keychain, the Secret Service (GNOME Keyring,
-// KWallet) on Linux, or the Windows Credential Manager. The 0600 credentials
-// file stays the store only where no keychain can be used (a headless Linux
-// machine has no session bus).
+// A key saved with auth login lives in the operating system's keychain where
+// one is usable and no credentials file exists yet (Story 94.6): the macOS
+// login keychain, the Secret Service (GNOME Keyring, KWallet) on Linux, or the
+// Windows Credential Manager. The 0600 credentials file is the store where no
+// keychain can be used (a headless Linux machine has no session bus), once it
+// exists, and always on a computer that runs connect (SaveTokenToFile,
+// MoveKeychainKeyToFile).
 //
 // The item is service "archivist", account the absolute credentials file path
 // (one item per home directory). Every keychain call is time bounded, at most
 // one call is in flight at a time, and on Linux and the BSDs a call is made
 // only when a session bus already runs: the D-Bus library would otherwise
 // start one. A session bus without a Secret Service is "no keychain".
+//
+// The keychain is read, moved or deleted only when the marker file
+// ~/.archivist/keychain (no secret in it) says Archivist saved an item
+// there: a computer that never saved a key in the keychain never asks it
+// anything (no unlock prompt, no wait for a locked keyring). Saving an item
+// writes the marker; removing the item (or finding it gone) removes it.
 
 // keychainService is the keychain item's service name.
 const keychainService = "archivist"
@@ -94,7 +102,7 @@ func keychainUsable() bool {
 // keychainAvailable reports whether this platform has a keychain this
 // process can reach without starting anything: always on macOS and Windows;
 // on Linux and the BSDs only when the D-Bus library will find a running
-// session bus without autolaunching one. godbus v5.2.2 takes
+// session bus without autolaunching one. godbus v5.2.4 takes
 // DBUS_SESSION_BUS_ADDRESS (anything but "autolaunch:"), then
 // /run/user/<uid>/bus, then the address in /run/user/<uid>/dbus-session,
 // and otherwise runs dbus-launch; $XDG_RUNTIME_DIR is never consulted.
@@ -125,6 +133,47 @@ func keychainAvailable() bool {
 // /run/user/<uid> (a var so tests can replace it).
 var sessionBusRuntimeDir = func() string { return fmt.Sprintf("/run/user/%d", os.Getuid()) }
 
+// keychainMarkerContent is the marker file's text (it holds no secret).
+const keychainMarkerContent = "The key saved with 'archivist auth login' is in this computer's keychain.\n"
+
+// keychainMarkerPath is ~/.archivist/keychain, beside the credentials file.
+func keychainMarkerPath() (string, error) {
+	path, err := CredentialsPath()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(filepath.Dir(path), "keychain"), nil
+}
+
+// keychainMarked reports whether the marker says an item was saved.
+func keychainMarked() bool {
+	path, err := keychainMarkerPath()
+	if err != nil {
+		return false
+	}
+	_, err = os.Lstat(path)
+	return err == nil
+}
+
+// writeKeychainMarker records that an item was saved (0600, parent 0700).
+func writeKeychainMarker() error {
+	path, err := keychainMarkerPath()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte(keychainMarkerContent), 0o600)
+}
+
+// removeKeychainMarker records that no item is saved any more.
+func removeKeychainMarker() {
+	if path, err := keychainMarkerPath(); err == nil {
+		_ = os.Remove(path)
+	}
+}
+
 // keychainAccount is the item's account: the absolute credentials path.
 func keychainAccount() (string, error) {
 	path, err := CredentialsPath()
@@ -133,6 +182,13 @@ func keychainAccount() (string, error) {
 	}
 	return filepath.Abs(path)
 }
+
+// errKeychainTimeout is a keychain call that did not answer in time; it may
+// still complete later (for example once an unlock prompt is answered).
+var errKeychainTimeout = errors.New("no answer within")
+
+// keyringSet is keyring.Set (a var so tests can make a save slow).
+var keyringSet = keyring.Set
 
 // keychainSlot holds the one keychain call allowed in flight. A call that
 // outlives its deadline keeps the slot until it really ends (for example
@@ -150,7 +206,7 @@ func bounded[T any](timeout time.Duration, call func() (T, error)) (T, error) {
 	select {
 	case keychainSlot <- struct{}{}:
 	case <-timer.C:
-		return zero, fmt.Errorf("no answer within %s (an earlier keychain request is still waiting)", timeout)
+		return zero, fmt.Errorf("%w %s (an earlier keychain request is still waiting)", errKeychainTimeout, timeout)
 	}
 	type result struct {
 		v   T
@@ -166,7 +222,7 @@ func bounded[T any](timeout time.Duration, call func() (T, error)) (T, error) {
 	case r := <-done:
 		return r.v, r.err
 	case <-timer.C:
-		return zero, fmt.Errorf("no answer within %s", timeout)
+		return zero, fmt.Errorf("%w %s", errKeychainTimeout, timeout)
 	}
 }
 
@@ -176,11 +232,12 @@ func noKeychain(err error) bool {
 	return errors.Is(err, errNoKeychain) || errors.Is(err, keyring.ErrUnsupportedPlatform) || noSecretService(err)
 }
 
-// keychainGet reads the saved key: ("", errNoKeychain) where none is usable,
-// ("", keyring.ErrNotFound) when nothing is saved there, and a wrapped
+// keychainGet reads the saved key: ("", errNoKeychain) where none is usable
+// or the marker says nothing was saved there, ("", keyring.ErrNotFound) when
+// the item is gone (the marker goes too), and a wrapped
 // ErrKeychainUnavailable when the keychain did not answer or refused.
 func keychainGet() (string, error) {
-	if !keychainUsable() {
+	if !keychainMarked() || !keychainUsable() {
 		return "", errNoKeychain
 	}
 	account, err := keychainAccount()
@@ -192,6 +249,7 @@ func keychainGet() (string, error) {
 	case err == nil:
 		return token, nil
 	case errors.Is(err, keyring.ErrNotFound):
+		removeKeychainMarker()
 		return "", keyring.ErrNotFound
 	case noKeychain(err):
 		return "", errNoKeychain
@@ -199,7 +257,11 @@ func keychainGet() (string, error) {
 	return "", fmt.Errorf("%w: %v", ErrKeychainUnavailable, err)
 }
 
-// keychainSet stores the key; any error means the file is used instead.
+// keychainSet writes the marker and then stores the key; any error means
+// the file is used instead. The marker goes first so an item a timed out
+// save still creates later is found (a marker without an item heals: a read
+// or delete that finds nothing removes it). A save that failed outright
+// removes a marker it wrote; one that timed out keeps it.
 func keychainSet(token string) error {
 	if !keychainUsable() {
 		return errNoKeychain
@@ -208,14 +270,22 @@ func keychainSet(token string) error {
 	if err != nil {
 		return err
 	}
-	_, err = bounded(keychainWriteTimeout, func() (struct{}, error) { return struct{}{}, keyring.Set(keychainService, account, token) })
+	had := keychainMarked()
+	if err := writeKeychainMarker(); err != nil {
+		return fmt.Errorf("record the keychain item: %w", err)
+	}
+	_, err = bounded(keychainWriteTimeout, func() (struct{}, error) { return struct{}{}, keyringSet(keychainService, account, token) })
+	if err != nil && !had && !errors.Is(err, errKeychainTimeout) {
+		removeKeychainMarker()
+	}
 	return err
 }
 
 // keychainDelete removes the saved key; existed is false when there was
-// none (or no keychain).
+// none (no marker, nothing found, or no keychain here). The marker goes
+// once the item is known to be gone; it stays while the item may remain.
 func keychainDelete() (bool, error) {
-	if !keychainUsable() {
+	if !keychainMarked() || !keychainUsable() {
 		return false, nil
 	}
 	account, err := keychainAccount()
@@ -225,9 +295,13 @@ func keychainDelete() (bool, error) {
 	_, err = bounded(keychainTimeout, func() (struct{}, error) { return struct{}{}, keyring.Delete(keychainService, account) })
 	switch {
 	case err == nil:
+		removeKeychainMarker()
 		return true, nil
-	case errors.Is(err, keyring.ErrNotFound), noKeychain(err):
+	case errors.Is(err, keyring.ErrNotFound):
+		removeKeychainMarker()
+		return false, nil
+	case noKeychain(err):
 		return false, nil
 	}
-	return false, fmt.Errorf("remove the key from the keychain: %w", err)
+	return false, fmt.Errorf("the copy of the key in the keychain could not be removed: %w", err)
 }

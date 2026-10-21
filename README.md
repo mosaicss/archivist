@@ -102,16 +102,22 @@ token and save it once:
 archivist auth login --token ak_<your-token>
 ```
 
-The CLI verifies the token against the server and saves it in your
-operating system's keychain (macOS Keychain, the Secret Service on Linux
-desktops, Windows Credential Manager; item `archivist`, account the
-credentials path below). Where no keychain can be used (a Linux machine
-without a session bus or without a Secret Service on it, a keychain that
-does not answer within 30 seconds, or a `~/.archivist/credentials` symlink
-from a dotfiles setup), it writes `~/.archivist/credentials` (mode 0600)
-instead. A key
-saved in that file before this release moves into the keychain the next
-time a key is saved, or at `archivist connect --install`. `archivist auth
+The CLI verifies the token against the server and saves it. On a computer
+that does not run `archivist connect`, it goes to your operating system's
+keychain (macOS Keychain, the Secret Service on Linux desktops, Windows
+Credential Manager; item `archivist`, account the credentials path below).
+Where no keychain can be used (a Linux machine without a session bus or
+without a Secret Service on it, or a keychain that does not answer within 30
+seconds), or once `~/.archivist/credentials` exists (a symlink from a
+dotfiles setup included), it writes `~/.archivist/credentials` (mode 0600)
+instead, and that file stays the store. A computer that runs `archivist
+connect` (the background service is installed or `~/.archivist/connect`
+exists) keeps its key in `~/.archivist/credentials` (0600), which connect
+sessions do not open: `auth login` and `--pair` save there, and `--install`
+or a connect start moves a key from the keychain there. Archivist asks the
+keychain only after it saved a key there (it notes that in
+`~/.archivist/keychain`, a file with no secret in it), so a computer that
+never did is never asked to unlock it. `archivist auth
 status` shows which credential is active and where it came from (`keychain`
 or `file`); `archivist auth logout` deletes the saved key from both. A shell
 that cannot reach the keychain (for example SSH into a Mac whose login
@@ -290,7 +296,7 @@ curl -fsSL https://github.com/mosaicss/archivist/releases/latest/download/instal
 It installs or updates archivist, then runs:
 
 ```sh
-archivist connect --pair ABCDE-FGHJK   # redeem the code for a new ak_ key and save it (keychain, else ~/.archivist/credentials)
+archivist connect --pair ABCDE-FGHJK   # redeem the code for a new ak_ key and save it in ~/.archivist/credentials
 archivist connect --install            # run connect as a background user service
 archivist connect --status             # report the service, its ceiling, the saved key, its account and its browsers
 ```
@@ -339,13 +345,14 @@ confirmation. `ARCHIVIST_PAIR_CONFIRM=browser` chooses the browser page even
 on a terminal, and `BROWSER` names the program that opens it (the first
 entry of the list).
 
-`--pair` saves the key in the operating system keychain where one is usable
-(macOS Keychain, the Secret Service on a Linux desktop, Windows Credential
-Manager), else in `~/.archivist/credentials` (0600). On Linux the keychain
-is used only when a session bus already runs; nothing starts one. A desktop
-keyring stays locked until you log in, so a background service started at
-boot (lingering) logs "waiting for the keyring" and connects after your
-login; no file is written meanwhile.
+`--pair` saves the key in `~/.archivist/credentials` (0600), where connect
+keeps its key; connect sessions do not open that file. An earlier key kept in
+the keychain is removed from it. `archivist connect --install`, and connect
+itself when it starts, move a key saved in the keychain (with `auth login`)
+into that file, and remove a keychain item left beside it (tried again at
+every start until it is gone). A desktop keyring stays locked until you log in, so a
+background service started at boot (lingering) whose key is still in the
+keychain logs "waiting for the keyring" and connects after your login.
 
 `--pair` accepts the code in any case, with or without the hyphen or spaces,
 and never prints the key (only its masked form). An unknown, used or expired

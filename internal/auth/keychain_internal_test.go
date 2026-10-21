@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/zalando/go-keyring"
 )
 
 // TestKeychainCallsAreTimeBounded: a keychain that never answers (a locked
@@ -145,5 +147,66 @@ func TestTestBinariesStartWithoutAKeychain(t *testing.T) {
 	}
 	if err := keychainSet("ak_x"); !errors.Is(err, errNoKeychain) {
 		t.Fatalf("keychainSet: got %v, want errNoKeychain", err)
+	}
+}
+
+// TestATimedOutSaveKeepsTheMarker: a save that does not answer in time
+// (an unlock prompt answered late) may still create the item; the marker,
+// written first, stays, so a later move or delete reaches that item. A save
+// that fails outright removes the marker it wrote.
+func TestATimedOutSaveKeepsTheMarker(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	MockKeychainForTest(t, false)
+	release := make(chan struct{})
+	done := make(chan struct{})
+	prevSet, prevTimeout := keyringSet, keychainWriteTimeout
+	keyringSet = func(service, user, secret string) error {
+		defer close(done)
+		<-release
+		return keyring.Set(service, user, secret)
+	}
+	keychainWriteTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { keyringSet, keychainWriteTimeout = prevSet, prevTimeout })
+
+	loc, err := SaveToken("ak_latesave1234567")
+	if err != nil || loc.Keychain {
+		t.Fatalf("SaveToken: got (%+v, %v), want the file", loc, err)
+	}
+	if !keychainMarked() {
+		t.Fatal("a timed out save removed the marker")
+	}
+	// The late answer creates the item.
+	close(release)
+	<-done
+	account, err := keychainAccount()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := keyring.Get(keychainService, account); err != nil {
+		t.Fatalf("late item: %v", err)
+	}
+	// The next connect start (the file holds the key) removes it.
+	if moved, err := MoveKeychainKeyToFile(); moved || err != nil {
+		t.Fatalf("move: got (%v, %v)", moved, err)
+	}
+	if _, err := keyring.Get(keychainService, account); !errors.Is(err, keyring.ErrNotFound) {
+		t.Fatalf("the late item stayed: %v", err)
+	}
+	if keychainMarked() {
+		t.Fatal("the marker stayed after the item went")
+	}
+
+	// A save refused outright: the marker it wrote goes.
+	if err := os.Remove(filepath.Join(home, ".archivist", "credentials")); err != nil {
+		t.Fatal(err)
+	}
+	keyringSet = func(string, string, string) error { return errors.New("refused") }
+	if loc, err := SaveToken("ak_refusedsave1234"); err != nil || loc.Keychain {
+		t.Fatalf("SaveToken: got (%+v, %v), want the file", loc, err)
+	}
+	if keychainMarked() {
+		t.Fatal("a refused save left its marker")
 	}
 }

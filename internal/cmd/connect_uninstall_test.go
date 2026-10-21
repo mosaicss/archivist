@@ -28,6 +28,20 @@ func linuxOnly(t *testing.T) {
 	}
 }
 
+// markKeychain writes the keychain marker (~/.archivist/keychain), as a
+// keychain save does: with a refusing keychain it stands for a saved item
+// that cannot be read now.
+func markKeychain(t *testing.T, home string) {
+	t.Helper()
+	path := filepath.Join(home, ".archivist", "keychain")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("marker\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func unitPathOf(home string) string {
 	return filepath.Join(home, ".config", "systemd", "user", service.UnitName)
 }
@@ -249,59 +263,123 @@ func TestConnectUninstallNothingInstalled(t *testing.T) {
 	}
 }
 
-// Acceptance: with a usable keychain, pairing leaves no credentials file and
-// every reader gets the key; uninstall revokes and removes it there.
-func TestConnectPairSavesToTheKeychain(t *testing.T) {
+// Connect keeps its key in the credentials file: with a usable keychain,
+// pairing writes the 0600 file and no keychain item, and an earlier key held
+// in the keychain is revoked and its item deleted; uninstall revokes and
+// removes the file.
+func TestConnectPairSavesToTheFileNotTheKeychain(t *testing.T) {
 	linuxOnly(t)
 	home := sandbox(t)
 	auth.MockKeychainForTest(t, false)
+	if loc, err := auth.SaveToken(earlierKey); err != nil || !loc.Keychain {
+		t.Fatalf("earlier key: %+v %v", loc, err)
+	}
 	fake := newFakeMosaic(t, redeemBody(accountEmail))
 	useTerminal(t, "\n")
 	out, code := runRoot(t, "connect", "--pair", "ABCDE-FGHJK")
-	if code != 0 || !strings.Contains(out, "Saved:   in the keychain") {
+	if code != 0 || strings.Contains(out, "in the keychain") || !strings.Contains(out, "File:    "+filepath.Join(home, ".archivist", "credentials")) {
 		t.Fatalf("pair: exit %d\n%s", code, out)
 	}
-	if _, ok := credentials(t, home); ok {
-		t.Fatal("a credentials file was written")
+	if saved, ok := credentials(t, home); !ok || saved != pairedKey {
+		t.Fatalf("file %q %v", saved, ok)
 	}
-	if token, err := auth.SavedToken(); err != nil || token != pairedKey {
-		t.Fatalf("SavedToken: %q %v", token, err)
-	}
-	if token, source, err := auth.Resolve(""); err != nil || token != pairedKey || source != auth.SourceKeychain {
+	if token, source, err := auth.Resolve(""); err != nil || token != pairedKey || source != auth.SourceFile {
 		t.Fatalf("Resolve: %q %v %v", token, source, err)
 	}
-	stubRunner(t, func(string) service.Result { return service.Result{} })
-	if out, _ := runRoot(t, "connect", "--status"); !strings.Contains(out, "Key:      saved, ak_paireds...789") {
-		t.Fatalf("status:\n%s", out)
-	}
-	out, code = runRoot(t, "connect", "--uninstall")
-	if code != 0 || !strings.Contains(out, "Removed the saved key from the keychain.") {
-		t.Fatalf("uninstall: exit %d\n%s", code, out)
-	}
-	if _, revoked, _ := fake.state(); len(revoked) != 1 || revoked[0] != pairedKey {
+	if _, revoked, _ := fake.state(); len(revoked) != 1 || revoked[0] != earlierKey {
 		t.Fatalf("revoked %v", revoked)
+	}
+	// The keychain item is gone: removing the saved key finds only the file.
+	if _, where, err := auth.DeleteCredentials(); err != nil || where != filepath.Join(home, ".archivist", "credentials") {
+		t.Fatalf("delete: %q %v", where, err)
+	}
+	saveKey(t, home, pairedKey)
+	stubRunner(t, func(string) service.Result { return service.Result{} })
+	out, code = runRoot(t, "connect", "--uninstall")
+	if code != 0 || !strings.Contains(out, "Removed the saved key from "+filepath.Join(home, ".archivist", "credentials")) {
+		t.Fatalf("uninstall: exit %d\n%s", code, out)
 	}
 	if _, err := auth.SavedToken(); !errors.Is(err, auth.ErrNoToken) {
 		t.Fatalf("key kept: %v", err)
 	}
 }
 
-// --install moves a key saved in the file into the keychain.
-func TestConnectInstallMovesTheKeyIntoTheKeychain(t *testing.T) {
+// --install moves a key held in the keychain into the credentials file.
+func TestConnectInstallMovesAKeychainKeyToTheFile(t *testing.T) {
 	linuxOnly(t)
 	home := sandbox(t)
-	saveKey(t, home, pairedKey)
 	auth.MockKeychainForTest(t, false)
+	if loc, err := auth.SaveToken(pairedKey); err != nil || !loc.Keychain {
+		t.Fatalf("SaveToken: %+v %v", loc, err)
+	}
 	stubRunner(t, func(string) service.Result { return service.Result{} })
+	path := filepath.Join(home, ".archivist", "credentials")
 	out, code := runRoot(t, "connect", "--install")
-	if code != 0 || !strings.Contains(out, "The saved key moved to the keychain.") {
+	if code != 0 || !strings.Contains(out, "The saved key moved to "+path+", where connect keeps it.") {
 		t.Fatalf("install: exit %d\n%s", code, out)
 	}
-	if _, ok := credentials(t, home); ok {
-		t.Fatal("credentials file kept")
+	if saved, ok := credentials(t, home); !ok || saved != pairedKey {
+		t.Fatalf("file %q %v", saved, ok)
 	}
-	if token, err := auth.SavedToken(); err != nil || token != pairedKey {
-		t.Fatalf("SavedToken: %q %v", token, err)
+	if _, where, err := auth.DeleteCredentials(); err != nil || where != path {
+		t.Fatalf("keychain item kept: %q %v", where, err)
+	}
+}
+
+// Before the daemon starts, a saved key held in the keychain moves to the
+// file, whatever key connect itself runs with; an item left beside the file
+// is deleted; a failure warns once and is retried at the next start. With
+// nothing recorded in the keychain, nothing happens.
+func TestKeepConnectKeyInFile(t *testing.T) {
+	home := sandbox(t)
+	path := filepath.Join(home, ".archivist", "credentials")
+	auth.MockKeychainForTest(t, true)
+	logs := &syncBuffer{}
+	keepConnectKeyInFile(connect.NewLogger(logs))
+	if _, ok := credentials(t, home); ok || logs.String() != "" {
+		t.Fatalf("no marker, locked keychain: the keychain was asked:\n%s", logs.String())
+	}
+	auth.MockKeychainForTest(t, false)
+	if _, err := auth.SaveToken(pairedKey); err != nil {
+		t.Fatal(err)
+	}
+	keepConnectKeyInFile(connect.NewLogger(logs))
+	if saved, ok := credentials(t, home); !ok || saved != pairedKey || !strings.Contains(logs.String(), "the saved key moved to "+path) {
+		t.Fatalf("file %q %v\n%s", saved, ok, logs.String())
+	}
+	if _, where, _ := auth.DeleteCredentials(); where != path {
+		t.Fatalf("keychain item kept: %q", where)
+	}
+	// An item left in the keychain beside the file: a locked keychain warns
+	// once and keeps it; the next start removes it.
+	if _, err := auth.SaveToken(earlierKey); err != nil {
+		t.Fatal(err)
+	}
+	saveKey(t, home, pairedKey)
+	auth.MockKeychainForTest(t, true)
+	logs = &syncBuffer{}
+	keepConnectKeyInFile(connect.NewLogger(logs))
+	if n := strings.Count(logs.String(), "warning: the key saved in the keychain could not be moved or removed"); n != 1 || !strings.Contains(logs.String(), "tries again at its next start") {
+		t.Fatalf("warnings %d:\n%s", n, logs.String())
+	}
+	if !fileExists(filepath.Join(home, ".archivist", "keychain")) {
+		t.Fatal("the marker went while the item remains")
+	}
+	// It answers again (a fresh in memory keychain still holding the item).
+	auth.MockKeychainForTest(t, false)
+	if err := keyring.Set("archivist", path, earlierKey); err != nil {
+		t.Fatal(err)
+	}
+	logs = &syncBuffer{}
+	keepConnectKeyInFile(connect.NewLogger(logs))
+	if logs.String() != "" || fileExists(filepath.Join(home, ".archivist", "keychain")) {
+		t.Fatalf("retry: marker kept or logged:\n%s", logs.String())
+	}
+	if _, err := keyring.Get("archivist", path); !errors.Is(err, keyring.ErrNotFound) {
+		t.Fatalf("the leftover item stayed: %v", err)
+	}
+	if saved, ok := credentials(t, home); !ok || saved != pairedKey {
+		t.Fatalf("file %q %v", saved, ok)
 	}
 }
 
@@ -314,6 +392,11 @@ func TestWaitForKeyringWaitsWithoutWritingAFile(t *testing.T) {
 	keyringRetry = 5 * time.Millisecond
 	t.Cleanup(func() { keyringRetry = prev })
 	logs := &syncBuffer{}
+	// Nothing ever saved in the keychain (no marker): no wait at all.
+	if err := waitForKeyring(context.Background(), connect.NewLogger(logs)); err != nil || logs.String() != "" {
+		t.Fatalf("no marker: got %v\n%s", err, logs.String())
+	}
+	markKeychain(t, home)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Millisecond)
 	defer cancel()
 	if err := waitForKeyring(ctx, connect.NewLogger(logs)); !errors.Is(err, context.DeadlineExceeded) {
@@ -336,11 +419,17 @@ func TestWaitForKeyringWaitsWithoutWritingAFile(t *testing.T) {
 // connect --status and doctor say to unlock it.
 func TestLockedKeychainIsNamedInStatusAndDoctor(t *testing.T) {
 	linuxOnly(t)
-	sandbox(t)
+	home := sandbox(t)
 	t.Setenv("ARCHIVIST_TOKEN", "")
 	auth.MockKeychainForTest(t, true)
 	stubRunner(t, func(string) service.Result { return service.Result{} })
+	// Nothing ever saved in the keychain: a locked one is not mentioned.
 	out, _ := runRoot(t, "connect", "--status")
+	if !strings.Contains(out, "Key:      none") || strings.Contains(out, "keychain") {
+		t.Fatalf("no marker, status:\n%s", out)
+	}
+	markKeychain(t, home)
+	out, _ = runRoot(t, "connect", "--status")
 	if !strings.Contains(out, "Key:      saved in the keychain, which could not be read") || strings.Contains(out, "Key:      none") {
 		t.Fatalf("status:\n%s", out)
 	}
@@ -375,6 +464,8 @@ func TestUnreachableSessionBusIsNoKeychain(t *testing.T) {
 	t.Setenv("ARCHIVIST_TOKEN", "")
 	auth.MockKeychainForTest(t, false)
 	keyring.MockInitWithError(&net.OpError{Op: "dial", Net: "unix", Err: os.NewSyscallError("connect", syscall.ENOENT)})
+	// With the marker, so the keychain is really asked.
+	markKeychain(t, home)
 	stubRunner(t, func(string) service.Result { return service.Result{ExitCode: 3} })
 	out, code := runRoot(t, "auth", "status")
 	if code != ExitAuthError || strings.Contains(out, "could not be read") {
@@ -401,6 +492,12 @@ func TestLogoutWithALockedKeychainExitsOne(t *testing.T) {
 	t.Setenv("ARCHIVIST_TOKEN", "")
 	saveKey(t, home, pairedKey)
 	auth.MockKeychainForTest(t, true)
+	// Nothing ever saved in the keychain: only the file, exit 0.
+	if out, code := runRoot(t, "auth", "logout"); code != 0 || !strings.Contains(out, "Logged out: deleted "+filepath.Join(home, ".archivist", "credentials")) {
+		t.Fatalf("no marker: exit %d\n%s", code, out)
+	}
+	saveKey(t, home, pairedKey)
+	markKeychain(t, home)
 	out, code := runRoot(t, "auth", "logout")
 	if code != ExitGenericError || !strings.Contains(out, "Could not delete credentials") {
 		t.Fatalf("exit %d\n%s", code, out)
@@ -413,15 +510,72 @@ func TestLogoutWithALockedKeychainExitsOne(t *testing.T) {
 // Re-pairing while the keychain cannot be read: the earlier key could not
 // be revoked, and the output says it may still be active.
 func TestConnectPairUnreadableKeychainNamesTheEarlierKey(t *testing.T) {
-	sandbox(t)
+	home := sandbox(t)
 	auth.MockKeychainForTest(t, true)
 	fake := newFakeMosaic(t, redeemBody(accountEmail))
+	// A first pairing on a computer that never saved a key in the
+	// keychain: a locked one is not asked and no note is printed.
 	useTerminal(t, "\n")
 	out, code := runRoot(t, "connect", "--pair", "ABCDE-FGHJK")
+	if code != 0 || strings.Contains(out, "keychain") {
+		t.Fatalf("no marker: exit %d\n%s", code, out)
+	}
+	if err := os.Remove(filepath.Join(home, ".archivist", "credentials")); err != nil {
+		t.Fatal(err)
+	}
+	markKeychain(t, home)
+	useTerminal(t, "\n")
+	out, code = runRoot(t, "connect", "--pair", "ABCDE-FGHJK")
 	if code != 0 || !strings.Contains(out, "the key this computer used before could not be read from the keychain, so it may still be active. Remove it in Mosaic settings") {
 		t.Fatalf("exit %d\n%s", code, out)
 	}
 	if _, revoked, _ := fake.state(); len(revoked) != 0 {
 		t.Fatalf("revoked %v", revoked)
 	}
+}
+
+// Uninstall of a computer that never saved a key in the keychain, with a
+// locked keyring and nothing saved: the keychain is not asked and the exit
+// is 0.
+func TestConnectUninstallNothingSavedLockedKeyringExitsZero(t *testing.T) {
+	linuxOnly(t)
+	home := sandbox(t)
+	t.Setenv("ARCHIVIST_TOKEN", "")
+	auth.MockKeychainForTest(t, true)
+	stubRunner(t, func(string) service.Result { return service.Result{} })
+	out, code := runRoot(t, "connect", "--uninstall")
+	if code != 0 || strings.Contains(out, "keychain") || strings.Contains(out, "could not") {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if fileExists(filepath.Join(home, ".archivist", "keychain")) {
+		t.Fatal("a marker was written")
+	}
+}
+
+// A key in the file and an item in a keychain that cannot be reached now:
+// uninstall says the file was removed and, separately, that the keychain
+// copy could not be removed; the exit is unchanged (the revoke worked).
+func TestConnectUninstallReportsEachStore(t *testing.T) {
+	linuxOnly(t)
+	home := sandbox(t)
+	t.Setenv("ARCHIVIST_TOKEN", "")
+	saveKey(t, home, pairedKey)
+	markKeychain(t, home)
+	auth.MockKeychainForTest(t, true)
+	stubRunner(t, func(string) service.Result { return service.Result{} })
+	revoked := revokeServer(t)
+	out, code := runRoot(t, "connect", "--uninstall")
+	path := filepath.Join(home, ".archivist", "credentials")
+	if code != 0 || len(revoked()) != 1 {
+		t.Fatalf("exit %d revoked %v\n%s", code, revoked(), out)
+	}
+	for _, want := range []string{"Removed the saved key from " + path + ".", "Note: the copy of the key in the keychain could not be removed"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output lacks %q:\n%s", want, out)
+		}
+	}
+	if _, ok := credentials(t, home); ok {
+		t.Fatal("credentials file kept")
+	}
+	noKeyLeaks(t, out, pairedKey)
 }

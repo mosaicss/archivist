@@ -28,8 +28,9 @@
 # install.ps1 (release key) against the test signed release; a plain http://
 # release URL that is not loopback (before any download).
 #
-# Story 94.6: Windows has a real Credential Manager, so the saved key is read
-# from there (or from ~\.archivist\credentials where it is not usable), the
+# Story 94.6: connect keeps its key in ~\.archivist\credentials, never in
+# Credential Manager (real on Windows), so after pairing and install the file
+# holds the key and no "archivist:<path>" credential exists; the
 # first install takes the start question's default (no console to ask), and
 # connect --uninstall revokes the key (DELETE /account/cli-tokens/current),
 # deletes the task and removes the key, the task XML and ~\.archivist\connect.
@@ -115,9 +116,10 @@ function Assert-Refused([string]$Name, [string]$UserHome, $Result, [string]$Mess
     if (Test-Path -LiteralPath (Join-Path $UserHome '.claude\skills\archivist')) { Fail "$Name installed the skill" }
 }
 
-# The saved key as the CLI reads it (Story 94.6): the credentials file when
-# it exists, else the Credential Manager item go-keyring writes (generic
-# credential "archivist:<absolute credentials path>", UTF-8 blob).
+# The saved key as the CLI could read it (Story 94.6): the credentials file
+# when it exists, else the Credential Manager item go-keyring writes (generic
+# credential "archivist:<absolute credentials path>", UTF-8 blob). Connect
+# never writes that item; Assert-KeyInFile checks so.
 Add-Type -TypeDefinition @"
 using System;
 using System.Runtime.InteropServices;
@@ -155,6 +157,18 @@ function Get-SavedKey([string]$UserHome) {
     $file = Join-Path $UserHome '.archivist\credentials'
     if (Test-Path -LiteralPath $file) { return (Get-Content -LiteralPath $file -Raw).Trim() }
     return [ArchivistReplayCred]::Read((Get-CredTarget $UserHome))
+}
+
+# Assert-KeyInFile fails unless the credentials file holds Key and no
+# Credential Manager item exists for this home (connect keeps its key in the
+# file).
+function Assert-KeyInFile([string]$UserHome, [string]$Key, [string]$What) {
+    $file = Join-Path $UserHome '.archivist\credentials'
+    if (-not (Test-Path -LiteralPath $file)) { Fail "${What}: no credentials file" }
+    $saved = (Get-Content -LiteralPath $file -Raw).Trim()
+    if ($Key -and $saved -ne $Key) { Fail "${What}: the credentials file holds another key" }
+    if (-not $saved) { Fail "${What}: the credentials file is empty" }
+    if ($null -ne [ArchivistReplayCred]::Read((Get-CredTarget $UserHome))) { Fail "${What}: a Credential Manager item was written" }
 }
 
 # Invoke-Bin runs the installed archivist.exe of UserHome in the replay
@@ -304,7 +318,7 @@ try {
     foreach ($exe in 'archivist.exe', 'archivistw.exe') {
         if (-not (Test-Path -LiteralPath (Join-Path $h1 "bin\$exe"))) { Fail "$exe not installed" }
     }
-    if ((Get-SavedKey $h1) -ne $key1) { Fail 'credentials not saved' }
+    Assert-KeyInFile $h1 $key1 'install + pair'
     $xml = Join-Path $h1 '.archivist\connect\MosaicArchivistConnect.xml'
     if (-not (Test-Path -LiteralPath $xml)) { Fail 'task XML not written' }
     $calls = Get-Content -LiteralPath $callLog -Raw
@@ -396,7 +410,7 @@ try {
     Reset-CallLog
     $r = Invoke-Install $h2 'v9.9.9' @('-Pair', 'ABCDE-12346', '-NoService')
     if ($r.Code -ne 0) { Fail "-NoService exited $($r.Code):`n$($r.Out)" }
-    if ((Get-SavedKey $h2) -ne $key2) { Fail '-NoService did not pair' }
+    Assert-KeyInFile $h2 $key2 '-NoService pairing'
     if ((Get-Content -LiteralPath $callLog -Raw) -match 'schtasks /create') { Fail '-NoService created a task' }
     if (Test-Path -LiteralPath (Join-Path $h2 '.archivist\connect\MosaicArchivistConnect.xml')) { Fail '-NoService wrote a task XML' }
     Pass '-NoService pairs only'
@@ -405,7 +419,7 @@ try {
     $h3 = Join-Path $Work 'home3'
     $r = Invoke-Install $h3 'v9.9.9' @('-Pair', 'ABCDE12345') @{ STUB_FAIL_CREATE = '1' }
     if ($r.Code -eq 0) { Fail 'a failed task registration exited 0' }
-    if (-not (Get-SavedKey $h3)) { Fail 'pairing was lost' }
+    Assert-KeyInFile $h3 '' 'pairing before a failed task registration'
     if ($r.Out -notmatch 'connect --install \(no new code is needed\)') { Fail "no resume step:`n$($r.Out)" }
     if ($r.Out -notmatch 'Access is denied') { Fail "schtasks output not shown:`n$($r.Out)" }
     Pass 'failed task registration after pairing prints the resume step'
@@ -433,7 +447,7 @@ try {
     $line = "& ([scriptblock]::Create((irm $Base/latest/download/install.ps1))) -Pair ABCDE12345"
     $r = Invoke-Install $h7 'v9.9.9' @() @{} $line
     if ($r.Code -ne 0) { Fail "the one-liner exited $($r.Code):`n$($r.Out)" }
-    if ((Get-SavedKey $h7) -ne $key1) { Fail 'the one-liner did not pair' }
+    Assert-KeyInFile $h7 $key1 'the one-liner'
     if (-not (Test-Path -LiteralPath (Join-Path $h7 '.archivist\connect\MosaicArchivistConnect.xml'))) { Fail 'the one-liner did not install the task' }
     if ($r.Out -notmatch 'Service:\s+running \(Task Scheduler:') { Fail "the one-liner's status is not running:`n$($r.Out)" }
     Pass 'the panel one-liner installs, pairs and starts background connect'

@@ -147,10 +147,13 @@ One-step setup: the workspace shows a pairing code.
                                   working everywhere it is used) and remove it
                                   and ~/.archivist/connect
 
-The saved key is kept in the operating system keychain (macOS Keychain,
-the Secret Service on Linux, Windows Credential Manager), or in
-~/.archivist/credentials (0600) where no keychain can be used. The service
-uses the saved key, never ARCHIVIST_TOKEN, and logs to
+Connect keeps its saved key in ~/.archivist/credentials (0600), which
+connect sessions do not open: --pair (and 'auth login' on a computer that
+runs connect) saves it there, and --install or a connect start moves a key
+saved in the keychain (with 'auth login') there. Keys saved with 'auth
+login' on a computer that does not run connect go to the operating system
+keychain. The service uses the saved key, never
+ARCHIVIST_TOKEN, and logs to
 ~/.archivist/connect/connect.log. These flags are used one at a time.
 Windows runs the task as archivistw.exe (installed next to archivist.exe by
 install.ps1), without a console window.
@@ -509,6 +512,9 @@ func runConnect(cmd *cobra.Command, version string, check bool, f connectFlags) 
 	log := connect.NewLogger(stderr)
 	debug, _ := strconv.ParseBool(os.Getenv("ARCHIVIST_CONNECT_DEBUG")) // unset or invalid: off
 	log.SetDebug(debug)
+	if f.session == nil {
+		keepConnectKeyInFile(log)
+	}
 	// Handed to each session's MCP server; the same rule as the root check.
 	baseURL := os.Getenv(client.BaseURLEnv)
 	if baseURL != "" {
@@ -589,6 +595,24 @@ func runConnect(cmd *cobra.Command, version string, check bool, f connectFlags) 
 	log.Printf("archivist connect %s: %s; permission ceiling %s; web search %s; key fp:%s; relay %s. Ctrl-C stops.",
 		version, strings.Join(harnesses, "; "), d.MaxMode(), onOff(d.WebSearch()), auth.Fingerprint(token), relayURL)
 	return runPausable(ctx, stderr, log, loop, cfg, d)
+}
+
+// keepConnectKeyInFile leaves the keychain empty before the daemon starts
+// (Story 94.6: a computer that runs connect keeps its key in the file): a
+// saved key held in the keychain moves to the credentials file, and an item
+// left there beside the file is deleted. It asks the keychain only when
+// Archivist saved a key there (auth's marker), so it is retried at every
+// start until that is done. A failure logs one warning and connect goes on
+// with the key it already holds.
+func keepConnectKeyInFile(log *connect.Logger) {
+	moved, err := auth.MoveKeychainKeyToFile()
+	switch {
+	case err != nil:
+		log.Printf("warning: the key saved in the keychain could not be moved or removed (%v); connect tries again at its next start", err)
+	case moved:
+		path, _ := auth.CredentialsPath()
+		log.Printf("the saved key moved to %s, where connect keeps it", path)
+	}
 }
 
 // runPausable runs the normal daemon under the pause loop (Story 94.6): d
