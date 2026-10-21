@@ -4,11 +4,14 @@
 #
 # Builds archivist.exe and archivistw.exe from this checkout, lays out a fake
 # release <base>/download/<tag>/ (zip plus SHA256SUMS), serves it on
-# 127.0.0.1 with a fake POST /agent-pairing/redeem
-# (scripts/testdata/winreplay/server), and runs install.ps1 in a child
-# PowerShell (the one running this script) under a throwaway USERPROFILE,
-# with a stub schtasks.exe (scripts/testdata/winreplay/schtasks) first on
-# PATH. Nothing touches the real profile, the user PATH or Task Scheduler.
+# 127.0.0.1 with fake pairing routes (scripts/testdata/winreplay/server),
+# and runs install.ps1 in a child PowerShell (the one running this script)
+# under a throwaway USERPROFILE, with a stub schtasks.exe
+# (scripts/testdata/winreplay/schtasks) first on PATH. Pairing takes the
+# browser confirmation (ARCHIVIST_PAIR_CONFIRM=browser, with BROWSER the
+# fake server binary, which confirms the pending pairing), so no console
+# prompt waits. Nothing touches the real profile, the user PATH or Task
+# Scheduler.
 #
 # Asserts: install + pair + task created and reported running; an update
 # without -Pair recreates the task and calls no redeem; an update while the
@@ -52,6 +55,7 @@ function Invoke-Install([string]$UserHome, [string]$Version, [string[]]$InstallA
         ARCHIVIST_RELEASE_BASE_URL = $Base; ARCHIVIST_INSTALL_VERSION = $Version; ARCHIVIST_BASE_URL = $Base
         ARCHIVIST_TOKEN = $null; STUB_LOG = $callLog; STUB_STATE = (Join-Path $UserHome 'task-registered')
         STUB_FAIL_CREATE = $null; Path = "$stubs;$env:Path"
+        ARCHIVIST_PAIR_CONFIRM = 'browser'; BROWSER = (Join-Path $Work 'server.exe')
     }
     foreach ($k in $Extra.Keys) { $vars[$k] = $Extra[$k] }
     $saved = @{}
@@ -166,7 +170,10 @@ try {
     $envFile = Get-Content -LiteralPath (Join-Path $h1 '.archivist\connect\service.env') -Raw
     if ($envFile -match 'ARCHIVIST_TOKEN|ak_replay') { Fail 'service.env carries a credential' }
     if ((Get-Content -LiteralPath $redeemLog -Raw) -notmatch '"code":"ABCDE12345"') { Fail 'redeem did not send the normalised code' }
-    if ((Get-Content -LiteralPath $redeemLog -Raw) -match '"auth":"[^"]') { Fail 'redeem sent Authorization' }
+    $pairingLines = @(Get-Content -LiteralPath $redeemLog | Where-Object { $_ -match '"path":"/agent-pairing/' })
+    if (($pairingLines -match '"auth":"[^"]').Count -gt 0) { Fail 'pairing sent Authorization' }
+    if (($pairingLines -match '"confirm":"browser"').Count -lt 1) { Fail 'redeem did not ask for the browser confirmation' }
+    if (($pairingLines -match '"path":"/agent-pairing/pending/poll"').Count -lt 1) { Fail 'the pending pairing was not polled' }
     if ($r.Out -match [regex]::Escape($key1)) { Fail 'the key was printed' }
     if ($r.Out -notmatch 'Paired as archivist replay') { Fail "no pairing line:`n$($r.Out)" }
     if ($r.Out -notmatch 'Service:\s+running \(Task Scheduler:') { Fail "status not running:`n$($r.Out)" }
@@ -174,7 +181,7 @@ try {
 
     # --- 2. update without -Pair recreates the task, no redeem --------------------
     Reset-CallLog
-    $redeems = @(Get-Content -LiteralPath $redeemLog).Count
+    $redeems = @(Get-Content -LiteralPath $redeemLog | Where-Object { $_ -match '"path":"/agent-pairing/redeem"' }).Count
     $bin1 = Join-Path $h1 'bin'
     foreach ($stale in 'archivist.exe.old-stale', 'archivistw.exe.old-stale', 'archivist.exe.old') {
         Set-Content -LiteralPath (Join-Path $bin1 $stale) -Value 'stale'
@@ -187,7 +194,7 @@ try {
     if ($r.Code -ne 0) { Fail "update exited $($r.Code):`n$($r.Out)" }
     $calls = Get-Content -LiteralPath $callLog -Raw
     if ($calls -notmatch 'schtasks /create' -or $calls -notmatch 'schtasks /end') { Fail "update did not reinstall the task:`n$calls" }
-    if (@(Get-Content -LiteralPath $redeemLog).Count -ne $redeems) { Fail 'update called redeem' }
+    if (@(Get-Content -LiteralPath $redeemLog | Where-Object { $_ -match '"path":"/agent-pairing/redeem"' }).Count -ne $redeems) { Fail 'update called redeem' }
     foreach ($stale in 'archivist.exe.old-stale', 'archivistw.exe.old-stale', 'archivist.exe.old') {
         if (Test-Path -LiteralPath (Join-Path $bin1 $stale)) { Fail "stale $stale was kept" }
     }

@@ -7,22 +7,29 @@ package cmd
 // terminal outcomes mapped to exit 0 so the manager does not restart them.
 
 import (
+	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"os/user"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/mosaicss/archivist/internal/auth"
 	"github.com/mosaicss/archivist/internal/client"
 	"github.com/mosaicss/archivist/internal/connect"
 	"github.com/mosaicss/archivist/internal/service"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 // serviceRunner runs service manager commands; tests replace it.
@@ -31,6 +38,66 @@ var serviceRunner service.Runner = service.ExecRunner
 // pairInvalidMessage is the one answer for every unusable pairing code,
 // whether refused locally or by the server.
 const pairInvalidMessage = "This pairing code is not valid or has expired. Get a new code in Mosaic and run the command again."
+
+// openConfirmTerminal opens the terminal the pairing confirmation asks on
+// (Story 94.3); tests replace it.
+var openConfirmTerminal = openTerminal
+
+// pairOutputVisible reports whether a person can see the pairing question:
+// stdout or stderr is itself a terminal (on Windows, a console). An agent
+// that captures the output through pipes cannot answer a terminal it does
+// not show, so pairing then turns to the browser. Tests replace it.
+var pairOutputVisible = func() bool {
+	return term.IsTerminal(int(os.Stdout.Fd())) || term.IsTerminal(int(os.Stderr.Fd()))
+}
+
+// pairInterrupt is the context the pairing confirmation waits under, done on
+// Ctrl-C, SIGTERM or SIGHUP (the terminal closed): an interrupted answer is
+// a no. Tests replace it.
+var pairInterrupt = func(ctx context.Context) (context.Context, context.CancelFunc) {
+	return signal.NotifyContext(ctx, pairSignals...)
+}
+
+// pairSignals end a pairing confirmation: Ctrl-C, SIGTERM and SIGHUP (the
+// terminal closed). Windows delivers the first two.
+var pairSignals = []os.Signal{os.Interrupt, syscall.SIGTERM, syscall.SIGHUP}
+
+// pairBrowserAvailable reports whether a browser can open the confirm page
+// (Story 94.3); tests replace it.
+var pairBrowserAvailable = browserAvailable
+
+// openPairBrowser opens the confirm page; its channel gets the opener's exit.
+// Tests replace it.
+var openPairBrowser = startBrowser
+
+// pairPollEvery is the poll interval for the server's suggestion, 1 to 10
+// seconds (2 when it suggests none); tests replace it.
+var pairPollEvery = func(seconds int) time.Duration {
+	switch {
+	case seconds <= 0:
+		seconds = 2
+	case seconds > 10:
+		seconds = 10
+	}
+	return time.Duration(seconds) * time.Second
+}
+
+// pairServiceInstalled reports whether the background service is installed,
+// so a manual re-pair can say to restart it; tests replace it.
+var pairServiceInstalled = serviceInstalled
+
+// pairRevokeTimeout bounds each key revoke (and decline) while pairing.
+const pairRevokeTimeout = 10 * time.Second
+
+// pairPollTimeout bounds one poll of a pending pairing.
+const pairPollTimeout = 15 * time.Second
+
+// pairPendingMax caps how long the CLI waits for the browser, whatever the
+// server says.
+const pairPendingMax = 10 * time.Minute
+
+// accountStatusTimeout bounds the --status account lookup.
+const accountStatusTimeout = 5 * time.Second
 
 // setupMode is which one-step setup flag was given.
 type setupMode struct {
@@ -133,7 +200,16 @@ func installedCeiling(args []string) (mode connect.Mode, found, ok bool) {
 	return connect.DefaultMaxMode, false, true
 }
 
-// runPair redeems a pairing code and saves the new key.
+// runPair redeems a pairing code, names the account it belongs to, and saves
+// the new key only once that account is confirmed (Story 94.3). The
+// confirmation is chosen before any request: the terminal, when it opens and
+// stdout or stderr shows it, asks "This computer will connect to <email>.
+// Continue? [Y/n]"; with no terminal a person can see, the
+// workspace confirm page in this computer's browser answers for the account
+// signed in there (ARCHIVIST_PAIR_CONFIRM=browser chooses it); with neither,
+// pairing stops before the redeem. Nothing is saved before a confirmation. A
+// declined terminal pairing revokes the new key; a confirmed one revokes the
+// ak_ key it replaced.
 func runPair(cmd *cobra.Command, version, raw string) error {
 	stderr := cmd.ErrOrStderr()
 	code, err := client.NormalizePairingCode(raw)
@@ -141,9 +217,29 @@ func runPair(cmd *cobra.Command, version, raw string) error {
 		_, _ = fmt.Fprintln(stderr, "archivist connect: "+pairInvalidMessage)
 		return &ExitError{Code: ExitAuthError}
 	}
+	// Chosen before the redeem, so pairing where nothing can answer spends
+	// no code and creates no key.
+	confirm := client.ConfirmTerminal
+	var tty io.ReadWriteCloser
+	if os.Getenv("ARCHIVIST_PAIR_CONFIRM") == "browser" {
+		confirm = client.ConfirmBrowser
+	} else if tty, err = openConfirmTerminal(); err != nil || !pairOutputVisible() {
+		if err == nil {
+			_ = tty.Close()
+		}
+		tty = nil
+		if !pairBrowserAvailable() {
+			_, _ = fmt.Fprintln(stderr, "archivist connect: pairing asks you to confirm the account, in a terminal or in a browser on this computer, and neither is available here. Run the command in a terminal.")
+			return &ExitError{Code: ExitGenericError}
+		}
+		confirm = client.ConfirmBrowser
+	}
+	if tty != nil {
+		defer func() { _ = tty.Close() }()
+	}
 	device, _ := os.Hostname()
 	c := client.New("", version)
-	res, err := c.RedeemPairing(cmd.Context(), code, device)
+	res, pending, err := c.RedeemPairing(cmd.Context(), code, device, confirm)
 	if err != nil {
 		if errors.Is(err, client.ErrPairingCodeInvalid) {
 			_, _ = fmt.Fprintln(stderr, "archivist connect: "+pairInvalidMessage)
@@ -161,25 +257,255 @@ func runPair(cmd *cobra.Command, version, raw string) error {
 		}
 		return failFromDo(cmd, err, "")
 	}
-	// A valid key saved before stays active in Clerk; say so once.
+	if confirm == client.ConfirmBrowser {
+		if res != nil {
+			// A server that minted at once cannot wait for the browser.
+			_ = revokeKey(cmd.Context(), version, res.Key)
+			return pairNotNamed(stderr)
+		}
+		if res, err = confirmInBrowser(cmd, c, pending); err != nil {
+			return err
+		}
+	} else {
+		if res == nil {
+			_ = c.DeclinePairing(context.WithoutCancel(cmd.Context()), pending)
+			return pairNotNamed(stderr)
+		}
+		email := printableText(res.Email)
+		if email == "" {
+			// A server that names no account: nothing to confirm, so nothing is kept.
+			_ = revokeKey(cmd.Context(), version, res.Key)
+			return pairNotNamed(stderr)
+		}
+		if !confirmAccount(cmd.Context(), tty, email) {
+			if err := revokeKey(cmd.Context(), version, res.Key); err != nil {
+				_, _ = fmt.Fprintf(stderr, "Note: the unused new key could not be removed (%v). You can revoke it in Mosaic.\n", err)
+			}
+			_, _ = fmt.Fprintln(stderr, "Pairing cancelled. Nothing was saved.")
+			return &ExitError{Code: ExitGenericError}
+		}
+	}
+	return savePairedKey(cmd, version, res)
+}
+
+// pairNotNamed is the refusal for a redeem answer this CLI cannot confirm
+// (no account named, or a server that predates the browser confirmation).
+func pairNotNamed(stderr io.Writer) error {
+	_, _ = fmt.Fprintln(stderr, "archivist connect: Mosaic did not name the account for this code, so nothing was saved. Get a new code in Mosaic and try again.")
+	return &ExitError{Code: ExitServerError}
+}
+
+// savePairedKey saves a confirmed key, revokes the ak_ key it replaced and
+// says so.
+func savePairedKey(cmd *cobra.Command, version string, res *client.PairingResult) error {
+	stderr, stdout := cmd.ErrOrStderr(), cmd.OutOrStdout()
+	email := printableText(res.Email)
+	if email == "" {
+		_ = revokeKey(cmd.Context(), version, res.Key)
+		return pairNotNamed(stderr)
+	}
 	previous, perr := auth.SavedToken()
 	path, err := auth.SaveToken(res.Key)
 	if err != nil {
+		// The new key is unusable without the file: remove it too.
+		_ = revokeKey(cmd.Context(), version, res.Key)
 		_, _ = fmt.Fprintf(stderr, "archivist connect: paired, but saving the key failed: %v\nGet a new code in Mosaic and try again.\n", err)
 		return &ExitError{Code: ExitGenericError}
 	}
-	name := res.Name
+	name := printableText(res.Name)
 	if name == "" {
 		name = res.KeyID
 	}
-	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Paired as %s.\n  Key:  %s\n  File: %s\n", name, auth.MaskToken(res.Key), path)
+	_, _ = fmt.Fprintf(stdout, "Paired as %s.\n  Account: %s\n  Key:     %s\n  File:    %s\n", name, email, auth.MaskToken(res.Key), path)
 	if perr == nil && previous != res.Key && !auth.IsTaskToken(previous) {
-		_, _ = fmt.Fprintf(stderr, "Note: the key saved here before (%s) is still active. Revoke it in Mosaic if you no longer need it.\n", auth.MaskToken(previous))
+		// Only a saved ak_ key is revoked, with itself as the credential.
+		revoked := false
+		if strings.HasPrefix(previous, "ak_") {
+			err := revokeKey(cmd.Context(), version, previous)
+			revoked = err == nil || errors.Is(err, client.ErrUnauthorized)
+		}
+		if revoked {
+			_, _ = fmt.Fprintf(stdout, "The key saved here before (%s) no longer works.\n", auth.MaskToken(previous))
+		} else {
+			_, _ = fmt.Fprintf(stderr, "Note: the key saved here before (%s) is still active. Revoke it in Mosaic if you no longer need it.\n", auth.MaskToken(previous))
+		}
 	}
 	if os.Getenv("ARCHIVIST_TOKEN") != "" {
 		_, _ = fmt.Fprintln(stderr, "Warning: ARCHIVIST_TOKEN is set in this environment and takes precedence over the saved key here. Unset it to use the paired key. The background service always uses the saved key.")
 	}
+	if pairServiceInstalled() {
+		_, _ = fmt.Fprintln(stdout, "Run 'archivist connect --install' to restart background connect with the new key.")
+	}
 	return nil
+}
+
+// confirmInBrowser waits for the workspace confirm page (Story 94.3, owner
+// D6): it opens the page in this computer's browser, where a browser signed
+// in to the code's account confirms with no click, and polls until the key
+// comes back, the browser refuses, the pairing expires or the user presses
+// Ctrl-C (which declines it). No key exists before the confirmed poll.
+func confirmInBrowser(cmd *cobra.Command, c *client.Client, p *client.PendingPairing) (*client.PairingResult, error) {
+	stdout, stderr := cmd.OutOrStdout(), cmd.ErrOrStderr()
+	decline := func() {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(cmd.Context()), pairRevokeTimeout)
+		defer cancel()
+		_ = c.DeclinePairing(ctx, p)
+	}
+	email := printableText(p.Email)
+	if email == "" {
+		decline()
+		return nil, pairNotNamed(stderr)
+	}
+	ctx, stop := pairInterrupt(cmd.Context())
+	defer stop()
+	_, _ = fmt.Fprintf(stdout, "This computer will connect to %s. Confirm in the browser where you use Mosaic; it opens now.\n", email)
+	linkShown := false
+	showLink := func() {
+		if !linkShown {
+			linkShown = true
+			_, _ = fmt.Fprintf(stdout, "Open this link in the browser where you use Mosaic: %s\n", p.ConfirmURL)
+		}
+	}
+	opened, err := openPairBrowser(p.ConfirmURL)
+	if err != nil {
+		showLink()
+	}
+	expires := time.Duration(p.ExpiresInSeconds) * time.Second
+	if expires > pairPendingMax {
+		expires = pairPendingMax
+	}
+	deadline := time.Now().Add(expires)
+	every := pairPollEvery(p.PollIntervalSeconds)
+	timer := time.NewTimer(every)
+	defer timer.Stop()
+	notInTime := func() error {
+		_, _ = fmt.Fprintln(stderr, "archivist connect: this computer was not confirmed in time. Nothing was saved. Get a new code in Mosaic and run the command again.")
+		return &ExitError{Code: ExitGenericError}
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			decline()
+			_, _ = fmt.Fprintln(stderr, "Pairing cancelled. Nothing was saved.")
+			return nil, &ExitError{Code: ExitGenericError}
+		case err := <-opened:
+			// The opener finished: a failure means the page may not be open.
+			opened = nil
+			if err != nil {
+				showLink()
+			}
+			continue
+		case <-timer.C:
+		}
+		pctx, cancel := context.WithTimeout(ctx, pairPollTimeout)
+		r, err := c.PollPairing(pctx, p)
+		cancel()
+		var apiErr *client.APIError
+		switch {
+		case ctx.Err() != nil:
+			// Interrupted while the key came back: it is never saved, so
+			// remove it before the select above declines.
+			if err == nil && r.State == client.PollConfirmed && r.Key != nil {
+				_ = revokeKey(cmd.Context(), c.Version, r.Key.Key)
+			}
+			continue
+		case errors.Is(err, client.ErrPairingCodeInvalid):
+			return nil, notInTime()
+		case errors.As(err, &apiErr) && apiErr.Code == "CLERK_ERROR":
+			_, _ = fmt.Fprintln(stderr, "archivist connect: Mosaic could not create the key. Nothing was saved. Get a new code in Mosaic and try again.")
+			return nil, &ExitError{Code: ExitServerError}
+		case err == nil && r.State == client.PollConfirmed:
+			return r.Key, nil
+		case err == nil && r.State == client.PollRefused:
+			_, _ = fmt.Fprintln(stderr, "archivist connect: "+pairRefusedMessage(r.Reason))
+			return nil, &ExitError{Code: ExitGenericError}
+		case err == nil && r.State == client.PollExpired:
+			return nil, notInTime()
+		}
+		// Pending, or a passing failure: ask again until the deadline.
+		if time.Now().After(deadline) {
+			return nil, notInTime()
+		}
+		timer.Reset(every)
+	}
+}
+
+// pairRefusedMessage is the plain reason a browser refused a pairing.
+func pairRefusedMessage(reason string) string {
+	switch reason {
+	case "other_account":
+		return "this computer was not connected. The code came from a different Mosaic account than the one signed in to your browser. Nothing was saved."
+	case "signed_out":
+		return "this computer was not connected because your browser is not signed in to Mosaic. Sign in, get a new code and run the command again. Nothing was saved."
+	}
+	return "this computer was not connected. Nothing was saved. Get a new code in Mosaic and try again."
+}
+
+// confirmAccount asks on the terminal whether to connect to email. Enter,
+// y or yes (any case) is a yes; any other answer, end of input, Ctrl-C,
+// SIGTERM or SIGHUP is a no.
+func confirmAccount(ctx context.Context, tty io.ReadWriter, email string) bool {
+	ctx, stop := pairInterrupt(ctx)
+	defer stop()
+	_, _ = fmt.Fprintf(tty, "This computer will connect to %s. Continue? [Y/n] ", email)
+	answer := make(chan string, 1)
+	go func() {
+		line, err := bufio.NewReader(tty).ReadString('\n')
+		if err != nil {
+			close(answer)
+			return
+		}
+		answer <- line
+	}()
+	select {
+	case <-ctx.Done():
+		_, _ = fmt.Fprintln(tty)
+		return false
+	case line, ok := <-answer:
+		if !ok {
+			_, _ = fmt.Fprintln(tty)
+			return false
+		}
+		switch strings.ToLower(strings.TrimSpace(line)) {
+		case "", "y", "yes":
+			return true
+		}
+		return false
+	}
+}
+
+// revokeKey revokes key with itself as the credential (DELETE
+// /account/cli-tokens/current), bounded, and even after an interrupt.
+func revokeKey(ctx context.Context, version, key string) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), pairRevokeTimeout)
+	defer cancel()
+	return client.New(key, version).RevokeCurrentKey(ctx)
+}
+
+// accountLine is the --status account: the saved key's account email, or
+// why it is not known.
+func accountLine(ctx context.Context, version, token string) string {
+	ctx, cancel := context.WithTimeout(ctx, accountStatusTimeout)
+	defer cancel()
+	res, err := client.New(token, version).GetCLITokens(ctx)
+	switch {
+	case errors.Is(err, client.ErrUnauthorized):
+		return "this key is no longer accepted (run 'archivist connect --pair CODE')"
+	case err != nil || printableText(res.UserEmail) == "":
+		return "unknown (could not reach Mosaic)"
+	}
+	return printableText(res.UserEmail)
+}
+
+// printableText keeps printable characters only, so text from the server
+// cannot move the cursor or change the terminal.
+func printableText(s string) string {
+	return strings.TrimSpace(strings.Map(func(r rune) rune {
+		if r == utf8.RuneError || !unicode.IsPrint(r) {
+			return -1
+		}
+		return r
+	}, s))
 }
 
 // newServiceManager builds this platform's manager, or prints why there is
@@ -191,6 +517,20 @@ func newServiceManager(cmd *cobra.Command, args []string) (service.Manager, stri
 		_, _ = fmt.Fprintf(stderr, "archivist connect: %v\n", err)
 		return nil, "", &ExitError{Code: ExitGenericError}
 	}
+	m, err := service.New(serviceOptions(home, args))
+	if err != nil {
+		if errors.Is(err, service.ErrUnsupported) {
+			_, _ = fmt.Fprintln(stderr, "archivist connect: Background connect is not available on this system yet.")
+		} else {
+			_, _ = fmt.Fprintf(stderr, "archivist connect: %v\n", err)
+		}
+		return nil, "", &ExitError{Code: ExitGenericError}
+	}
+	return m, home, nil
+}
+
+// serviceOptions is this user's service manager configuration.
+func serviceOptions(home string, args []string) service.Options {
 	opts := service.Options{Home: home, Run: serviceRunner, UID: os.Getuid(), Env: service.CaptureEnv(os.Environ()), Args: args}
 	if u, err := user.Current(); err == nil {
 		opts.User = u.Username
@@ -202,16 +542,22 @@ func newServiceManager(cmd *cobra.Command, args []string) (service.Manager, stri
 		// Windows runs the console-less companion next to it (Story 78.34).
 		opts.Binary = serviceBinary(bin)
 	}
-	m, err := service.New(opts)
+	return opts
+}
+
+// serviceInstalled reports whether this user's background service
+// definition exists (no manager command runs).
+func serviceInstalled() bool {
+	home, err := os.UserHomeDir()
 	if err != nil {
-		if errors.Is(err, service.ErrUnsupported) {
-			_, _ = fmt.Fprintln(stderr, "archivist connect: Background connect is not available on this system yet.")
-		} else {
-			_, _ = fmt.Fprintf(stderr, "archivist connect: %v\n", err)
-		}
-		return nil, "", &ExitError{Code: ExitGenericError}
+		return false
 	}
-	return m, home, nil
+	m, err := service.New(serviceOptions(home, nil))
+	if err != nil {
+		return false
+	}
+	_, err = os.Stat(m.Path())
+	return err == nil
 }
 
 // stableBinary is the path the service runs: the archivist on PATH when it
@@ -332,10 +678,11 @@ func runServiceUninstall(cmd *cobra.Command) error {
 	return nil
 }
 
-// runServiceStatus reports the service and the saved key: exit 0 when the
+// runServiceStatus reports the service, the saved key and its account
+// (Story 94.3; the account lookup never changes the exit): exit 0 when the
 // service runs (systemd: is-active; launchd: loaded and its daemon alive)
 // and a saved ak_ key exists, else 1.
-func runServiceStatus(cmd *cobra.Command) error {
+func runServiceStatus(cmd *cobra.Command, version string) error {
 	m, home, err := newServiceManager(cmd, nil)
 	if err != nil {
 		return err
@@ -366,6 +713,7 @@ func runServiceStatus(cmd *cobra.Command) error {
 	keyOK := terr == nil && strings.HasPrefix(token, "ak_")
 	if keyOK {
 		_, _ = fmt.Fprintf(out, "Key:      saved, %s (fp:%s)\n", auth.MaskToken(token), auth.Fingerprint(token))
+		_, _ = fmt.Fprintf(out, "Account:  %s\n", accountLine(cmd.Context(), version, token))
 	} else {
 		_, _ = fmt.Fprintln(out, "Key:      none (run 'archivist connect --pair CODE' with a code from Mosaic)")
 	}

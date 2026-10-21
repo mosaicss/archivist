@@ -69,7 +69,7 @@ func TestRedeemPairingSendsNoCredentialAndNoRetry(t *testing.T) {
 			t.Errorf("body %d bytes", len(b))
 		}
 		var body map[string]string
-		if err := json.Unmarshal(b, &body); err != nil || body["code"] != "ABCDEFGHJK" || body["device_name"] != "box" || len(body) != 2 {
+		if err := json.Unmarshal(b, &body); err != nil || body["code"] != "ABCDEFGHJK" || body["device_name"] != "box" || body["confirm"] != "terminal" || len(body) != 3 {
 			t.Errorf("body %s", b)
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -78,8 +78,8 @@ func TestRedeemPairingSendsNoCredentialAndNoRetry(t *testing.T) {
 	defer srv.Close()
 	t.Setenv("ARCHIVIST_BASE_URL", srv.URL)
 	c := client.New("ak_should_not_be_sent_00000", "v1.2.3")
-	res, err := c.RedeemPairing(context.Background(), "ABCDEFGHJK", "box")
-	if err != nil || res.Key != "ak_secretsecretsecret" || res.KeyID != "ak_id" || res.Tier != "pro" {
+	res, pending, err := c.RedeemPairing(context.Background(), "ABCDEFGHJK", "box", client.ConfirmTerminal)
+	if err != nil || pending != nil || res.Key != "ak_secretsecretsecret" || res.KeyID != "ak_id" || res.Tier != "pro" {
 		t.Fatalf("%+v %v", res, err)
 	}
 	if hits.Load() != 1 {
@@ -108,7 +108,7 @@ func TestRedeemPairingErrors(t *testing.T) {
 			_, _ = w.Write([]byte(tc.body))
 		}))
 		t.Setenv("ARCHIVIST_BASE_URL", srv.URL)
-		_, err := client.New("", "dev").RedeemPairing(context.Background(), "ABCDEFGHJK", "box")
+		_, _, err := client.New("", "dev").RedeemPairing(context.Background(), "ABCDEFGHJK", "box", client.ConfirmTerminal)
 		srv.Close()
 		if hits.Load() != 1 {
 			t.Errorf("%d: %d attempts, want exactly 1", tc.status, hits.Load())
@@ -130,7 +130,216 @@ func TestRedeemPairingErrors(t *testing.T) {
 	}))
 	defer srv.Close()
 	t.Setenv("ARCHIVIST_BASE_URL", srv.URL)
-	if _, err := client.New("", "dev").RedeemPairing(context.Background(), "ABCDEFGHJK", "box"); err == nil {
+	if _, _, err := client.New("", "dev").RedeemPairing(context.Background(), "ABCDEFGHJK", "box", client.ConfirmTerminal); err == nil {
 		t.Fatal("incomplete response accepted")
+	}
+}
+
+// Story 94.3: the redeem body names the account; a body without the field
+// (an older server) still decodes, with Email empty.
+func TestRedeemPairingDecodesEmailAndOlderBody(t *testing.T) {
+	for body, want := range map[string]string{
+		`{"key":"ak_secretsecretsecret","key_id":"ak_id","name":"n","tier":"pro","email":"b@example.test"}`:              "b@example.test",
+		`{"key":"ak_secretsecretsecret","key_id":"ak_id","name":"n","tier":"pro"}`:                                       "",
+		`{"key":"ak_secretsecretsecret","key_id":"ak_id","name":"n","tier":"pro","email":"b@example.test","extra":true}`: "b@example.test",
+	} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(body))
+		}))
+		t.Setenv("ARCHIVIST_BASE_URL", srv.URL)
+		res, _, err := client.New("", "dev").RedeemPairing(context.Background(), "ABCDEFGHJK", "box", client.ConfirmTerminal)
+		srv.Close()
+		if err != nil || res.Email != want || res.Key != "ak_secretsecretsecret" || res.KeyID != "ak_id" || res.Tier != "pro" {
+			t.Errorf("%s: %+v %v", body, res, err)
+		}
+	}
+}
+
+func TestRevokeCurrentKey(t *testing.T) {
+	cases := []struct {
+		status       int
+		body         string
+		unauthorized bool
+		ok           bool
+	}{
+		{204, ``, false, true},
+		{401, `{"error":"Invalid CLI token","code":"INVALID_TOKEN"}`, true, false},
+		{403, `{"error":"This needs an Archivist CLI key.","code":"CLI_KEY_REQUIRED"}`, false, false},
+		{404, `{"error":"Not found","code":"NOT_FOUND"}`, false, false},
+	}
+	for _, tc := range cases {
+		var hits atomic.Int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			hits.Add(1)
+			if r.Method != http.MethodDelete || r.URL.Path != "/account/cli-tokens/current" || r.URL.RawQuery != "" {
+				t.Errorf("unexpected %s %s", r.Method, r.URL)
+			}
+			if r.Header.Get("Authorization") != "Bearer ak_selfrevoke_secret_0000" {
+				t.Errorf("Authorization %q", r.Header.Get("Authorization"))
+			}
+			if b, _ := io.ReadAll(r.Body); len(b) != 0 {
+				t.Errorf("body %q", b)
+			}
+			w.WriteHeader(tc.status)
+			_, _ = w.Write([]byte(tc.body))
+		}))
+		t.Setenv("ARCHIVIST_BASE_URL", srv.URL)
+		err := client.New("ak_selfrevoke_secret_0000", "dev").RevokeCurrentKey(context.Background())
+		srv.Close()
+		switch {
+		case tc.ok:
+			if err != nil {
+				t.Errorf("%d: %v", tc.status, err)
+			}
+		case tc.unauthorized:
+			if !errors.Is(err, client.ErrUnauthorized) {
+				t.Errorf("%d: %v", tc.status, err)
+			}
+		default:
+			var apiErr *client.APIError
+			if !errors.As(err, &apiErr) || apiErr.Status != tc.status {
+				t.Errorf("%d: %v", tc.status, err)
+			}
+		}
+		if hits.Load() != 1 {
+			t.Errorf("%d: %d attempts", tc.status, hits.Load())
+		}
+	}
+}
+
+const (
+	testConfirmID = "cccccccccccccccccccccccccccccccccccccccccc_"
+	testPollToken = "ppppppppppppppppppppppppppppppppppppppppp-p"
+)
+
+func pendingBody(confirmURL string) string {
+	b, _ := json.Marshal(map[string]any{
+		"pending": true, "email": "b@example.test", "confirm_id": testConfirmID, "poll_token": testPollToken,
+		"confirm_url": confirmURL, "expires_in_seconds": 300, "poll_interval_seconds": 2,
+	})
+	return string(b)
+}
+
+// Story 94.3: the browser mode redeem answers 202 with a pending pairing
+// and no key; its URL must be a safe https (or loopback http) confirm link.
+func TestRedeemPairingBrowserPending(t *testing.T) {
+	good := "https://workspace.mosaic-finance.com/connect/confirm#" + testConfirmID
+	cases := map[string]bool{
+		good: true,
+		"http://127.0.0.1:8080/connect/confirm#" + testConfirmID:       true,
+		"http://example.test/connect/confirm#" + testConfirmID:         false,
+		"https://workspace.mosaic-finance.com/connect/confirm#other":   false,
+		"https://workspace.mosaic-finance.com/a&b#" + testConfirmID:    false,
+		"https://workspace.mosaic-finance.com/%PATH%#" + testConfirmID: false,
+		"https://user@workspace.mosaic-finance.com/c#" + testConfirmID: false,
+		"file:///etc/passwd#" + testConfirmID:                          false,
+		"https://workspace.mosaic-finance.com/a b#" + testConfirmID:    false,
+		"https://workspace.mosaic-finance.com/a\"^|#" + testConfirmID:  false,
+	}
+	for confirmURL, ok := range cases {
+		var sent map[string]string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			b, _ := io.ReadAll(r.Body)
+			_ = json.Unmarshal(b, &sent)
+			w.WriteHeader(http.StatusAccepted)
+			_, _ = w.Write([]byte(pendingBody(confirmURL)))
+		}))
+		t.Setenv("ARCHIVIST_BASE_URL", srv.URL)
+		res, pending, err := client.New("", "dev").RedeemPairing(context.Background(), "ABCDEFGHJK", "box", client.ConfirmBrowser)
+		srv.Close()
+		if sent["confirm"] != "browser" {
+			t.Errorf("%s: sent %v", confirmURL, sent)
+		}
+		if res != nil {
+			t.Errorf("%s: a key came with a pending pairing", confirmURL)
+		}
+		if ok != (err == nil && pending != nil) {
+			t.Errorf("%s: pending %+v err %v", confirmURL, pending, err)
+			continue
+		}
+		if ok && (pending.ConfirmID != testConfirmID || pending.PollToken != testPollToken || pending.Email != "b@example.test" ||
+			pending.ExpiresInSeconds != 300 || pending.PollIntervalSeconds != 2) {
+			t.Errorf("%s: %+v", confirmURL, pending)
+		}
+	}
+	// Short secrets are refused too.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(`{"pending":true,"email":"b@example.test","confirm_id":"short","poll_token":"short","confirm_url":"https://w.test/connect/confirm#short","expires_in_seconds":300}`))
+	}))
+	defer srv.Close()
+	t.Setenv("ARCHIVIST_BASE_URL", srv.URL)
+	if _, p, err := client.New("", "dev").RedeemPairing(context.Background(), "ABCDEFGHJK", "box", client.ConfirmBrowser); err == nil || p != nil {
+		t.Fatal("short secrets accepted")
+	}
+}
+
+func TestPollPairing(t *testing.T) {
+	pending := &client.PendingPairing{ConfirmID: testConfirmID, PollToken: testPollToken}
+	cases := []struct {
+		status        int
+		body          string
+		state, reason string
+		key           bool
+		invalid, fail bool
+	}{
+		{200, `{"state":"pending"}`, "pending", "", false, false, false},
+		{200, `{"state":"expired"}`, "expired", "", false, false, false},
+		{200, `{"state":"refused","reason":"other_account"}`, "refused", "other_account", false, false, false},
+		{200, `{"state":"confirmed","key":"ak_secretsecretsecret","key_id":"ak_id","name":"n","tier":"pro","email":"b@example.test"}`, "confirmed", "", true, false, false},
+		{200, `{"state":"confirmed","key":"nope","key_id":""}`, "", "", false, false, true},
+		{200, `{"state":"later"}`, "", "", false, false, true},
+		{400, `{"error":"x","code":"PAIRING_CODE_INVALID"}`, "", "", false, true, true},
+		{502, `{"error":"x","code":"CLERK_ERROR"}`, "", "", false, false, true},
+	}
+	for _, tc := range cases {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPost || r.URL.Path != "/agent-pairing/pending/poll" || r.Header.Get("Authorization") != "" {
+				t.Errorf("unexpected %s %s auth %q", r.Method, r.URL.Path, r.Header.Get("Authorization"))
+			}
+			var body map[string]string
+			b, _ := io.ReadAll(r.Body)
+			if err := json.Unmarshal(b, &body); err != nil || body["confirm_id"] != testConfirmID || body["poll_token"] != testPollToken || len(body) != 2 {
+				t.Errorf("body %s", b)
+			}
+			w.WriteHeader(tc.status)
+			_, _ = w.Write([]byte(tc.body))
+		}))
+		t.Setenv("ARCHIVIST_BASE_URL", srv.URL)
+		r, err := client.New("ak_should_not_be_sent_00000", "dev").PollPairing(context.Background(), pending)
+		srv.Close()
+		if tc.fail {
+			if err == nil {
+				t.Errorf("%s: accepted %+v", tc.body, r)
+			}
+			if tc.invalid && !errors.Is(err, client.ErrPairingCodeInvalid) {
+				t.Errorf("%s: %v", tc.body, err)
+			}
+			continue
+		}
+		if err != nil || string(r.State) != tc.state || r.Reason != tc.reason || (r.Key != nil) != tc.key {
+			t.Errorf("%s: %+v %v", tc.body, r, err)
+		}
+		if tc.key && (r.Key.Key != "ak_secretsecretsecret" || r.Key.Email != "b@example.test" || r.Key.Tier != "pro") {
+			t.Errorf("key %+v", r.Key)
+		}
+	}
+}
+
+func TestDeclinePairing(t *testing.T) {
+	var got map[string]string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/agent-pairing/pending/decline" || r.Header.Get("Authorization") != "" {
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+		b, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(b, &got)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	t.Setenv("ARCHIVIST_BASE_URL", srv.URL)
+	err := client.New("ak_should_not_be_sent_00000", "dev").DeclinePairing(context.Background(), &client.PendingPairing{ConfirmID: testConfirmID, PollToken: testPollToken})
+	if err != nil || got["confirm_id"] != testConfirmID || got["reason"] != "cancelled" || len(got) != 2 {
+		t.Fatalf("%v %v", got, err)
 	}
 }
