@@ -980,8 +980,10 @@ func reactionFilingsBody(t *testing.T) string {
 			"reaction", reaction, "url", "https://mosaic-finance.com/filings/"+id+"/f/k1.tok/"))
 	}
 	measured := json.RawMessage(ordered(t, "event_session", "2025-11-06", "z", -3.456, "abnormal_return", -7.1, "kind", "company"))
+	upward := json.RawMessage(ordered(t, "event_session", "2025-08-01", "z", 2.1, "abnormal_return", 4.2, "kind", "company"))
 	return ordered(t, "company", json.RawMessage(ordered(t, "name", "Cameco Corporation", "symbol", "CCO:CA", "exchange", "TSX")),
-		"filings", rawList(row("aaaaaaaa-0000-4000-8000-000000000002", measured), row("aaaaaaaa-0000-4000-8000-000000000001", nil)),
+		"filings", rawList(row("aaaaaaaa-0000-4000-8000-000000000002", measured), row("aaaaaaaa-0000-4000-8000-000000000003", upward),
+			row("aaaaaaaa-0000-4000-8000-000000000001", nil)),
 		"truncated", false, "next_cursor", nil)
 }
 
@@ -994,10 +996,13 @@ func TestFilingsMinReactionZ(t *testing.T) {
 	if u := srv.last(); u != "/research/filings?limit=10&min_reaction_z=2&symbol=CCO%3ACA" {
 		t.Errorf("request %q", u)
 	}
-	lines := strings.Split(stdout, "\n")
-	if !strings.HasPrefix(lines[0], "FILING_ID") || !strings.Contains(lines[0], "PERIOD  MOVE (z)  URL") ||
-		!strings.Contains(lines[1], "  -3.46     https://") || !strings.Contains(lines[2], "-       ") || strings.Contains(lines[2], ".46") {
-		t.Errorf("table:\n%s", stdout)
+	// The signed z to two places, up and down; an empty MOVE (z) cell for a null reaction.
+	want := "FILING_ID                             FORM  DATE        PERIOD  MOVE (z)  URL\n" +
+		"aaaaaaaa-0000-4000-8000-000000000002  MD&A  2025-11-06  -       -3.46     https://mosaic-finance.com/filings/aaaaaaaa-0000-4000-8000-000000000002/f/k1.tok/\n" +
+		"aaaaaaaa-0000-4000-8000-000000000003  MD&A  2025-11-06  -       +2.10     https://mosaic-finance.com/filings/aaaaaaaa-0000-4000-8000-000000000003/f/k1.tok/\n" +
+		"aaaaaaaa-0000-4000-8000-000000000001  MD&A  2025-11-06  -                 https://mosaic-finance.com/filings/aaaaaaaa-0000-4000-8000-000000000001/f/k1.tok/\n"
+	if stdout != want {
+		t.Errorf("table\ngot  %q\nwant %q", stdout, want)
 	}
 	// 0 is sent (it drops unmeasured filings); a fraction keeps its digits.
 	for arg, want := range map[string]string{"0": "min_reaction_z=0", "2.5": "min_reaction_z=2.5", "50": "min_reaction_z=50"} {
@@ -1017,6 +1022,7 @@ func TestFilingsWithoutMinReactionZUnchanged(t *testing.T) {
 	}
 	want := "FILING_ID                             FORM  DATE        PERIOD  URL\n" +
 		"aaaaaaaa-0000-4000-8000-000000000002  MD&A  2025-11-06  -       https://mosaic-finance.com/filings/aaaaaaaa-0000-4000-8000-000000000002/f/k1.tok/\n" +
+		"aaaaaaaa-0000-4000-8000-000000000003  MD&A  2025-11-06  -       https://mosaic-finance.com/filings/aaaaaaaa-0000-4000-8000-000000000003/f/k1.tok/\n" +
 		"aaaaaaaa-0000-4000-8000-000000000001  MD&A  2025-11-06  -       https://mosaic-finance.com/filings/aaaaaaaa-0000-4000-8000-000000000001/f/k1.tok/\n"
 	if stdout != want {
 		t.Errorf("table\ngot  %q\nwant %q", stdout, want)
@@ -1047,12 +1053,12 @@ func TestFilingsMinReactionZCompactKeepsReaction(t *testing.T) {
 		t.Errorf("request %q", u)
 	}
 	want := `"reaction":{"event_session":"2025-11-06","z":-3.456,"abnormal_return":-7.1,"kind":"company"}`
-	if !strings.Contains(stdout, want) || strings.Count(stdout, `"reaction"`) != 1 {
-		t.Errorf("compact output lacks the reaction object or kept the null one:\n%s", stdout)
+	if !strings.Contains(stdout, want) || strings.Count(stdout, `"reaction"`) != 2 {
+		t.Errorf("compact output lacks the reaction objects or kept the null one:\n%s", stdout)
 	}
 	got := decodeCompact(t, stdout)
 	rows, _ := got["filings"].([]any)
-	if len(rows) != 2 {
+	if len(rows) != 3 {
 		t.Fatalf("filings %d: %s", len(rows), stdout)
 	}
 	if r, _ := rows[0].(map[string]any)["reaction"].(map[string]any); r["z"] != -3.456 {
