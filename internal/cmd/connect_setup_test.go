@@ -41,12 +41,37 @@ func runRoot(t *testing.T, args ...string) (string, int) {
 }
 
 // sandbox points HOME at a temp dir and clears credentials from the env.
+// It also gives the test no terminal and no browser (a pairing test that
+// answers the confirmation installs a fake one) and points the API at a local server
+// that answers 404, so no test reaches the real terminal or Mosaic.
 func sandbox(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
 	setHome(t, home)
 	t.Setenv("ARCHIVIST_TOKEN", "")
 	t.Setenv("XDG_CONFIG_HOME", "")
+	prevOpen := openConfirmTerminal
+	openConfirmTerminal = func() (io.ReadWriteCloser, error) { return nil, errors.New("no terminal") }
+	t.Cleanup(func() { openConfirmTerminal = prevOpen })
+	// No browser either, and no background service (Story 94.3).
+	prevAvail, prevBrowser, prevInstalled := pairBrowserAvailable, openPairBrowser, pairServiceInstalled
+	prevVisible := pairOutputVisible
+	pairOutputVisible = func() bool { return false }
+	t.Cleanup(func() { pairOutputVisible = prevVisible })
+	pairBrowserAvailable = func() bool { return false }
+	openPairBrowser = func(string) (<-chan error, error) { return nil, errors.New("no browser") }
+	pairServiceInstalled = func() bool { return false }
+	t.Cleanup(func() {
+		pairBrowserAvailable, openPairBrowser, pairServiceInstalled = prevAvail, prevBrowser, prevInstalled
+	})
+	t.Setenv("ARCHIVIST_PAIR_CONFIRM", "")
+	offline := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error":"Not found","code":"NOT_FOUND"}`))
+	}))
+	t.Cleanup(offline.Close)
+	t.Setenv("ARCHIVIST_BASE_URL", offline.URL)
 	// On Windows --service would otherwise supervise a copy of the test
 	// binary; these tests run the daemon itself (Story 78.34).
 	t.Setenv("ARCHIVIST_SERVICE_SUPERVISED", "1")
@@ -102,6 +127,8 @@ func TestConnectSetupFlagsAreExclusive(t *testing.T) {
 		{"connect", "--status", "--web-search"},
 		{"connect", "--uninstall", "--web-search"},
 		{"connect", "--pair", "ABCDE-FGHJK", "--web-search"},
+		// Story 94.3: no flag skips the pairing confirmation.
+		{"connect", "--pair", "ABCDE-FGHJK", "--yes"},
 	} {
 		if out, code := runRoot(t, args...); code != ExitUsageError {
 			t.Errorf("%v: exit %d\n%s", args, code, out)
@@ -141,16 +168,20 @@ func TestConnectPairSavesKeyAndNeverPrintsIt(t *testing.T) {
 	home := sandbox(t)
 	var hits atomic.Int32
 	seen := map[string]string{}
-	pairServer(t, 200, `{"key":"`+pairedKey+`","key_id":"ak_kid","name":"archivist box 2026-10-04 1200Z ab12","tier":"pro"}`, &seen, &hits)
+	pairServer(t, 200, `{"key":"`+pairedKey+`","key_id":"ak_kid","name":"archivist box 2026-10-04 1200Z ab12","tier":"pro","email":"b@example.test"}`, &seen, &hits)
 	t.Setenv("ARCHIVIST_TOKEN", "ak_envshadow0000000000")
+	tty := useTerminal(t, "\n")
 	out, code := runRoot(t, "connect", "--pair", "abcde", "fghjk")
 	if code != 0 || hits.Load() != 1 {
 		t.Fatalf("exit %d hits %d\n%s", code, hits.Load(), out)
 	}
-	if seen["code"] != "ABCDEFGHJK" || seen["device_name"] == "" {
+	if seen["code"] != "ABCDEFGHJK" || seen["device_name"] == "" || seen["confirm"] != "terminal" {
 		t.Fatalf("request %v", seen)
 	}
-	for _, want := range []string{"Paired as archivist box 2026-10-04 1200Z ab12.", "ak_paireds...789", "ARCHIVIST_TOKEN is set"} {
+	if got := tty.written(); got != "This computer will connect to b@example.test. Continue? [Y/n] " {
+		t.Fatalf("terminal %q", got)
+	}
+	for _, want := range []string{"Paired as archivist box 2026-10-04 1200Z ab12.", "Account: b@example.test", "ak_paireds...789", "ARCHIVIST_TOKEN is set"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output lacks %q:\n%s", want, out)
 		}
@@ -189,7 +220,11 @@ func TestConnectPairRefusals(t *testing.T) {
 			home := sandbox(t)
 			var hits atomic.Int32
 			pairServer(t, tc.status, tc.body, nil, &hits)
+			tty := useTerminal(t, "\n")
 			out, code := runRoot(t, "connect", "--pair", "ABCDE-FGHJK")
+			if tty.written() != "" {
+				t.Errorf("a refused pairing asked: %q", tty.written())
+			}
 			if code != tc.exit || !strings.Contains(out, tc.says) || hits.Load() != 1 {
 				t.Fatalf("exit %d hits %d\n%s", code, hits.Load(), out)
 			}
@@ -218,6 +253,7 @@ func TestConnectPairRefusals(t *testing.T) {
 		url := srv.URL
 		srv.Close()
 		t.Setenv("ARCHIVIST_BASE_URL", url)
+		useTerminal(t, "\n")
 		if out, code := runRoot(t, "connect", "--pair", "ABCDE-FGHJK"); code != ExitServerError {
 			t.Fatalf("exit %d\n%s", code, out)
 		}
@@ -369,36 +405,6 @@ func TestConnectServiceModeIgnoresEnvAndFlagTokens(t *testing.T) {
 	}
 	if _, err := os.Stat(service.PIDPath(home)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("service.pid left after exit: %v", err)
-	}
-}
-
-// Pairing again over a different saved key says the earlier key is still
-// active, masked only.
-func TestConnectPairWarnsAboutEarlierKey(t *testing.T) {
-	home := sandbox(t)
-	const earlier = "ak_earliersecretvalue987654"
-	saveKey(t, home, earlier)
-	var hits atomic.Int32
-	pairServer(t, 200, `{"key":"`+pairedKey+`","key_id":"ak_kid","name":"archivist box","tier":"pro"}`, nil, &hits)
-	out, code := runRoot(t, "connect", "--pair", "ABCDE-FGHJK")
-	if code != 0 {
-		t.Fatalf("exit %d\n%s", code, out)
-	}
-	if !strings.Contains(out, "the key saved here before (ak_earlier...654) is still active. Revoke it in Mosaic") {
-		t.Fatalf("no earlier key note:\n%s", out)
-	}
-	if strings.Contains(out, earlier) || strings.Contains(out, pairedKey) {
-		t.Fatalf("output leaks a key:\n%s", out)
-	}
-	// Pairing with nothing saved before, or the same key again: no note.
-	home = sandbox(t)
-	pairServer(t, 200, `{"key":"`+pairedKey+`","key_id":"ak_kid","name":"archivist box","tier":"pro"}`, nil, &hits)
-	if out, _ := runRoot(t, "connect", "--pair", "ABCDE-FGHJK"); strings.Contains(out, "still active") {
-		t.Fatalf("note without an earlier key:\n%s", out)
-	}
-	saveKey(t, home, pairedKey)
-	if out, _ := runRoot(t, "connect", "--pair", "ABCDE-FGHJK"); strings.Contains(out, "still active") {
-		t.Fatalf("note for the same key:\n%s", out)
 	}
 }
 

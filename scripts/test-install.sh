@@ -5,12 +5,15 @@
 #
 # Builds archivist from this checkout (or takes the given binary), lays out
 # a fake release <base>/download/<tag>/ (archive plus SHA256SUMS), serves it
-# on 127.0.0.1 together with a fake POST /agent-pairing/redeem, and runs
-# install.sh under a throwaway HOME with stub systemctl and loginctl first on
-# PATH. Nothing touches the real ~/.archivist, ~/.config or service manager.
+# on 127.0.0.1 together with fake pairing routes, and runs install.sh under a
+# throwaway HOME with stub systemctl and loginctl first on PATH. Its output
+# is captured, so pairing picks the browser confirmation on its own (BROWSER
+# is a stand in that confirms the pending pairing) and the replay needs no
+# terminal. Nothing touches the real ~/.archivist, ~/.config or service
+# manager.
 #
 # Asserts: install + pair + unit written; a re-pair saves the new key and
-# notes the earlier one (masked only), and --no-service still reinstalls a
+# revokes the earlier one (masked only), and --no-service still reinstalls a
 # service that is already installed; an update without --pair reinstalls the
 # service; a stale brew channel with no installed cask installs directly; a
 # failed service install after pairing prints the resume step and exits
@@ -69,33 +72,89 @@ make_release() {
 make_release v9.9.9 0
 make_release v9.9.8 1
 
-# --- fake server: static release files plus the redeem route ------------------
+# --- fake server: static release files plus the pairing routes ----------------
+# Story 94.3: a browser mode redeem answers 202 pending; the BROWSER stand in
+# below confirms it (as a browser signed in to the code's account would) and
+# the poll then brings the key once. The self revoke and the key list answer
+# too, so a re-pair can revoke the key it replaced.
 cat > "$WORK/server.py" <<'PY'
-import json, os, sys
+import json, os, secrets, sys, threading
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 root, log_path, port_file = sys.argv[1], sys.argv[2], sys.argv[3]
+# Story 94.3: pending browser confirmations by confirm_id.
+pending, lock = {}, threading.Lock()
+
+def key_for(code):
+    return "ak_replay_" + code.lower() + "x" * 24
 
 class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *a, **kw):
         super().__init__(*a, directory=root, **kw)
 
-    def do_POST(self):
-        length = int(self.headers.get("content-length", 0))
-        body = json.loads(self.rfile.read(length) or b"{}")
+    def log(self, body):
         with open(log_path, "a") as f:
-            f.write(json.dumps({"path": self.path, "auth": self.headers.get("Authorization"), "body": body}) + "\n")
-        if self.path == "/agent-pairing/redeem" and body.get("code") in ("ABCDE12345", "ABCDE12346"):
-            status, out = 200, {"key": "ak_replay_" + body["code"].lower() + "x" * 24, "key_id": "ak_id_replay",
-                                "name": "archivist replay 2026-10-04 00:00:00Z ab12", "tier": "pro"}
-        else:
-            status, out = 400, {"error": "This pairing code is not valid or has expired.", "code": "PAIRING_CODE_INVALID"}
-        data = json.dumps(out).encode()
+            f.write(json.dumps({"method": self.command, "path": self.path, "auth": self.headers.get("Authorization"), "body": body}) + "\n")
+
+    def answer(self, status, out=None):
+        data = b"" if out is None else json.dumps(out).encode()
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
+
+    def do_POST(self):
+        length = int(self.headers.get("content-length", 0))
+        body = json.loads(self.rfile.read(length) or b"{}")
+        self.log(body)
+        if self.path == "/agent-pairing/redeem" and body.get("code") in ("ABCDE12345", "ABCDE12346"):
+            if body.get("confirm") == "browser":
+                confirm_id, poll_token = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
+                with lock:
+                    pending[confirm_id] = {"poll_token": poll_token, "code": body["code"], "state": "pending"}
+                port = self.server.server_address[1]
+                return self.answer(202, {"pending": True, "email": "replay@example.test", "confirm_id": confirm_id,
+                                         "poll_token": poll_token,
+                                         "confirm_url": "http://127.0.0.1:%d/connect/confirm#%s" % (port, confirm_id),
+                                         "expires_in_seconds": 60, "poll_interval_seconds": 1})
+            return self.answer(200, {"key": key_for(body["code"]), "key_id": "ak_id_replay",
+                                     "name": "archivist replay 2026-10-04 00:00:00Z ab12", "tier": "pro",
+                                     "email": "replay@example.test"})
+        if self.path == "/test/confirm":
+            # The BROWSER stand in: the confirm page of a browser signed in to the code's account.
+            with lock:
+                p = pending.get(body.get("confirm_id"))
+                if p and p["state"] == "pending":
+                    p["state"] = "confirmed"
+            return self.answer(204)
+        if self.path == "/agent-pairing/pending/poll":
+            with lock:
+                p = pending.get(body.get("confirm_id"))
+                if not p or p["poll_token"] != body.get("poll_token"):
+                    return self.answer(400, {"error": "This pairing code is not valid or has expired.", "code": "PAIRING_CODE_INVALID"})
+                state = p["state"]
+                if state == "confirmed":
+                    p["state"] = "completed"
+            if state == "confirmed":
+                return self.answer(200, {"state": "confirmed", "key": key_for(p["code"]), "key_id": "ak_id_replay",
+                                         "name": "archivist replay 2026-10-04 00:00:00Z ab12", "tier": "pro",
+                                         "email": "replay@example.test"})
+            return self.answer(200, {"state": "pending" if state == "pending" else "expired"})
+        if self.path == "/agent-pairing/pending/decline":
+            return self.answer(204)
+        return self.answer(400, {"error": "This pairing code is not valid or has expired.", "code": "PAIRING_CODE_INVALID"})
+
+    def do_DELETE(self):
+        self.log(None)
+        if self.path == "/account/cli-tokens/current" and (self.headers.get("Authorization") or "").startswith("Bearer ak_"):
+            return self.answer(204)
+        return self.answer(404, {"error": "Not found", "code": "NOT_FOUND"})
+
+    def do_GET(self):
+        if self.path == "/account/cli-tokens":
+            return self.answer(200, {"user_email": "replay@example.test", "tier": "pro", "tokens": []})
+        return super().do_GET()
 
     def log_message(self, *a):
         pass
@@ -130,7 +189,19 @@ cat > "$WORK/stubs/loginctl" <<'SH'
 echo "loginctl $*" >> "$STUB_LOG"
 exit 0
 SH
-chmod 0755 "$WORK/stubs/systemctl" "$WORK/stubs/loginctl"
+# The browser: confirms the pending pairing named by the URL's fragment.
+cat > "$WORK/stubs/browser-confirm" <<'SH'
+#!/usr/bin/env python3
+import json, sys, urllib.parse, urllib.request
+url = urllib.parse.urlsplit(sys.argv[1])
+with open(sys.argv[0] + ".log", "a") as f:
+    f.write(url.path + "\n")
+req = urllib.request.Request("%s://%s/test/confirm" % (url.scheme, url.netloc),
+                             data=json.dumps({"confirm_id": url.fragment}).encode(),
+                             headers={"Content-Type": "application/json"}, method="POST")
+urllib.request.urlopen(req, timeout=10).read()
+SH
+chmod 0755 "$WORK/stubs/systemctl" "$WORK/stubs/loginctl" "$WORK/stubs/browser-confirm"
 
 # run_install HOME VERSION ARGS...: install.sh in a clean environment.
 run_install() {
@@ -147,6 +218,7 @@ run_install() {
     ARCHIVIST_RELEASE_BASE_URL="$BASE" \
     ARCHIVIST_INSTALL_VERSION="$version" \
     ARCHIVIST_BASE_URL="$BASE" \
+    BROWSER="$WORK/stubs/browser-confirm" \
     bash "$ROOT/scripts/install.sh" "$@"
 }
 
@@ -170,7 +242,10 @@ if grep -q 'ARCHIVIST_TOKEN\|ak_replay' "$UNIT"; then fail "unit carries a crede
 grep -q 'systemctl --user enable --now archivist-connect.service' "$WORK/calls.log" || fail "service not enabled"
 grep -q 'loginctl --no-ask-password enable-linger' "$WORK/calls.log" || fail "linger not attempted with --no-ask-password"
 grep -q '"code": "ABCDE12345"' "$WORK/redeem.log" || fail "redeem did not send the normalised code"
-if grep -q '"auth": "' "$WORK/redeem.log"; then fail "redeem sent Authorization"; fi
+grep -q '"confirm": "browser"' "$WORK/redeem.log" || fail "redeem did not ask for the browser confirmation"
+grep -q '/agent-pairing/pending/poll' "$WORK/redeem.log" || fail "the pending pairing was not polled"
+grep -q '^/connect/confirm$' "$WORK/stubs/browser-confirm.log" || fail "the confirm page was not opened"
+if grep '"path": "/agent-pairing/' "$WORK/redeem.log" | grep -q '"auth": "'; then fail "pairing sent Authorization"; fi
 case "$OUT" in *ak_replay_abcde12345x*) fail "the key was printed" ;; esac
 case "$OUT" in *"Paired as archivist replay"*) ;; *) fail "no pairing line:
 $OUT" ;; esac
@@ -189,14 +264,17 @@ grep -q 'systemctl --user enable --now archivist-connect.service' "$WORK/calls.l
 OLD_KEY="ak_replay_abcde12345$(printf 'x%.0s' $(seq 1 24))"
 NEW_KEY="ak_replay_abcde12346$(printf 'x%.0s' $(seq 1 24))"
 [ "$(cat "$CRED")" = "$NEW_KEY" ] || fail "re-pair did not save the new key"
-case "$OUT" in *"Note: the key saved here before (ak_replay_...xxx) is still active."*) ;; *) fail "no earlier key note:
+case "$OUT" in *"The key saved here before (ak_replay_...xxx) no longer works."*) ;; *) fail "earlier key not revoked:
 $OUT" ;; esac
+grep '"method": "DELETE", "path": "/account/cli-tokens/current"' "$WORK/redeem.log" | grep -q "\"auth\": \"Bearer $OLD_KEY\"" \
+  || fail "the earlier key did not revoke itself"
+if grep '"method": "DELETE"' "$WORK/redeem.log" | grep -q "$NEW_KEY"; then fail "the new key was revoked"; fi
 case "$OUT" in *"$OLD_KEY"*|*"$NEW_KEY"*) fail "a full key was printed" ;; esac
-pass "re-pair saves the new key, notes the earlier one masked, and --no-service restarts the installed service"
+pass "re-pair saves the new key, revokes the earlier one (masked), and --no-service restarts the installed service"
 
 # --- 2b. an update without --pair reinstalls the installed service ------------
 : > "$WORK/calls.log"
-REDEEMS_BEFORE="$(wc -l < "$WORK/redeem.log")"
+REDEEMS_BEFORE="$(grep -c '"path": "/agent-pairing/redeem"' "$WORK/redeem.log")"
 set +e
 OUT="$(run_install "$H1" v9.9.9 2>&1)"
 CODE=$?
@@ -205,7 +283,7 @@ set -e
 $OUT"
 grep -q 'systemctl --user enable --now archivist-connect.service' "$WORK/calls.log" \
   || fail "update only did not rerun connect --install"
-[ "$(wc -l < "$WORK/redeem.log")" = "$REDEEMS_BEFORE" ] || fail "update only called redeem"
+[ "$(grep -c '"path": "/agent-pairing/redeem"' "$WORK/redeem.log")" = "$REDEEMS_BEFORE" ] || fail "update only called redeem"
 [ "$(cat "$CRED")" = "$NEW_KEY" ] || fail "update only changed the saved key"
 pass "update without --pair reruns connect --install"
 

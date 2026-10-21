@@ -104,13 +104,21 @@ Claude Code login reported as logged in is accepted.
 One-step setup: the workspace shows a pairing code.
 
   archivist connect --pair CODE   redeem a pairing code for a new key and save it
+                                  once the account it names is confirmed:
+                                  "Continue? [Y/n]" on the terminal, or,
+                                  with no terminal, a Mosaic page opened in
+                                  this computer's browser, which connects
+                                  only when that browser is signed in to the
+                                  same account; pairing again revokes the
+                                  key it replaces
   archivist connect --install     run connect as a background user service
                                   (launchd agent, systemd user unit or Windows
                                   logon task) that starts at login and
                                   restarts after a crash;
                                   add --max-permission <mode> to set the
                                   service's ceiling (default auto_edits)
-  archivist connect --status      report the service, its ceiling and the saved key
+  archivist connect --status      report the service, its ceiling, the saved key
+                                  and its account
   archivist connect --uninstall   stop and remove the background service
 
 The service uses the saved key (~/.archivist/credentials), never
@@ -120,7 +128,10 @@ flags are used one at a time. Windows runs the task as archivistw.exe
 
 Exit codes: 0 ok; 1 refused or stopped (feature off, superseded, too old,
 or a session-bound start refused, for example a model or effort this
-machine does not offer), service not running, or service setup failed; 2 bad flag or relay URL; 3 no
+machine does not offer), service not running, service setup failed, or
+pairing not confirmed (cancelled, refused in the browser, not confirmed in
+time, or no terminal and no browser to confirm it); 2 bad flag or relay
+URL; 3 no
 usable harness (Claude Code not found, or no usable Claude Code or Codex);
 4 credential or Claude login problem, or an invalid or expired pairing
 code; 5 server or network error while pairing; 7 pairing rate limited.`
@@ -173,7 +184,7 @@ func newConnectCmd(version string) *cobra.Command {
 			case m.uninstall:
 				return runServiceUninstall(cmd)
 			case m.status:
-				return runServiceStatus(cmd)
+				return runServiceStatus(cmd, version)
 			}
 			if model != "" && !connectModelRe.MatchString(model) {
 				_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Error: --claude-model %q is not a model name\n", model)

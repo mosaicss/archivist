@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 
@@ -315,20 +316,72 @@ func describeSource(source auth.Source) string {
 
 // openURL opens a URL in the default system browser.
 func openURL(url string) error {
-	var cmd string
-	var args []string
+	cmd, err := browserCommand(url)
+	if err != nil {
+		return err
+	}
+	return cmd.Start()
+}
+
+// envBrowser is the first entry of $BROWSER, a list of programs separated
+// like PATH (':', the convention xdg-open follows; ';' on Windows, whose
+// paths carry a drive colon); empty when unset.
+func envBrowser() string {
+	for _, entry := range filepath.SplitList(os.Getenv("BROWSER")) {
+		if entry = strings.TrimSpace(entry); entry != "" {
+			return entry
+		}
+	}
+	return ""
+}
+
+// browserCommand opens url: $BROWSER's first entry run as one program with
+// the URL as its only argument, else the system opener.
+func browserCommand(url string) (*exec.Cmd, error) {
+	if b := envBrowser(); b != "" {
+		return exec.Command(b, url), nil
+	}
 	switch runtime.GOOS {
 	case "darwin":
-		cmd = "open"
-		args = []string{url}
+		return exec.Command("open", url), nil
 	case "linux":
-		cmd = "xdg-open"
-		args = []string{url}
+		return exec.Command("xdg-open", url), nil
 	case "windows":
-		cmd = "cmd"
-		args = []string{"/c", "start", url}
-	default:
-		return fmt.Errorf("unsupported OS: %s", runtime.GOOS)
+		return exec.Command("cmd", "/c", "start", url), nil
 	}
-	return exec.Command(cmd, args...).Start()
+	return nil, fmt.Errorf("unsupported OS: %s", runtime.GOOS)
+}
+
+// browserAvailable reports whether a browser can be opened here (Story
+// 94.3): $BROWSER is set, or macOS or Windows, or a Linux desktop session
+// (DISPLAY or WAYLAND_DISPLAY) with xdg-open on PATH.
+func browserAvailable() bool {
+	if envBrowser() != "" {
+		return true
+	}
+	switch runtime.GOOS {
+	case "darwin", "windows":
+		return true
+	}
+	if os.Getenv("DISPLAY") == "" && os.Getenv("WAYLAND_DISPLAY") == "" {
+		return false
+	}
+	_, err := exec.LookPath("xdg-open")
+	return err == nil
+}
+
+// startBrowser opens url without waiting for the opener (a browser started
+// by $BROWSER may stay in the foreground); the channel receives the
+// opener's exit once it ends.
+func startBrowser(url string) (<-chan error, error) {
+	cmd, err := browserCommand(url)
+	if err != nil {
+		return nil, err
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	return done, nil
 }

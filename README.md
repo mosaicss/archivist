@@ -250,16 +250,49 @@ It installs or updates archivist, then runs:
 ```sh
 archivist connect --pair ABCDE-FGHJK   # redeem the code for a new ak_ key, saved to ~/.archivist/credentials
 archivist connect --install            # run connect as a background user service
-archivist connect --status             # report the service, its ceiling and the saved key
+archivist connect --status             # report the service, its ceiling, the saved key and its account
 ```
+
+Before it saves anything, `--pair` names the account the code belongs to and
+has it confirmed. On a terminal it asks:
+
+```text
+This computer will connect to you@example.com. Continue? [Y/n]
+```
+
+Enter, `y` or `yes` saves the key; any other answer, Ctrl-C or the end of
+input cancels: nothing is saved, the new key is revoked and the command exits
+1. The question is asked on the terminal itself (`/dev/tty`, on Windows the
+console), so it works when the command is piped into `bash`.
+
+The question is asked only when the output shows on a terminal too. Where no
+terminal is available, or nobody sees it (an agent shell that captures the
+output, for example), `--pair` opens
+a Mosaic page in this computer's browser instead and waits for it. A browser
+signed in to the account the code came from connects the computer with no
+click; a browser signed in to another account, or not signed in, does not,
+and nothing is saved. If the browser cannot be opened, `--pair` prints the
+link to open by hand. Ctrl-C while it waits cancels the pairing; after five
+minutes without an answer it stops with nothing saved. With neither a
+terminal nor a browser, `--pair` exits 1 before it sends the code, so the
+code stays usable: run the command in a terminal. No flag skips the
+confirmation. `ARCHIVIST_PAIR_CONFIRM=browser` chooses the browser page even
+on a terminal, and `BROWSER` names the program that opens it (the first
+entry of the list).
 
 `--pair` accepts the code in any case, with or without the hyphen or spaces,
 and never prints the key (only its masked form). An unknown, used or expired
 code exits 4: get a new code in Mosaic. The redeem request is sent once and
 never retried. If `ARCHIVIST_TOKEN` is set it still takes precedence in that
-terminal, and `--pair` warns about it. Pairing again replaces the saved key;
-the earlier key stays active, and `--pair` says so (masked) so you can
-revoke it in Mosaic. A `~/.archivist/credentials` symlink (dotfiles) is kept:
+terminal, and `--pair` warns about it. Pairing again replaces the saved key
+and then revokes the earlier `ak_` key (`DELETE /account/cli-tokens/current`,
+sent with that key), so it stops working; if that call fails, `--pair` says
+the earlier key is still active (masked) so you can revoke it in Mosaic.
+When the background service is installed, `--pair` says to run
+`archivist connect --install` so the service restarts with the new key.
+`--status` shows the saved key's account (`Account:`), or says the key is no
+longer accepted or that Mosaic could not be reached; its exit code does not
+depend on that line. A `~/.archivist/credentials` symlink (dotfiles) is kept:
 the key is written to the file it points to, which is created when it does
 not exist yet.
 

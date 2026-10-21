@@ -1,0 +1,988 @@
+package cmd
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/mosaicss/archivist/internal/service"
+)
+
+// Story 94.3: pairing names the account and saves nothing before a yes.
+
+const (
+	earlierKey   = "ak_earliersecretvalue987654"
+	accountEmail = "b@example.test"
+)
+
+// fakeTTY is a terminal whose answer is fixed in advance.
+type fakeTTY struct {
+	in      io.Reader
+	mu      sync.Mutex
+	out     bytes.Buffer
+	reading chan struct{}
+	once    sync.Once
+	closed  atomic.Bool
+}
+
+func (f *fakeTTY) Read(p []byte) (int, error) {
+	f.once.Do(func() { close(f.reading) })
+	return f.in.Read(p)
+}
+
+func (f *fakeTTY) Write(p []byte) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.out.Write(p)
+}
+
+func (f *fakeTTY) Close() error {
+	f.closed.Store(true)
+	if c, ok := f.in.(io.Closer); ok {
+		_ = c.Close()
+	}
+	return nil
+}
+
+func (f *fakeTTY) written() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.out.String()
+}
+
+// useTerminal gives the test a terminal that answers input (call it after
+// sandbox, which installs "no terminal").
+func useTerminal(t *testing.T, input string) *fakeTTY {
+	t.Helper()
+	return useTerminalReader(t, strings.NewReader(input))
+}
+
+func useTerminalReader(t *testing.T, in io.Reader) *fakeTTY {
+	t.Helper()
+	f := &fakeTTY{in: in, reading: make(chan struct{})}
+	prev, prevVisible := openConfirmTerminal, pairOutputVisible
+	openConfirmTerminal = func() (io.ReadWriteCloser, error) { return f, nil }
+	pairOutputVisible = func() bool { return true }
+	t.Cleanup(func() { openConfirmTerminal, pairOutputVisible = prev, prevVisible })
+	return f
+}
+
+// fakeMosaic answers the redeem, the self revoke and the key list.
+type fakeMosaic struct {
+	mu       sync.Mutex
+	redeems  int
+	confirms []string       // the confirm field of every redeem
+	revoked  []string       // bearer of every DELETE /account/cli-tokens/current
+	revokeAs map[string]int // status per bearer; default 204
+	listAs   map[string]int // GET /account/cli-tokens status per bearer; default 200
+	other    []string
+	// Story 94.3 browser mode: pending (when set) answers a browser redeem
+	// with 202; polls answer in turn, the last one repeating.
+	pending  string
+	polls    []fakeAnswer
+	pollHits int
+	onPoll   func(answer fakeAnswer) // called before a poll is answered
+	declines []string                // reason of every decline
+}
+
+type fakeAnswer struct {
+	status int
+	body   string
+}
+
+func newFakeMosaic(t *testing.T, redeemBody string) *fakeMosaic {
+	t.Helper()
+	f := &fakeMosaic{revokeAs: map[string]int{}, listAs: map[string]int{}}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		bearer := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/agent-pairing/redeem":
+			f.redeems++
+			if r.Header.Get("Authorization") != "" {
+				t.Errorf("redeem sent Authorization")
+			}
+			var body map[string]string
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			f.confirms = append(f.confirms, body["confirm"])
+			if body["confirm"] == "browser" && f.pending != "" {
+				w.WriteHeader(http.StatusAccepted)
+				_, _ = w.Write([]byte(f.pending))
+				return
+			}
+			_, _ = w.Write([]byte(redeemBody))
+		case r.Method == http.MethodPost && r.URL.Path == "/agent-pairing/pending/poll":
+			if r.Header.Get("Authorization") != "" {
+				t.Errorf("poll sent Authorization")
+			}
+			var body map[string]string
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if body["confirm_id"] != testConfirmID || body["poll_token"] != testPollToken {
+				t.Errorf("poll body %v", body)
+			}
+			answer := fakeAnswer{http.StatusOK, `{"state":"pending"}`}
+			if len(f.polls) > 0 {
+				answer = f.polls[min(f.pollHits, len(f.polls)-1)]
+			}
+			f.pollHits++
+			if f.onPoll != nil {
+				f.onPoll(answer)
+			}
+			w.WriteHeader(answer.status)
+			_, _ = w.Write([]byte(answer.body))
+		case r.Method == http.MethodPost && r.URL.Path == "/agent-pairing/pending/decline":
+			var body map[string]string
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if body["confirm_id"] != testConfirmID {
+				t.Errorf("decline body %v", body)
+			}
+			f.declines = append(f.declines, body["reason"])
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodDelete && r.URL.Path == "/account/cli-tokens/current":
+			f.revoked = append(f.revoked, bearer)
+			status := f.revokeAs[bearer]
+			if status == 0 {
+				status = http.StatusNoContent
+			}
+			w.WriteHeader(status)
+			if status != http.StatusNoContent {
+				_, _ = w.Write([]byte(`{"error":"Failed to revoke CLI token.","code":"CLERK_ERROR"}`))
+			}
+		case r.Method == http.MethodGet && r.URL.Path == "/account/cli-tokens":
+			status := f.listAs[bearer]
+			if status == 0 {
+				status = http.StatusOK
+			}
+			w.WriteHeader(status)
+			if status == http.StatusOK {
+				_ = json.NewEncoder(w).Encode(map[string]any{"user_email": accountEmail, "tier": "pro", "tokens": []any{}})
+			} else {
+				_, _ = w.Write([]byte(`{"error":"Invalid CLI token","code":"INVALID_TOKEN"}`))
+			}
+		default:
+			f.other = append(f.other, r.Method+" "+r.URL.Path)
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv("ARCHIVIST_BASE_URL", srv.URL)
+	return f
+}
+
+func (f *fakeMosaic) state() (int, []string, []string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.redeems, append([]string(nil), f.revoked...), append([]string(nil), f.other...)
+}
+
+func redeemBody(email string) string {
+	b, _ := json.Marshal(map[string]string{"key": pairedKey, "key_id": "ak_kid", "name": "archivist box", "tier": "pro", "email": email})
+	return string(b)
+}
+
+func credentials(t *testing.T, home string) (string, bool) {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(home, ".archivist", "credentials"))
+	if err != nil {
+		return "", false
+	}
+	return strings.TrimSpace(string(b)), true
+}
+
+func noKeyLeaks(t *testing.T, out string, keys ...string) {
+	t.Helper()
+	for _, k := range keys {
+		if strings.Contains(out, k) {
+			t.Fatalf("output leaks a key:\n%s", out)
+		}
+	}
+}
+
+// Confirmed with Enter over a saved key: the prompt names the account, the
+// new key is saved, and the replaced key is revoked with itself.
+func TestConnectPairConfirmRevokesReplacedKey(t *testing.T) {
+	home := sandbox(t)
+	saveKey(t, home, earlierKey)
+	fake := newFakeMosaic(t, redeemBody(accountEmail))
+	tty := useTerminal(t, "\n")
+	out, code := runRoot(t, "connect", "--pair", "ABCDE-FGHJK")
+	if code != 0 {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if got := tty.written(); got != "This computer will connect to b@example.test. Continue? [Y/n] " {
+		t.Fatalf("terminal %q", got)
+	}
+	if !tty.closed.Load() {
+		t.Error("terminal left open")
+	}
+	if saved, _ := credentials(t, home); saved != pairedKey {
+		t.Fatalf("saved %q", saved)
+	}
+	redeems, revoked, other := fake.state()
+	if redeems != 1 || len(revoked) != 1 || revoked[0] != earlierKey || len(other) != 0 {
+		t.Fatalf("redeems %d revoked %v other %v", redeems, revoked, other)
+	}
+	for _, want := range []string{"Paired as archivist box.", "Account: b@example.test", "The key saved here before (ak_earlier...654) no longer works."} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output lacks %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "still active") {
+		t.Errorf("revoked key reported active:\n%s", out)
+	}
+	noKeyLeaks(t, out+tty.written(), earlierKey, pairedKey)
+}
+
+func TestConnectPairAcceptedAnswers(t *testing.T) {
+	for _, answer := range []string{"\n", "y\n", "Y\n", "yes\n", "YES\n", " Yes \r\n"} {
+		t.Run(strings.TrimSpace(answer), func(t *testing.T) {
+			home := sandbox(t)
+			newFakeMosaic(t, redeemBody(accountEmail))
+			useTerminal(t, answer)
+			if out, code := runRoot(t, "connect", "--pair", "ABCDE-FGHJK"); code != 0 {
+				t.Fatalf("exit %d\n%s", code, out)
+			}
+			if saved, _ := credentials(t, home); saved != pairedKey {
+				t.Fatalf("saved %q", saved)
+			}
+		})
+	}
+}
+
+// A no, an unanswered prompt (end of input) or any other answer saves
+// nothing, revokes the new key and exits 1; a saved key stays as it was.
+func TestConnectPairDeclineRevokesNewKey(t *testing.T) {
+	for _, answer := range []string{"n\n", "N\n", "no\n", "nope\n", "", "y"} {
+		t.Run(strings.TrimSpace(answer)+"|", func(t *testing.T) {
+			home := sandbox(t)
+			saveKey(t, home, earlierKey)
+			fake := newFakeMosaic(t, redeemBody(accountEmail))
+			tty := useTerminal(t, answer)
+			out, code := runRoot(t, "connect", "--pair", "ABCDE-FGHJK")
+			if code != ExitGenericError || !strings.Contains(out, "Pairing cancelled. Nothing was saved.") {
+				t.Fatalf("exit %d\n%s", code, out)
+			}
+			if !strings.Contains(tty.written(), "This computer will connect to b@example.test. Continue? [Y/n] ") {
+				t.Fatalf("terminal %q", tty.written())
+			}
+			if saved, _ := credentials(t, home); saved != earlierKey {
+				t.Fatalf("a declined pairing changed the saved key: %q", saved)
+			}
+			_, revoked, _ := fake.state()
+			if len(revoked) != 1 || revoked[0] != pairedKey {
+				t.Fatalf("revoked %v, want only the new key", revoked)
+			}
+			if strings.Contains(out, "Paired as") || strings.Contains(out, "could not be removed") {
+				t.Fatalf("output:\n%s", out)
+			}
+			noKeyLeaks(t, out, earlierKey, pairedKey)
+		})
+	}
+}
+
+func TestConnectPairDeclineWithNothingSavedWritesNoFile(t *testing.T) {
+	home := sandbox(t)
+	newFakeMosaic(t, redeemBody(accountEmail))
+	useTerminal(t, "n\n")
+	if out, code := runRoot(t, "connect", "--pair", "ABCDE-FGHJK"); code != ExitGenericError {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if _, ok := credentials(t, home); ok {
+		t.Fatal("a declined pairing wrote credentials")
+	}
+}
+
+func TestConnectPairDeclineRevokeFailureIsOneLine(t *testing.T) {
+	home := sandbox(t)
+	fake := newFakeMosaic(t, redeemBody(accountEmail))
+	fake.revokeAs[pairedKey] = http.StatusBadGateway
+	useTerminal(t, "n\n")
+	out, code := runRoot(t, "connect", "--pair", "ABCDE-FGHJK")
+	if code != ExitGenericError || !strings.Contains(out, "Pairing cancelled. Nothing was saved.") {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if n := strings.Count(out, "could not be removed"); n != 1 {
+		t.Fatalf("revoke failure lines %d:\n%s", n, out)
+	}
+	if _, ok := credentials(t, home); ok {
+		t.Fatal("credentials written")
+	}
+	noKeyLeaks(t, out, pairedKey)
+}
+
+// Ctrl-C (or SIGTERM) while the prompt waits is a no.
+func TestConnectPairInterruptIsDecline(t *testing.T) {
+	home := sandbox(t)
+	fake := newFakeMosaic(t, redeemBody(accountEmail))
+	r, w := io.Pipe()
+	t.Cleanup(func() { _ = w.Close() })
+	tty := useTerminalReader(t, r)
+	prev := pairInterrupt
+	pairInterrupt = func(ctx context.Context) (context.Context, context.CancelFunc) {
+		ctx, cancel := context.WithCancel(ctx)
+		go func() { <-tty.reading; cancel() }()
+		return ctx, cancel
+	}
+	t.Cleanup(func() { pairInterrupt = prev })
+	out, code := runRoot(t, "connect", "--pair", "ABCDE-FGHJK")
+	if code != ExitGenericError || !strings.Contains(out, "Pairing cancelled. Nothing was saved.") {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if _, ok := credentials(t, home); ok {
+		t.Fatal("credentials written")
+	}
+	if _, revoked, _ := fake.state(); len(revoked) != 1 || revoked[0] != pairedKey {
+		t.Fatalf("revoked %v", revoked)
+	}
+}
+
+// With neither a terminal nor a browser nothing is sent: the code stays
+// valid and no credentials file is written.
+func TestConnectPairNeitherTerminalNorBrowserRefusesBeforeRedeem(t *testing.T) {
+	home := sandbox(t)
+	fake := newFakeMosaic(t, redeemBody(accountEmail))
+	out, code := runRoot(t, "connect", "--pair", "ABCDE-FGHJK")
+	if code != ExitGenericError || !strings.Contains(out, "neither is available here") {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if redeems, revoked, other := fake.state(); redeems != 0 || len(revoked) != 0 || len(other) != 0 {
+		t.Fatalf("requests reached the server: redeems %d revoked %v other %v", redeems, revoked, other)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".archivist", "credentials")); err == nil {
+		t.Fatal("credentials written")
+	}
+}
+
+// The replaced key: a failed revoke keeps the "still active" note; a 401
+// means it no longer works; a task token, a non ak_ key or the same key is
+// never revoked.
+func TestConnectPairReplacedKeyOutcomes(t *testing.T) {
+	cases := []struct {
+		name, previous string
+		status         int
+		revoke         bool
+		says, never    string
+	}{
+		{"revoke fails", earlierKey, http.StatusBadGateway, true, "the key saved here before (ak_earlier...654) is still active. Revoke it in Mosaic", "no longer works"},
+		{"already revoked", earlierKey, http.StatusUnauthorized, true, "(ak_earlier...654) no longer works", "still active"},
+		{"task token", "mst_00000000-0000-4000-8000-000000000000." + strings.Repeat("a", 43), 0, false, "", "still active"},
+		{"legacy prefix", "mc_pat_legacysecretvalue1234", 0, false, "is still active", "no longer works"},
+		{"same key", pairedKey, 0, false, "", "saved here before"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			home := sandbox(t)
+			saveKey(t, home, tc.previous)
+			fake := newFakeMosaic(t, redeemBody(accountEmail))
+			if tc.status != 0 {
+				fake.revokeAs[tc.previous] = tc.status
+			}
+			useTerminal(t, "y\n")
+			out, code := runRoot(t, "connect", "--pair", "ABCDE-FGHJK")
+			if code != 0 {
+				t.Fatalf("exit %d\n%s", code, out)
+			}
+			_, revoked, _ := fake.state()
+			if tc.revoke != (len(revoked) == 1 && revoked[0] == tc.previous) || len(revoked) > 1 {
+				t.Fatalf("revoked %v", revoked)
+			}
+			if tc.says != "" && !strings.Contains(out, tc.says) {
+				t.Errorf("output lacks %q:\n%s", tc.says, out)
+			}
+			if strings.Contains(out, tc.never) {
+				t.Errorf("output has %q:\n%s", tc.never, out)
+			}
+			if saved, _ := credentials(t, home); saved != pairedKey {
+				t.Fatalf("saved %q", saved)
+			}
+			noKeyLeaks(t, out, earlierKey, pairedKey)
+		})
+	}
+}
+
+// A redeem answer that names no account (a server before Story 94.3) saves
+// nothing and revokes the key it brought, before asking.
+func TestConnectPairWithoutAccountSavesNothing(t *testing.T) {
+	home := sandbox(t)
+	fake := newFakeMosaic(t, `{"key":"`+pairedKey+`","key_id":"ak_kid","name":"archivist box","tier":"pro"}`)
+	tty := useTerminal(t, "\n")
+	out, code := runRoot(t, "connect", "--pair", "ABCDE-FGHJK")
+	if code != ExitServerError || !strings.Contains(out, "nothing was saved") {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if tty.written() != "" {
+		t.Fatalf("asked %q", tty.written())
+	}
+	if _, ok := credentials(t, home); ok {
+		t.Fatal("credentials written")
+	}
+	if _, revoked, _ := fake.state(); len(revoked) != 1 || revoked[0] != pairedKey {
+		t.Fatalf("revoked %v", revoked)
+	}
+}
+
+// The terminal path tells the server it confirms on the terminal.
+func TestConnectPairTerminalSendsConfirmTerminal(t *testing.T) {
+	sandbox(t)
+	fake := newFakeMosaic(t, redeemBody(accountEmail))
+	useTerminal(t, "\n")
+	if out, code := runRoot(t, "connect", "--pair", "ABCDE-FGHJK"); code != 0 {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if len(fake.confirms) != 1 || fake.confirms[0] != "terminal" {
+		t.Fatalf("confirms %v", fake.confirms)
+	}
+}
+
+// A failed save revokes the new key, which nothing could use.
+func TestConnectPairSaveFailureRevokesNewKey(t *testing.T) {
+	home := sandbox(t)
+	if err := os.WriteFile(filepath.Join(home, ".archivist"), []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fake := newFakeMosaic(t, redeemBody(accountEmail))
+	useTerminal(t, "\n")
+	out, code := runRoot(t, "connect", "--pair", "ABCDE-FGHJK")
+	if code != ExitGenericError || !strings.Contains(out, "saving the key failed") {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if _, revoked, _ := fake.state(); len(revoked) != 1 || revoked[0] != pairedKey {
+		t.Fatalf("revoked %v", revoked)
+	}
+	noKeyLeaks(t, out, pairedKey)
+}
+
+// A manual re-pair with the background service installed says how to
+// restart it with the new key.
+func TestConnectPairServiceInstalledHint(t *testing.T) {
+	for _, installed := range []bool{true, false} {
+		sandbox(t)
+		pairServiceInstalled = func() bool { return installed }
+		newFakeMosaic(t, redeemBody(accountEmail))
+		useTerminal(t, "\n")
+		out, code := runRoot(t, "connect", "--pair", "ABCDE-FGHJK")
+		const hint = "Run 'archivist connect --install' to restart background connect with the new key."
+		if code != 0 || strings.Contains(out, hint) != installed {
+			t.Fatalf("installed %v: exit %d\n%s", installed, code, out)
+		}
+	}
+}
+
+// Control characters in the server's email never reach the terminal.
+func TestConnectPairPromptStripsControlCharacters(t *testing.T) {
+	sandbox(t)
+	newFakeMosaic(t, redeemBody("b@example.test\x1b[2J\r\n"))
+	tty := useTerminal(t, "\n")
+	if out, code := runRoot(t, "connect", "--pair", "ABCDE-FGHJK"); code != 0 || strings.Contains(out, "\x1b") {
+		t.Fatalf("exit %d\n%q", code, out)
+	}
+	if got := tty.written(); got != "This computer will connect to b@example.test[2J. Continue? [Y/n] " {
+		t.Fatalf("terminal %q", got)
+	}
+}
+
+// --status names the saved key's account; a key the server refuses and an
+// unreachable server each get their own line, and the exit is unchanged.
+func TestConnectStatusAccountLine(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("systemd flow")
+	}
+	home := sandbox(t)
+	saveKey(t, home, pairedKey)
+	stubRunner(t, func(line string) service.Result {
+		if strings.Contains(line, "is-active") {
+			return service.Result{ExitCode: 3}
+		}
+		return service.Result{}
+	})
+	fake := newFakeMosaic(t, `{}`)
+	out, code := runRoot(t, "connect", "--status")
+	if code != ExitGenericError || !strings.Contains(out, "Key:      saved, ak_paireds...789") || !strings.Contains(out, "\nAccount:  b@example.test\n") {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	fake.mu.Lock()
+	fake.listAs[pairedKey] = http.StatusUnauthorized
+	fake.mu.Unlock()
+	out, code = runRoot(t, "connect", "--status")
+	if code != ExitGenericError || !strings.Contains(out, "Account:  this key is no longer accepted (run 'archivist connect --pair CODE')") {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	srv := httptest.NewServer(http.NotFoundHandler())
+	url := srv.URL
+	srv.Close()
+	t.Setenv("ARCHIVIST_BASE_URL", url)
+	out, code = runRoot(t, "connect", "--status")
+	if code != ExitGenericError || !strings.Contains(out, "Account:  unknown (could not reach Mosaic)") {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	// No saved key: no account line.
+	sandbox(t)
+	out, _ = runRoot(t, "connect", "--status")
+	if strings.Contains(out, "Account:") {
+		t.Fatalf("account line without a key:\n%s", out)
+	}
+	noKeyLeaks(t, out, pairedKey)
+}
+
+// --status with the service running and a key saved still exits 0, with
+// the account line.
+func TestConnectStatusRunningWithAccountExitsZero(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("systemd flow")
+	}
+	home := sandbox(t)
+	saveKey(t, home, pairedKey)
+	unit := filepath.Join(home, ".config", "systemd", "user", "archivist-connect.service")
+	if err := os.MkdirAll(filepath.Dir(unit), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(unit, []byte("[Service]\nExecStart=/usr/bin/archivist connect --service\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stubRunner(t, func(string) service.Result { return service.Result{} })
+	newFakeMosaic(t, `{}`)
+	out, code := runRoot(t, "connect", "--status")
+	if code != 0 || !strings.Contains(out, "Service:  running") || !strings.Contains(out, "\nAccount:  b@example.test\n") {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Story 94.3 (owner D6): with no terminal, the workspace confirm page in this
+// computer's browser answers.
+// ---------------------------------------------------------------------------
+
+const (
+	testConfirmID = "cccccccccccccccccccccccccccccccccccccccccc_"
+	testPollToken = "ppppppppppppppppppppppppppppppppppppppppp-p"
+)
+
+func confirmURLFor(base string) string { return base + "/connect/confirm#" + testConfirmID }
+
+// fakeBrowser stands in for this computer's browser: it records the URLs it
+// opens, and can fail to start or exit with an error.
+type fakeBrowser struct {
+	mu        sync.Mutex
+	urls      []string
+	startErr  error
+	exitErr   error
+	available bool
+}
+
+func useBrowser(t *testing.T, b *fakeBrowser) *fakeBrowser {
+	t.Helper()
+	pairBrowserAvailable = func() bool { return b.available }
+	openPairBrowser = func(url string) (<-chan error, error) {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		b.urls = append(b.urls, url)
+		if b.startErr != nil {
+			return nil, b.startErr
+		}
+		done := make(chan error, 1)
+		done <- b.exitErr
+		return done, nil
+	}
+	prev := pairPollEvery
+	pairPollEvery = func(int) time.Duration { return 5 * time.Millisecond }
+	t.Cleanup(func() { pairPollEvery = prev })
+	return b
+}
+
+func (b *fakeBrowser) opened() []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return append([]string(nil), b.urls...)
+}
+
+// browserMosaic is a fake server whose browser redeem answers 202 pending.
+func browserMosaic(t *testing.T, expires int, polls ...fakeAnswer) *fakeMosaic {
+	t.Helper()
+	fake := newFakeMosaic(t, redeemBody(accountEmail))
+	b, _ := json.Marshal(map[string]any{
+		"pending": true, "email": accountEmail, "confirm_id": testConfirmID, "poll_token": testPollToken,
+		"confirm_url": confirmURLFor(os.Getenv("ARCHIVIST_BASE_URL")), "expires_in_seconds": expires,
+		"poll_interval_seconds": 2,
+	})
+	fake.pending = string(b)
+	fake.polls = polls
+	return fake
+}
+
+func confirmedPoll() fakeAnswer {
+	b, _ := json.Marshal(map[string]string{
+		"state": "confirmed", "key": pairedKey, "key_id": "ak_kid", "name": "archivist box", "tier": "pro", "email": accountEmail,
+	})
+	return fakeAnswer{http.StatusOK, string(b)}
+}
+
+func (f *fakeMosaic) browserState() (polls int, declines, confirms []string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.pollHits, append([]string(nil), f.declines...), append([]string(nil), f.confirms...)
+}
+
+// Same account: the page confirms with no click, the poll brings the key,
+// it is saved and the replaced key is revoked.
+func TestConnectPairBrowserSameAccount(t *testing.T) {
+	home := sandbox(t)
+	saveKey(t, home, earlierKey)
+	browser := useBrowser(t, &fakeBrowser{available: true})
+	fake := browserMosaic(t, 300, fakeAnswer{http.StatusOK, `{"state":"pending"}`},
+		fakeAnswer{http.StatusInternalServerError, `{"error":"x","code":"INTERNAL"}`}, confirmedPoll())
+	out, code := runRoot(t, "connect", "--pair", "ABCDE-FGHJK")
+	if code != 0 {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if got := browser.opened(); len(got) != 1 || got[0] != confirmURLFor(os.Getenv("ARCHIVIST_BASE_URL")) {
+		t.Fatalf("opened %v", got)
+	}
+	if saved, _ := credentials(t, home); saved != pairedKey {
+		t.Fatalf("saved %q", saved)
+	}
+	polls, declines, confirms := fake.browserState()
+	if polls != 3 || len(declines) != 0 || len(confirms) != 1 || confirms[0] != "browser" {
+		t.Fatalf("polls %d declines %v confirms %v", polls, declines, confirms)
+	}
+	if _, revoked, _ := fake.state(); len(revoked) != 1 || revoked[0] != earlierKey {
+		t.Fatalf("revoked %v", revoked)
+	}
+	for _, want := range []string{"This computer will connect to b@example.test. Confirm in the browser where you use Mosaic", "Paired as archivist box.", "Account: b@example.test", "no longer works"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output lacks %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "Open this link") {
+		t.Errorf("link shown although the browser opened:\n%s", out)
+	}
+	noKeyLeaks(t, out, earlierKey, pairedKey, testPollToken, testConfirmID)
+}
+
+// ARCHIVIST_PAIR_CONFIRM=browser takes the browser path even with a
+// terminal, which is never asked.
+func TestConnectPairBrowserForcedByEnv(t *testing.T) {
+	home := sandbox(t)
+	t.Setenv("ARCHIVIST_PAIR_CONFIRM", "browser")
+	tty := useTerminal(t, "\n")
+	useBrowser(t, &fakeBrowser{})
+	browserMosaic(t, 300, confirmedPoll())
+	if out, code := runRoot(t, "connect", "--pair", "ABCDE-FGHJK"); code != 0 {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if tty.written() != "" {
+		t.Fatalf("terminal asked %q", tty.written())
+	}
+	if saved, _ := credentials(t, home); saved != pairedKey {
+		t.Fatalf("saved %q", saved)
+	}
+}
+
+// The browser refuses: another account, signed out or cancelled. Nothing is
+// saved, no key was minted, nothing is revoked.
+func TestConnectPairBrowserRefused(t *testing.T) {
+	for reason, says := range map[string]string{
+		"other_account": "a different Mosaic account than the one signed in to your browser",
+		"signed_out":    "your browser is not signed in to Mosaic",
+		"cancelled":     "this computer was not connected. Nothing was saved.",
+	} {
+		t.Run(reason, func(t *testing.T) {
+			home := sandbox(t)
+			saveKey(t, home, earlierKey)
+			useBrowser(t, &fakeBrowser{available: true})
+			fake := browserMosaic(t, 300, fakeAnswer{http.StatusOK, `{"state":"pending"}`},
+				fakeAnswer{http.StatusOK, `{"state":"refused","reason":"` + reason + `"}`})
+			out, code := runRoot(t, "connect", "--pair", "ABCDE-FGHJK")
+			if code != ExitGenericError || !strings.Contains(out, says) {
+				t.Fatalf("exit %d\n%s", code, out)
+			}
+			if saved, _ := credentials(t, home); saved != earlierKey {
+				t.Fatalf("saved %q", saved)
+			}
+			if _, revoked, _ := fake.state(); len(revoked) != 0 {
+				t.Fatalf("revoked %v", revoked)
+			}
+			if strings.Contains(out, "Paired as") {
+				t.Fatalf("output:\n%s", out)
+			}
+		})
+	}
+}
+
+// Expired, or still pending at the deadline: not confirmed in time, nothing
+// saved.
+func TestConnectPairBrowserNotConfirmedInTime(t *testing.T) {
+	for name, fake := range map[string]func(t *testing.T) *fakeMosaic{
+		"expired": func(t *testing.T) *fakeMosaic {
+			return browserMosaic(t, 300, fakeAnswer{http.StatusOK, `{"state":"expired"}`})
+		},
+		"deadline": func(t *testing.T) *fakeMosaic { return browserMosaic(t, 1) },
+		"unknown": func(t *testing.T) *fakeMosaic {
+			return browserMosaic(t, 300, fakeAnswer{http.StatusBadRequest, `{"error":"x","code":"PAIRING_CODE_INVALID"}`})
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			home := sandbox(t)
+			useBrowser(t, &fakeBrowser{available: true})
+			fake(t)
+			out, code := runRoot(t, "connect", "--pair", "ABCDE-FGHJK")
+			if code != ExitGenericError || !strings.Contains(out, "not confirmed in time. Nothing was saved.") {
+				t.Fatalf("exit %d\n%s", code, out)
+			}
+			if _, ok := credentials(t, home); ok {
+				t.Fatal("credentials written")
+			}
+		})
+	}
+}
+
+// When the browser cannot be opened (the opener fails to start, or exits
+// with an error) the link is printed once and the CLI keeps polling.
+func TestConnectPairBrowserOpenFailsPrintsLink(t *testing.T) {
+	for name, b := range map[string]*fakeBrowser{
+		"start fails": {available: true, startErr: errors.New("no opener")},
+		"opener exit": {available: true, exitErr: errors.New("exit status 3")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			home := sandbox(t)
+			useBrowser(t, b)
+			browserMosaic(t, 300, fakeAnswer{http.StatusOK, `{"state":"pending"}`}, fakeAnswer{http.StatusOK, `{"state":"pending"}`}, confirmedPoll())
+			out, code := runRoot(t, "connect", "--pair", "ABCDE-FGHJK")
+			if code != 0 {
+				t.Fatalf("exit %d\n%s", code, out)
+			}
+			link := "Open this link in the browser where you use Mosaic: " + confirmURLFor(os.Getenv("ARCHIVIST_BASE_URL"))
+			if strings.Count(out, link) != 1 {
+				t.Fatalf("link lines:\n%s", out)
+			}
+			if saved, _ := credentials(t, home); saved != pairedKey {
+				t.Fatalf("saved %q", saved)
+			}
+		})
+	}
+}
+
+// Ctrl-C while waiting for the browser declines the pairing: nothing saved.
+func TestConnectPairBrowserInterruptDeclines(t *testing.T) {
+	home := sandbox(t)
+	useBrowser(t, &fakeBrowser{available: true})
+	fake := browserMosaic(t, 300)
+	prev := pairInterrupt
+	pairInterrupt = func(ctx context.Context) (context.Context, context.CancelFunc) {
+		ctx, cancel := context.WithCancel(ctx)
+		go func() {
+			for {
+				if polls, _, _ := fake.browserState(); polls >= 2 {
+					cancel()
+					return
+				}
+				time.Sleep(time.Millisecond)
+			}
+		}()
+		return ctx, cancel
+	}
+	t.Cleanup(func() { pairInterrupt = prev })
+	out, code := runRoot(t, "connect", "--pair", "ABCDE-FGHJK")
+	if code != ExitGenericError || !strings.Contains(out, "Pairing cancelled. Nothing was saved.") {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if _, declines, _ := fake.browserState(); len(declines) != 1 || declines[0] != "cancelled" {
+		t.Fatalf("declines %v", declines)
+	}
+	if _, ok := credentials(t, home); ok {
+		t.Fatal("credentials written")
+	}
+}
+
+// A server that mints at once in browser mode (before Story 94.3), or a
+// pending answer that names no account: nothing saved, exit 5; a minted key
+// is revoked, a pending pairing declined.
+func TestConnectPairBrowserOldOrUnnamedServer(t *testing.T) {
+	t.Run("minted at once", func(t *testing.T) {
+		home := sandbox(t)
+		useBrowser(t, &fakeBrowser{available: true})
+		fake := newFakeMosaic(t, redeemBody(accountEmail))
+		out, code := runRoot(t, "connect", "--pair", "ABCDE-FGHJK")
+		if code != ExitServerError || !strings.Contains(out, "nothing was saved") {
+			t.Fatalf("exit %d\n%s", code, out)
+		}
+		if _, revoked, _ := fake.state(); len(revoked) != 1 || revoked[0] != pairedKey {
+			t.Fatalf("revoked %v", revoked)
+		}
+		if _, ok := credentials(t, home); ok {
+			t.Fatal("credentials written")
+		}
+	})
+	t.Run("no account named", func(t *testing.T) {
+		home := sandbox(t)
+		browser := useBrowser(t, &fakeBrowser{available: true})
+		fake := browserMosaic(t, 300, confirmedPoll())
+		fake.pending = strings.Replace(fake.pending, `"email":"b@example.test"`, `"email":""`, 1)
+		out, code := runRoot(t, "connect", "--pair", "ABCDE-FGHJK")
+		if code != ExitServerError || !strings.Contains(out, "nothing was saved") {
+			t.Fatalf("exit %d\n%s", code, out)
+		}
+		if polls, declines, _ := fake.browserState(); polls != 0 || len(declines) != 1 {
+			t.Fatalf("polls %d declines %v", polls, declines)
+		}
+		if len(browser.opened()) != 0 {
+			t.Fatal("browser opened")
+		}
+		if _, ok := credentials(t, home); ok {
+			t.Fatal("credentials written")
+		}
+	})
+}
+
+// A key the server could not create at the confirmed poll: exit 5.
+func TestConnectPairBrowserMintFailure(t *testing.T) {
+	home := sandbox(t)
+	useBrowser(t, &fakeBrowser{available: true})
+	browserMosaic(t, 300, fakeAnswer{http.StatusBadGateway, `{"error":"x","code":"CLERK_ERROR"}`})
+	out, code := runRoot(t, "connect", "--pair", "ABCDE-FGHJK")
+	if code != ExitServerError || !strings.Contains(out, "could not create the key") {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if _, ok := credentials(t, home); ok {
+		t.Fatal("credentials written")
+	}
+}
+
+// A terminal that opens but that no one sees (stdout and stderr captured
+// through pipes) is not asked: pairing takes the browser path.
+func TestConnectPairHiddenTerminalUsesBrowser(t *testing.T) {
+	home := sandbox(t)
+	tty := useTerminal(t, "\n")
+	pairOutputVisible = func() bool { return false }
+	browser := useBrowser(t, &fakeBrowser{available: true})
+	fake := browserMosaic(t, 300, confirmedPoll())
+	if out, code := runRoot(t, "connect", "--pair", "ABCDE-FGHJK"); code != 0 {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if tty.written() != "" || !tty.closed.Load() {
+		t.Fatalf("hidden terminal asked %q, closed %v", tty.written(), tty.closed.Load())
+	}
+	if _, _, confirms := fake.browserState(); len(confirms) != 1 || confirms[0] != "browser" {
+		t.Fatalf("confirms %v", confirms)
+	}
+	if len(browser.opened()) != 1 {
+		t.Fatalf("opened %v", browser.opened())
+	}
+	if saved, _ := credentials(t, home); saved != pairedKey {
+		t.Fatalf("saved %q", saved)
+	}
+}
+
+// A terminal that opens while stdout shows it asks there, and no browser
+// opens.
+func TestConnectPairVisibleTerminalAsks(t *testing.T) {
+	sandbox(t)
+	tty := useTerminal(t, "\n")
+	browser := useBrowser(t, &fakeBrowser{available: true})
+	fake := browserMosaic(t, 300, confirmedPoll())
+	if out, code := runRoot(t, "connect", "--pair", "ABCDE-FGHJK"); code != 0 {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if got := tty.written(); got != "This computer will connect to b@example.test. Continue? [Y/n] " {
+		t.Fatalf("terminal %q", got)
+	}
+	if _, _, confirms := fake.browserState(); len(confirms) != 1 || confirms[0] != "terminal" {
+		t.Fatalf("confirms %v", confirms)
+	}
+	if len(browser.opened()) != 0 {
+		t.Fatalf("browser opened %v", browser.opened())
+	}
+}
+
+// flagContext is done only once the test sets its flag and the CLI next
+// looks (Err), so an interrupt can land right after a poll answered.
+type flagContext struct {
+	context.Context
+	flag atomic.Bool
+	ch   chan struct{}
+	once sync.Once
+}
+
+func (f *flagContext) Done() <-chan struct{} { return f.ch }
+
+func (f *flagContext) Err() error {
+	if f.flag.Load() {
+		f.once.Do(func() { close(f.ch) })
+		return context.Canceled
+	}
+	return nil
+}
+
+// Ctrl-C right as the poll brings the key: the key is not saved and is
+// revoked, and the pairing is declined.
+func TestConnectPairBrowserInterruptRevokesArrivingKey(t *testing.T) {
+	home := sandbox(t)
+	useBrowser(t, &fakeBrowser{available: true})
+	fake := browserMosaic(t, 300, confirmedPoll())
+	fc := &flagContext{Context: context.Background(), ch: make(chan struct{})}
+	fake.onPoll = func(fakeAnswer) { fc.flag.Store(true) }
+	prev := pairInterrupt
+	pairInterrupt = func(context.Context) (context.Context, context.CancelFunc) { return fc, func() {} }
+	t.Cleanup(func() { pairInterrupt = prev })
+	out, code := runRoot(t, "connect", "--pair", "ABCDE-FGHJK")
+	if code != ExitGenericError || !strings.Contains(out, "Pairing cancelled. Nothing was saved.") {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if _, revoked, _ := fake.state(); len(revoked) != 1 || revoked[0] != pairedKey {
+		t.Fatalf("revoked %v", revoked)
+	}
+	if _, declines, _ := fake.browserState(); len(declines) != 1 {
+		t.Fatalf("declines %v", declines)
+	}
+	if _, ok := credentials(t, home); ok {
+		t.Fatal("credentials written")
+	}
+	noKeyLeaks(t, out, pairedKey)
+}
+
+// Input typed ahead of the question is discarded right before it is
+// written, so it cannot answer for the user.
+func TestConnectPairFlushesTypedAheadInputBeforeAsking(t *testing.T) {
+	home := sandbox(t)
+	newFakeMosaic(t, redeemBody(accountEmail))
+	tty := useTerminal(t, "n\n")
+	var flushed int
+	var writtenAtFlush string
+	prev := flushConfirmInput
+	flushConfirmInput = func(got io.ReadWriter) {
+		if got != io.ReadWriter(tty) {
+			t.Errorf("flushed %T, not the opened terminal", got)
+		}
+		flushed++
+		writtenAtFlush = tty.written()
+	}
+	t.Cleanup(func() { flushConfirmInput = prev })
+	out, code := runRoot(t, "connect", "--pair", "ABCDE-FGHJK")
+	if code != ExitGenericError {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if flushed != 1 || writtenAtFlush != "" {
+		t.Fatalf("flushed %d times, prompt already written %q", flushed, writtenAtFlush)
+	}
+	if !strings.Contains(tty.written(), "Continue? [Y/n] ") {
+		t.Fatalf("terminal %q", tty.written())
+	}
+	if _, ok := credentials(t, home); ok {
+		t.Fatal("credentials written")
+	}
+}
