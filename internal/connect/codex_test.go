@@ -255,7 +255,7 @@ func TestCodexArgsAreFixed(t *testing.T) {
 		"project_root_markers":                `[]`,
 		"mcp_servers.archivist.command":       `"/opt/archivist"`,
 		"mcp_servers.archivist.args":          `["mcp","serve","--token-file","/state/run/x/task-token"]`,
-		"mcp_servers.archivist.enabled_tools": `["companies_search","filings","find","publish_artifact","read_passage","read_section","search","toc"]`,
+		"mcp_servers.archivist.enabled_tools": `["companies_search","filings","find","publish_artifact","read_passage","read_section","screen","search","toc"]`,
 		// Story 94.5: the three permission profiles, each denying the locked
 		// paths; read only by default.
 		"default_permissions":                         `"archivist-read"`,
@@ -515,7 +515,7 @@ func TestCodexSessionLifecycle(t *testing.T) {
 	// MCP task tools under the session task token.
 	h.message(sid, "mcp")
 	h.waitFinishes(sid, 2)
-	if !strings.Contains(h.relay.text(sid), "tools: companies_search,filings,find,publish_artifact,read_passage,read_section,search,toc") {
+	if !strings.Contains(h.relay.text(sid), "tools: companies_search,filings,find,publish_artifact,read_passage,read_section,screen,search,toc") {
 		t.Fatalf("mcp text %q", h.relay.text(sid))
 	}
 	if b := h.api.researchBearers(); len(b) != 1 || !strings.HasPrefix(b[0], "Bearer mst_") {

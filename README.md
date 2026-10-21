@@ -164,7 +164,7 @@ code such as 10-K (Canadian and Turkish rows keep it), and no
 `entity_resolution` when the symbol resolved plainly. Ids, `url`, `cite_as`
 and exchange document ids stay, in the server's order. `search`,
 `read passage` (its neighbours; the passage itself stays on every page),
-`read section`, `toc`, `filings` and `find` also fit each page to 24,000 bytes
+`read section`, `toc`, `filings`, `screen` (its `rows`) and `find` also fit each page to 24,000 bytes
 as a host prints it (about 6k tokens): a cut page says `truncated: true` and
 carries a `c1.` cursor that continues the same request with `--format
 compact` (other arguments or another format exit 2).
@@ -180,7 +180,8 @@ When a response is too large it is truncated and stderr says
 | `read passage <chunk_id>` | A passage with up to `--window` (0 to 2, default 1) neighbours on each side |
 | `read section <filing_id> <section_header>` | Every passage of one section, in order |
 | `toc <filing_id>` | A filing's section headers |
-| `filings <symbol>` | A company's filings, newest first. `--formtype`, `--date-from`, `--date-to`, `--limit 1-25` (default 10), `--cursor`; an empty list exits 0 |
+| `filings <symbol>` | A company's filings, newest first, each with the share move measured around it (`reaction`). `--formtype`, `--date-from`, `--date-to`, `--limit 1-25` (default 10), `--min-reaction-z 0-50` (only filings whose move is at least that many standard deviations either way; 0 drops unmeasured filings; adds a `MOVE (z)` table column), `--cursor`; an empty list exits 0 |
+| `screen` | Screen companies on the nightly snapshot: `--min KEY=VALUE` and `--max KEY=VALUE` (repeatable, for example `--max pe=15 --min market_cap_usd_m=500`), `--industry`, `--sector`, `--exchange`, `--market`, `--country` (comma separated), `--currency` (needed for a figure in each company's own reporting unit), `--include-inactive`, `--as-of`, `--sort-by`, `--sort-dir asc\|desc`, `--fields`, `--limit 1-50` (default 25), `--cursor`. The server checks every key and value; a bad bound shape exits 2 before any request. A free account has 3 screens, each showing the first 10 rows; after that `screen` exits 4 (`PLAN_REQUIRED`) |
 | `find <filing_id> <term>` | Whether one filing mentions a term: `found`, `total_matches`, the best matches. `--limit 1-10` (default 5), `--cursor`; quote the term for an exact phrase; `found: false` exits 0 |
 | `companies search <query>` | Find a company and its symbol |
 | `companies get <issuer_key>` | One company's details |
@@ -249,8 +250,8 @@ Claude Desktop config (`claude_desktop_config.json`):
 The `env` block is optional once `archivist auth login` has saved a
 credential.
 
-Tools (8): `search`, `read_passage`, `read_section`, `toc`, `filings`,
-`find`, `companies_search`, `companies_get`. Tool names join the verb path
+Tools (9): `search`, `read_passage`, `read_section`, `toc`, `filings`,
+`screen`, `find`, `companies_search`, `companies_get`. Tool names join the verb path
 with underscores. Every tool has a title and the annotations
 `readOnlyHint: true`, `destructiveHint: false`, `openWorldHint: false`. Every
 result is the `--format compact` output (the tools take no `format` or
@@ -269,8 +270,8 @@ with `--token`).
 **Task mode.** When the token is a session task token (`mst_...`, minted by
 `archivist connect` for one workspace session), the server exposes only the
 tools whose chat-api routes a task token may call: `search`,
-`companies_search`, `read_passage`, `read_section`, `toc`, `filings` and
-`find`. `companies_get` falls back to the full company catalog, which task
+`companies_search`, `read_passage`, `read_section`, `toc`, `filings`,
+`screen` and `find`. `companies_get` falls back to the full company catalog, which task
 tokens cannot read, so it is left out. Task mode results stay the full
 `--format json` body: the Mosaic workspace reads those records. `auth login` refuses task tokens. With `--publish-session <id>`
 and `--publish-dir <dir>` (set by `archivist connect` when the token carries
@@ -603,7 +604,7 @@ sandbox modes of earlier releases (`read-only`, `workspace-write`, and
 `danger-full-access` for `full_auto`) in its unelevated Windows sandbox.
 
 The Mosaic tools (`search`, `companies_search`, `companies_get`,
-`read_passage`, `read_section`, `toc`, `filings`, `find` and
+`read_passage`, `read_section`, `toc`, `filings`, `screen`, `find` and
 `publish_artifact`) never ask, in any mode (`read_only` included) and on both
 harnesses: the mode governs only the tools that touch your computer (shell
 commands, file edits and writes). The daemon
@@ -1025,29 +1026,51 @@ release tarballs, checked against pinned SHA-256 digests
 
 ## Release process
 
-Releases are cut by pushing a semver tag on a merged, CI green commit:
+Releases are cut by pushing a semver tag on a merged, CI green commit of
+`main`:
 
 ```sh
-git tag v0.2.23
-git push origin v0.2.23
+git tag -a v0.2.35 <merged commit> -m v0.2.35
+git push origin v0.2.35
 ```
 
+Releases are immutable and the `v*` tag ruleset admits one tag push per
+version: a failed run spends the version, and the fix ships as the next
+patch. Before tagging:
+
+- add the user facing notes as `.github/release-notes/v<version>.md` in the
+  release commit;
+- rehearse the build, sign and publish steps of `release.yml` locally
+  (a scratch clone with a local tag and no remote, a throwaway signing key
+  and a stand in `gh`), since the workflow cannot be tried on GitHub without
+  spending a version;
+- check that no other tag points at the release commit
+  (`git tag --points-at <commit>` is empty): a second tag, such as a release
+  candidate, on the same commit is not a supported release.
+
 `.github/workflows/release.yml` runs three jobs, each with only the
-permissions and secrets it uses, and every action pinned by commit SHA:
+permissions and secrets it uses, and every action pinned by commit SHA. Every
+step runs under `bash -eo pipefail`.
 
 1. `build` (read only, no secrets): checks the tag, verifies the Go modules,
-   and runs goreleaser v2.18.2 without publishing: 5 platform binaries plus a
-   universal macOS binary (built with `-trimpath` and the commit's date),
+   and runs goreleaser v2.18.2 for the pushed tag (`GORELEASER_CURRENT_TAG`)
+   without publishing: 5 platform binaries plus a universal macOS binary
+   (built with `-trimpath` and the commit's date),
    `archivist_v<version>_SHA256SUMS`,
    `archivist_v<version>_skill-bundle.tar.gz`, the stamped installers, the
-   changelog and the Homebrew cask.
+   changelog and the Homebrew cask. The release notes are the committed
+   notes for the tag, when there are any, then goreleaser's changelog.
 2. `sign` (the `release` environment, which admits `v*` tags only and holds
    the signing key): checks the files against `SHA256SUMS`, writes
    `archivist_v<version>_SHA256SUMS.sig`, verifies it with the committed public
    key, and records SLSA build provenance for every release file.
-3. `publish`: verifies again, creates the GitHub Release with every asset, and
-   pushes `Casks/archivist.rb` to `mosaic-finance-inc/homebrew-tap` (needs the
-   `HOMEBREW_TAP_GITHUB_TOKEN` secret).
+3. `publish`: verifies again, creates the GitHub Release with every asset
+   (9 files) and the release notes, then pushes `Casks/archivist.rb` to
+   `mosaic-finance-inc/homebrew-tap` (needs the `HOMEBREW_TAP_GITHUB_TOKEN`
+   secret). A prerelease tag (with a suffix) is marked as a prerelease and
+   leaves the cask alone. A rerun keeps an existing release only when it is
+   published with this run's `SHA256SUMS`; a draft left by a failed run is
+   deleted first, then the failed jobs are run again.
 
 macOS signing and notarization are not part of the workflow.
 

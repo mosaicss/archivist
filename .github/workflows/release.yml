@@ -8,6 +8,12 @@ on:
 # Every job names the permissions it needs; nothing is granted by default.
 permissions: {}
 
+# shell: bash runs every step with `bash -eo pipefail`, so a failing command
+# inside a pipeline fails the step.
+defaults:
+  run:
+    shell: bash
+
 # Three jobs, each holding only what it uses:
 #   build    read-only: builds with goreleaser (no publishing) and uploads
 #            the release files as a workflow artifact. No secrets.
@@ -97,6 +103,9 @@ jobs:
         env:
           # Read-only token: the changelog reads the GitHub API.
           GITHUB_TOKEN: ${{ github.token }}
+          # Keep the build on the pushed tag. The release process still puts
+          # no second tag (such as a release candidate) on the release commit.
+          GORELEASER_CURRENT_TAG: ${{ github.ref_name }}
         run: goreleaser release --clean --skip=validate,publish,announce --config goreleaser.yaml
 
       - name: Collect the release files
@@ -105,7 +114,15 @@ jobs:
           mkdir -p out/assets out/meta
           find dist -maxdepth 1 -type f -name "archivist_v${VER}_*" -exec cp {} out/assets/ \;
           cp build/installers/install.sh build/installers/install.ps1 out/assets/
-          cp dist/CHANGELOG.md out/meta/CHANGELOG.md
+          # The release notes: the committed notes for this tag (when there
+          # are any), a blank line, then goreleaser's changelog.
+          test -f dist/CHANGELOG.md
+          notes=".github/release-notes/${TAG}.md"
+          if [ -f "$notes" ]; then
+            { cat "$notes"; echo; cat dist/CHANGELOG.md; } > out/meta/CHANGELOG.md
+          else
+            cp dist/CHANGELOG.md out/meta/CHANGELOG.md
+          fi
           cp dist/homebrew/Casks/archivist.rb out/meta/archivist.rb
           test -f "out/assets/archivist_v${VER}_SHA256SUMS"
           test -f "out/assets/archivist_v${VER}_skill-bundle.tar.gz"

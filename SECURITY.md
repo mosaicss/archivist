@@ -25,7 +25,7 @@ Please do not open public GitHub issues for security reports.
 | Version | Supported |
 |---|---|
 | Latest 0.2.x release | Yes |
-| Older releases | No. Upgrade via `archivist update` or your install channel. |
+| Older releases | No. Update to the latest release. |
 
 ## Scope
 
