@@ -516,6 +516,9 @@ func TestAuthLoginOnAConnectComputerSavesToTheFile(t *testing.T) {
 					t.Skip("systemd unit path")
 				}
 				dir = filepath.Join(home, ".config", "systemd", "user")
+				// The unit is looked up under XDG_CONFIG_HOME when set (CI
+				// runners set it to the runner's own ~/.config).
+				t.Setenv("XDG_CONFIG_HOME", "")
 			}
 			if err := os.MkdirAll(dir, 0o700); err != nil {
 				t.Fatal(err)
