@@ -55,8 +55,8 @@ func TestRealSchtasksAcceptsTaskXML(t *testing.T) {
 
 // The real Task Scheduler (Story 94.14): a probe of a missing program
 // reports file not found (0x80070002), and one of `cmd.exe /c exit 0`
-// reports 0, as does the released archivistw.exe (built here) with
-// `version`. CI only, like TestRealSchtasksAcceptsTaskXML; the probe task
+// reports 0, as does a GUI subsystem build of cmd/archivist
+// (archivistw.exe) with `version`. CI only, like TestRealSchtasksAcceptsTaskXML; the probe task
 // is deleted either way.
 func TestRealSchtasksProbeLaunch(t *testing.T) {
 	if os.Getenv("ARCHIVIST_REAL_SCHTASKS") != "1" {

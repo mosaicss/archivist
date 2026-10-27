@@ -284,7 +284,7 @@ try {
         $candidate = Join-Path $env:LOCALAPPDATA 'Programs\archivist'
         # The exes, or copies an earlier move renamed aside while they ran.
         $leftovers = @(Get-ChildItem -LiteralPath $candidate -File -ErrorAction SilentlyContinue |
-            Where-Object { @('archivist.exe', 'archivistw.exe') -contains $_.Name -or $_.Name -like 'archivist.exe.old-*' -or $_.Name -like 'archivistw.exe.old-*' })
+            Where-Object { @('archivist.exe', 'archivistw.exe', 'archivist.exe.old', 'archivist.exe.new') -contains $_.Name -or $_.Name -like 'archivist.exe.old-*' -or $_.Name -like 'archivistw.exe.old-*' })
         if ($leftovers.Count -gt 0) {
             $legacyDir = $candidate
         }

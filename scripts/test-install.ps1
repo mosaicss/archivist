@@ -49,8 +49,8 @@
 # --preflight with "unknown flag" and exit 2 and runs the real exe for the
 # rest) is asked, the check is skipped without showing its error, and the
 # install pairs; a move whose task then does not start keeps the legacy
-# exes and prints no move line (13b). Before anything else, on any
-# platform, Swap-PathEntry is loaded from install.ps1 and checked.
+# exes and prints no move line (13b). Before the Windows only part,
+# Swap-PathEntry is loaded from install.ps1 and checked.
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 3.0
@@ -58,7 +58,7 @@ $ProgressPreference = 'SilentlyContinue'
 
 # --- 0. Swap-PathEntry (Story 94.14), taken from install.ps1 by its AST -------
 # The replay cases leave the user PATH alone (ARCHIVIST_INSTALL_NO_PATH=1), so
-# the PATH swap of a legacy move is checked here, on any platform.
+# the PATH swap of a legacy move is checked here; it needs no Windows state and runs before the Windows only part.
 $swapErrors = $null
 $swapAst = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'install.ps1'), [ref]$null, [ref]$swapErrors)
 $swapFn = @($swapAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Swap-PathEntry' }, $true))

@@ -217,7 +217,8 @@ jobs:
           fi
 
       # Story 94.14: and runs a one-shot probe task (a missing program
-      # reports 0x80070002, cmd.exe /c exit 0 reports 0), deleted after.
+      # reports 0x80070002, cmd.exe /c exit 0 reports 0, a GUI subsystem
+      # build of archivistw.exe reports 0 for `version`), deleted after.
       - name: Real schtasks accepts the task XML and probes a launch
         env:
           ARCHIVIST_REAL_SCHTASKS: "1"
