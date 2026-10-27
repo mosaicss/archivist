@@ -57,7 +57,7 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           # go.mod's `toolchain` directive wins over its `go` line, so the
-          # release builds with exactly the pinned toolchain (go1.27.1).
+          # release builds with exactly the pinned toolchain (go1.27.3).
           go-version-file: go.mod
           cache: false
 

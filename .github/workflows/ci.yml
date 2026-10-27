@@ -16,7 +16,9 @@ jobs:
   test:
     name: Test + lint + build
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # The race tests alone take about 9 minutes and the job about 13 to 14
+    # (2026-10-27), so 15 left no room for a slow apt mirror.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
