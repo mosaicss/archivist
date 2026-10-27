@@ -282,7 +282,10 @@ try {
         $installDir = $env:ARCHIVIST_INSTALL_DIR
     } elseif ($env:LOCALAPPDATA) {
         $candidate = Join-Path $env:LOCALAPPDATA 'Programs\archivist'
-        if ((Test-Path -LiteralPath (Join-Path $candidate 'archivist.exe')) -or (Test-Path -LiteralPath (Join-Path $candidate 'archivistw.exe'))) {
+        # The exes, or copies an earlier move renamed aside while they ran.
+        $leftovers = @(Get-ChildItem -LiteralPath $candidate -File -ErrorAction SilentlyContinue |
+            Where-Object { @('archivist.exe', 'archivistw.exe') -contains $_.Name -or $_.Name -like 'archivist.exe.old-*' -or $_.Name -like 'archivistw.exe.old-*' })
+        if ($leftovers.Count -gt 0) {
             $legacyDir = $candidate
         }
     }
@@ -414,7 +417,7 @@ try {
 # place and any task runs from it; an earlier failure (thrown above) keeps it.
 if ($legacyDir) {
     Remove-LegacyInstall $legacyDir
-    Write-Host "Moved archivist from $legacyDir to $installDir."
+    Write-Host "Moved archivist from $legacyDir to $installDir. Terminals and apps that were already open find it there after you restart them."
 }
 
 if ((-not $Pair) -and (-not (Test-ServiceInstalled))) {

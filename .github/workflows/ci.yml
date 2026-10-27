@@ -204,7 +204,7 @@ jobs:
         shell: bash
         run: |
           go test -count=1 -v ./internal/winjob ./internal/connect ./internal/cmd ./internal/service \
-            -run 'Test(Windows|Terminate|Close|DaemonDeath|AssignFailure|ResumeFailure|StartResumes|HarnessLookPath|DetectReportsBatchShim|Schtasks|RenderTaskXML|ConnectInstallStatusUninstallWindows|SuperviseDaemon|ConnectPreflightWindows|ProbeLaunch|RenderProbeXML|ParseLastResult|TaskResult|ServiceStateText|PreflightOutcome)' \
+            -run 'Test(Windows|Terminate|Close|DaemonDeath|AssignFailure|ResumeFailure|StartResumes|HarnessLookPath|DetectReportsBatchShim|Schtasks|RenderTaskXML|ConnectInstallStatusUninstallWindows|SuperviseDaemon|ConnectPreflightWindows|ConnectStatusNoLogWindows|ProbeLaunch|RenderProbeXML|ParseLastResult|TaskResult|ServiceStateText|PreflightOutcome)' \
             | tee winonly.txt
           grep -q -- '--- PASS' winonly.txt || { echo "FAIL: no Windows only test ran"; exit 1; }
           # The cross drive link test needs a second volume, which a runner

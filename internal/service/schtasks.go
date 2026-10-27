@@ -681,11 +681,11 @@ func TaskResultText(code uint32) string {
 	case 0x8004131F:
 		text = "an instance is already running"
 	case resultRunning:
-		text = "still running"
+		text = "the task is still running"
 	case resultHasNotRun:
-		text = "has not run yet"
+		text = "the task has not run yet"
 	case 0x41306, 0xC000013A:
-		text = "was stopped"
+		text = "the task was stopped"
 	default:
 		if code < 0x10000 {
 			text = fmt.Sprintf("the program exited with code %d", code)

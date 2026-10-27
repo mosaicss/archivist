@@ -931,16 +931,18 @@ func TestUpdateUnderAppDataPrintsInstaller(t *testing.T) {
 	if d := rel.downloads(); len(d) != 0 {
 		t.Fatalf("downloaded %v", d)
 	}
-	// Up to date: nothing to say about AppData.
+	// Up to date, with the binary under AppData: the version check comes
+	// first, so nothing is said about AppData.
 	same := newFakeRelease(t, "v9.9.9", releaseGood)
+	t.Setenv("LOCALAPPDATA", os.TempDir())
 	if _, stdout, stderr, code := same.run(t, "9.9.9"); code != ExitNotFound || strings.Contains(stderr, "AppData") {
 		t.Fatalf("up to date: exit %d\n%s%s", code, stdout, stderr)
 	}
 	if runtime.GOOS == "windows" {
 		return // the in-place Windows swap is TestSwapBinaries
 	}
-	// Outside AppData the (POSIX here) update goes ahead.
-	t.Setenv("LOCALAPPDATA", filepath.Join(os.TempDir(), "no-such-appdata"))
+	// Outside AppData (newFakeRelease points LOCALAPPDATA elsewhere) the
+	// (POSIX here) update goes ahead.
 	updateHostOS = runtime.GOOS
 	rel = newFakeRelease(t, "v9.9.9", releaseGood)
 	if _, stdout, stderr, code := rel.run(t, "0.2.0"); code != 0 {

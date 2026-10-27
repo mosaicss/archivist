@@ -48,11 +48,35 @@
 # (scripts/testdata/winreplay/oldarchivist, released as v9.9.3: it answers
 # --preflight with "unknown flag" and exit 2 and runs the real exe for the
 # rest) is asked, the check is skipped without showing its error, and the
-# install pairs.
+# install pairs; a move whose task then does not start keeps the legacy
+# exes and prints no move line (13b). Before anything else, on any
+# platform, Swap-PathEntry is loaded from install.ps1 and checked.
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 3.0
 $ProgressPreference = 'SilentlyContinue'
+
+# --- 0. Swap-PathEntry (Story 94.14), taken from install.ps1 by its AST -------
+# The replay cases leave the user PATH alone (ARCHIVIST_INSTALL_NO_PATH=1), so
+# the PATH swap of a legacy move is checked here, on any platform.
+$swapErrors = $null
+$swapAst = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'install.ps1'), [ref]$null, [ref]$swapErrors)
+$swapFn = @($swapAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Swap-PathEntry' }, $true))
+if ($swapFn.Count -ne 1) { throw 'FAIL: install.ps1 has no single Swap-PathEntry' }
+. ([scriptblock]::Create($swapFn[0].Extent.Text))
+$legacyEntry = 'C:\Users\a\AppData\Local\Programs\archivist'
+$newEntry = 'C:\Users\a\.archivist\bin'
+foreach ($c in @(
+        @{ In = "C:\x;$legacyEntry;C:\y"; Want = "C:\x;$newEntry;C:\y"; What = 'the legacy entry is replaced in place' },
+        @{ In = "C:\x;$legacyEntry\;C:\y"; Want = "C:\x;$newEntry;C:\y"; What = 'a trailing backslash' },
+        @{ In = "C:\x;$($legacyEntry.ToUpperInvariant());C:\y"; Want = "C:\x;$newEntry;C:\y"; What = 'another case' },
+        @{ In = "$newEntry;C:\x;$legacyEntry"; Want = "$newEntry;C:\x"; What = 'the new entry already there is kept once' },
+        @{ In = 'C:\x;C:\y'; Want = "C:\x;C:\y;$newEntry"; What = 'no legacy entry: the new one is appended' },
+        @{ In = ''; Want = $newEntry; What = 'an empty PATH' })) {
+    $got = Swap-PathEntry $c.In $legacyEntry $newEntry
+    if ($got -ne $c.Want) { throw "FAIL: Swap-PathEntry, $($c.What): got '$got', want '$($c.Want)'" }
+}
+Write-Host 'ok: Swap-PathEntry swaps the legacy PATH entry for the new one'
 
 if ($env:OS -ne 'Windows_NT') { Write-Host 'test-install.ps1 runs on Windows only; skipped'; return }
 
@@ -569,6 +593,22 @@ try {
     if ($r.Out -notmatch [regex]::Escape("Moved archivist from $legacy to $newDir.")) { Fail "no move line:`n$($r.Out)" }
     if ($r.Out -notmatch 'Service:\s+running \(Task Scheduler:') { Fail "status after the move is not running:`n$($r.Out)" }
     Pass 'the default location is ~\.archivist\bin and a legacy AppData install moves there with its task'
+
+    # --- 13b. a failed move keeps the legacy install ------------------------------
+    $h13b = Join-Path $Work 'home13b'
+    $legacy13b = Join-Path $h13b 'AppData\Local\Programs\archivist'
+    Reset-CallLog
+    $r = Invoke-Install $h13b 'v9.9.9' @('-Pair', 'ABCDE12345') @{ ARCHIVIST_INSTALL_DIR = $legacy13b }
+    if ($r.Code -ne 0) { Fail "seeding the legacy install exited $($r.Code):`n$($r.Out)" }
+    Reset-CallLog
+    $r = Invoke-Install $h13b 'v9.9.9' @() @{ ARCHIVIST_INSTALL_DIR = $null; STUB_RUN_FAIL = '2147942402' }
+    if ($r.Code -eq 0) { Fail "a move whose task does not start exited 0:`n$($r.Out)" }
+    foreach ($exe in 'archivist.exe', 'archivistw.exe') {
+        if (-not (Test-Path -LiteralPath (Join-Path $legacy13b $exe))) { Fail "a failed move removed the legacy $exe" }
+    }
+    if ($r.Out -match 'Moved archivist') { Fail "a failed move printed the move line:`n$($r.Out)" }
+    if ($r.Out -notmatch [regex]::Escape('Once that is fixed, run this command again.')) { Fail "a failed move: no rerun line:`n$($r.Out)" }
+    Pass 'a move whose task does not start keeps the legacy install'
 
     # --- 14. a re-pair under the installer: no restart hint, no variable left -----
     Reset-CallLog
