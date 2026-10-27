@@ -44,7 +44,11 @@
 # ARCHIVIST_INSTALL_DIR goes to ~\.archivist\bin and moves a legacy
 # %LOCALAPPDATA%\Programs\archivist install with its task; a re-pair under
 # the installer prints no restart hint and leaves no ARCHIVIST_INSTALLER in
-# the caller's session.
+# the caller's session; an archivist.exe older than connect --preflight
+# (scripts/testdata/winreplay/oldarchivist, released as v9.9.3: it answers
+# --preflight with "unknown flag" and exit 2 and runs the real exe for the
+# rest) is asked, the check is skipped without showing its error, and the
+# install pairs.
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 3.0
@@ -233,6 +237,7 @@ function Stop-StandIns {
 try {
     # --- binaries ---------------------------------------------------------------
     $build = Join-Path $Work 'build'
+    $oldBuild = Join-Path $Work 'build-old'
     $stubs = Join-Path $Work 'stubs'
     New-Item -ItemType Directory -Path $build, $stubs | Out-Null
     Push-Location $Root
@@ -245,6 +250,12 @@ try {
         if ($LASTEXITCODE -ne 0) { Fail 'go build the stub schtasks.exe' }
         go build -o (Join-Path $Work 'server.exe') ./scripts/testdata/winreplay/server
         if ($LASTEXITCODE -ne 0) { Fail 'go build the fake server' }
+        # A release older than connect --preflight: the stand-in archivist.exe
+        # with the real archivistw.exe.
+        New-Item -ItemType Directory -Path $oldBuild | Out-Null
+        go build -o (Join-Path $oldBuild 'archivist.exe') ./scripts/testdata/winreplay/oldarchivist
+        if ($LASTEXITCODE -ne 0) { Fail 'go build the older archivist stand-in' }
+        Copy-Item -LiteralPath (Join-Path $build 'archivistw.exe') -Destination (Join-Path $oldBuild 'archivistw.exe')
     } finally { Pop-Location }
 
     # --- test keys and the installer under test -----------------------------------
@@ -282,13 +293,16 @@ try {
     # Mode good: signed by the test key. mismatch: the zip does not match
     # SHA256SUMS. unsigned: SHA256SUMS (matching the zip) differs from the
     # signed one. nosig: no
-    # signature. otherkey: signed by the untrusted key.
+    # signature. otherkey: signed by the untrusted key. old: good, with the
+    # archivist.exe older than connect --preflight (Story 94.14).
     function New-Release([string]$Tag, [string]$Mode) {
         $ver = $Tag.Substring(1)
         $dir = Join-Path $Work "rel\download\$Tag"
         New-Item -ItemType Directory -Force -Path $dir | Out-Null
         $zip = Join-Path $dir "archivist_v${ver}_windows_amd64.zip"
-        Compress-Archive -Path (Join-Path $build 'archivist.exe'), (Join-Path $build 'archivistw.exe') -DestinationPath $zip
+        $src = $build
+        if ($Mode -eq 'old') { $src = $oldBuild }
+        Compress-Archive -Path (Join-Path $src 'archivist.exe'), (Join-Path $src 'archivistw.exe') -DestinationPath $zip
         # The skill bundle, listed in SHA256SUMS like the zip.
         $skillSrc = Join-Path $Work "skill-$Tag"
         New-Item -ItemType Directory -Force -Path $skillSrc | Out-Null
@@ -320,6 +334,7 @@ try {
     New-Release 'v9.9.7' 'unsigned'
     New-Release 'v9.9.6' 'nosig'
     New-Release 'v9.9.5' 'otherkey'
+    New-Release 'v9.9.3' 'old'
     # The panel's one-liner fetches <base>/latest/download/install.ps1.
     $latest = Join-Path $Work 'rel\latest\download'
     New-Item -ItemType Directory -Force -Path $latest | Out-Null
@@ -565,6 +580,22 @@ try {
     if ($r.Out -notmatch 'updated and restarted') { Fail "the task was not reinstalled:`n$($r.Out)" }
     if ($r.Out -notmatch [regex]::Escape('installer variable after: []')) { Fail "ARCHIVIST_INSTALLER was left in the session:`n$($r.Out)" }
     Pass 're-pair under the installer prints no restart hint and leaves no ARCHIVIST_INSTALLER'
+
+    # --- 15. an archivist older than connect --preflight: the check is skipped ----
+    $h15 = Join-Path $Work 'home15'
+    Reset-CallLog
+    $redeems = Get-RedeemCount
+    $r = Invoke-Install $h15 'v9.9.3' @('-Pair', 'ABCDE12345') @{ STUB_REAL_ARCHIVIST = (Join-Path $build 'archivist.exe') }
+    if ($r.Code -ne 0) { Fail "an older archivist exited $($r.Code):`n$($r.Out)" }
+    $calls = Get-Content -LiteralPath $callLog -Raw
+    if ($calls -notmatch 'oldarchivist connect --preflight') { Fail "the older archivist was not asked for the check:`n$calls" }
+    if ($calls -match 'MosaicArchivistProbe-') { Fail "a probe task ran for the older archivist:`n$calls" }
+    if ($r.Out -match 'unknown flag') { Fail "the older archivist's unknown flag error was shown:`n$($r.Out)" }
+    if ($r.Out -match [regex]::Escape('Your pairing code was not used')) { Fail "the older archivist stopped the install:`n$($r.Out)" }
+    if ((Get-RedeemCount) -ne $redeems + 1) { Fail 'the older archivist did not pair once' }
+    Assert-KeyInFile $h15 $key1 'pairing with an older archivist'
+    if ($r.Out -notmatch 'Service:\s+running \(Task Scheduler:') { Fail "status with an older archivist is not running:`n$($r.Out)" }
+    Pass 'an archivist older than connect --preflight skips the check silently and pairs'
 
     # --- 10. connect --uninstall cleans this computer up (Story 94.6) ---------------
     Reset-CallLog
