@@ -1011,7 +1011,7 @@ go build ./cmd/archivist
 ./archivist version
 ```
 
-`go.mod` pins the toolchain (`toolchain go1.27.1`); CI and releases build with
+`go.mod` pins the toolchain (`toolchain go1.27.3`); CI and releases build with
 exactly that version. Lint and release config checks match CI:
 
 ```sh
