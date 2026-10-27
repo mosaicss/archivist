@@ -106,14 +106,14 @@ const pairPendingMax = 10 * time.Minute
 const accountStatusTimeout = 5 * time.Second
 
 // setupMode is which one-step setup flag was given (Story 94.6 adds
-// --pause and --resume).
+// --pause and --resume, Story 94.14 the hidden --preflight).
 type setupMode struct {
-	pair, trust, install, uninstall, status, service, pause, resume bool
+	pair, trust, install, uninstall, status, service, pause, resume, preflight bool
 }
 
 func (m setupMode) count() int {
 	n := 0
-	for _, b := range []bool{m.pair, m.trust, m.install, m.uninstall, m.status, m.service, m.pause, m.resume} {
+	for _, b := range []bool{m.pair, m.trust, m.install, m.uninstall, m.status, m.service, m.pause, m.resume, m.preflight} {
 		if b {
 			n++
 		}
@@ -366,11 +366,18 @@ func savePairedKey(cmd *cobra.Command, version string, res *client.PairingResult
 	if os.Getenv("ARCHIVIST_TOKEN") != "" {
 		_, _ = fmt.Fprintln(stderr, "Warning: ARCHIVIST_TOKEN is set in this environment and takes precedence over the saved key here. Unset it to use the paired key. The background service always uses the saved key.")
 	}
-	if pairServiceInstalled() {
+	// Story 94.14: the installers reinstall the service right after
+	// pairing, so the hint is theirs to skip (ARCHIVIST_INSTALLER=1).
+	if os.Getenv(installerEnvKey) != "1" && pairServiceInstalled() {
 		_, _ = fmt.Fprintln(stdout, "Run 'archivist connect --install' to restart background connect with the new key.")
 	}
 	return nil
 }
+
+// installerEnvKey is set to 1 by install.sh and install.ps1 around their
+// archivist calls (Story 94.14). An environment variable, not a flag, so
+// a binary older than the installer ignores it.
+const installerEnvKey = "ARCHIVIST_INSTALLER"
 
 // pairBrowserInvalidMessage answers a --pair value whose browser code
 // (after the dot) is malformed.
@@ -986,15 +993,7 @@ func runServiceStatus(cmd *cobra.Command, version string) error {
 	if err != nil {
 		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "archivist connect: %v\n", err)
 	}
-	state := "not installed (run 'archivist connect --install')"
-	switch {
-	case st.Installed && st.Running:
-		state = "running"
-	case st.Installed && st.Loaded:
-		state = "loaded, not running (the daemon stopped; see the log, then run 'archivist connect --install' to start it again)"
-	case st.Installed:
-		state = "installed, not running (run 'archivist connect --install' to start it again)"
-	}
+	state := serviceStateText(st, service.LastLogLine(home) == "")
 	_, _ = fmt.Fprintf(out, "Service:  %s (%s: %s)\n", state, m.Name(), m.Path())
 	if stateDir, err := connect.DefaultStateDir(); err == nil && pausedHere(stateDir) {
 		_, _ = fmt.Fprintln(out, "Paused:   yes, on this computer (resume with 'archivist connect --resume' or in Mosaic)")
@@ -1023,6 +1022,92 @@ func runServiceStatus(cmd *cobra.Command, version string) error {
 	}
 	if st.Installed && st.Running && keyOK {
 		return nil
+	}
+	return &ExitError{Code: ExitGenericError}
+}
+
+// serviceStateText is the --status Service line's state. A Windows task that
+// is registered but not running names Task Scheduler's last result when it
+// is a failure (Story 94.14): a program file Task Scheduler cannot find
+// (an install made from a packaged app's shell) asks for a normal
+// PowerShell window, any other failure for --install. Without a result, an
+// empty log says the daemon never wrote one rather than pointing at it.
+func serviceStateText(st service.Status, logEmpty bool) string {
+	const again = "run 'archivist connect --install' to start it again"
+	switch {
+	case st.Installed && st.Running:
+		return "running"
+	case st.Installed && st.Loaded && st.LastResult.Failed():
+		hint := again
+		if st.LastResult.NotFound() {
+			hint = "run the install command again in a normal PowerShell window"
+		}
+		return "loaded, not running (Task Scheduler: " + service.TaskResultText(st.LastResult.Code) + "; " + hint + ")"
+	case st.Installed && st.Loaded && logEmpty:
+		return "loaded, not running (the daemon wrote no log; " + again + ")"
+	case st.Installed && st.Loaded:
+		return "loaded, not running (the daemon stopped; see the log, then " + again + ")"
+	case st.Installed:
+		return "installed, not running (" + again + ")"
+	}
+	return "not installed (run 'archivist connect --install')"
+}
+
+// packagedShellMessage is --preflight's answer when Task Scheduler cannot
+// find the program just installed (Story 94.14): the shell runs inside a
+// packaged app, whose new AppData files only that app sees.
+const packagedShellMessage = "This shell is sandboxed by a packaged app (for example the Claude desktop app), so Windows cannot see what it installs. Run this command in a normal PowerShell window."
+
+// runPreflight is the installers' check before a pairing code is spent
+// (Story 94.14, hidden --preflight): where the service manager can probe a
+// launch (the Windows task manager), it starts the service binary once
+// with `version` through a one-shot task. Started, or no answer in time:
+// exit 0 (the latter with a note). Not found: the packaged shell message,
+// exit 1. Any other failure: Task Scheduler's reason, exit 1. Managers that
+// cannot probe exit 0 silently; a binary older than this flag exits 2,
+// which the installers take as "skip".
+func runPreflight(cmd *cobra.Command) error {
+	stderr := cmd.ErrOrStderr()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+	m, err := service.New(serviceOptions(home, nil))
+	if err != nil {
+		return nil
+	}
+	prober, ok := m.(service.LaunchProber)
+	if !ok {
+		return nil
+	}
+	if err := checkServiceBinary(stderr); err != nil {
+		return err
+	}
+	stable, err := stableBinary()
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "Note: could not check that %s can start archivist (%v); continuing.\n", m.Name(), err)
+		return nil
+	}
+	bin := serviceBinary(stable)
+	res, err := prober.ProbeLaunch(cmd.Context(), bin, []string{"version"})
+	return preflightOutcome(stderr, bin, res, err)
+}
+
+// preflightOutcome reports a launch probe of bin (see runPreflight).
+func preflightOutcome(stderr io.Writer, bin string, res service.TaskResult, err error) error {
+	switch {
+	case err != nil:
+		_, _ = fmt.Fprintf(stderr, "Note: could not check that Task Scheduler can start %s (%v); continuing.\n", bin, err)
+		return nil
+	case !res.Known:
+		_, _ = fmt.Fprintf(stderr, "Note: Task Scheduler did not report whether it can start %s within 15 s; continuing.\n", bin)
+		return nil
+	case res.Code == 0:
+		return nil
+	case res.NotFound():
+		_, _ = fmt.Fprintln(stderr, packagedShellMessage)
+	default:
+		_, _ = fmt.Fprintf(stderr, "Windows could not start %s from Task Scheduler: %s.\n", bin, service.TaskResultText(res.Code))
 	}
 	return &ExitError{Code: ExitGenericError}
 }

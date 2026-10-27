@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -505,5 +506,267 @@ func TestSchtasksInstallRefusesUntrackedDaemon(t *testing.T) {
 	}
 	if fileExists(m.Path()) || fileExists(EnvFilePath(opts.Home)) || readPID(opts.Home) != 5555 {
 		t.Fatal("files changed")
+	}
+}
+
+// Story 94.14: generalising the renderer for the probe leaves the service
+// task's definition byte for byte as it was (SHA-256 of v0.2.35's output).
+func TestRenderTaskXMLUnchanged(t *testing.T) {
+	for _, c := range []struct {
+		user, bin, home, want string
+		args                  []string
+	}{
+		{`PC\a&b`, `C:\Users\a b\.archivist\bin\archivistw.exe`, `C:\Users\a b`,
+			"4360435e8eb88a535aa8125a908b586572bb9577e18443256a4ba3de1b6b0f42", []string{"--max-permission", "full_auto"}},
+		{"u", `C:\p q\archivistw.exe`, `C:\h`, "71a5327489dd919507906e1f9967b5c2233891b534e047d1be9f49bbaf566bfe", nil},
+	} {
+		sum := sha256.Sum256(RenderTaskXML(c.user, c.bin, c.home, c.args))
+		if got := hex.EncodeToString(sum[:]); got != c.want {
+			t.Errorf("%s: the service task XML changed (sha256 %s)", c.bin, got)
+		}
+	}
+}
+
+// The probe has the service task's principal but no trigger, no restart,
+// a one minute limit and its own arguments.
+func TestRenderProbeXML(t *testing.T) {
+	xml, ok := decodeUTF16LE(string(RenderProbeXML(`PC\alice`, `C:\Users\alice\.archivist\bin\archivistw.exe`, `C:\Users\alice`, []string{"version"})))
+	if !ok {
+		t.Fatal("not UTF-16LE")
+	}
+	for _, want := range []string{
+		"<UserId>PC\\alice</UserId>\r\n      <LogonType>InteractiveToken</LogonType>\r\n      <RunLevel>LeastPrivilege</RunLevel>",
+		"<ExecutionTimeLimit>PT1M</ExecutionTimeLimit>",
+		`<Command>C:\Users\alice\.archivist\bin\archivistw.exe</Command>`,
+		"<Arguments>version</Arguments>",
+		`<WorkingDirectory>C:\Users\alice</WorkingDirectory>`,
+	} {
+		if !strings.Contains(xml, want) {
+			t.Errorf("probe XML lacks %q:\n%s", want, xml)
+		}
+	}
+	for _, unwanted := range []string{"<Triggers>", "<LogonTrigger>", "<RestartOnFailure>", "connect --service", "<!--"} {
+		if strings.Contains(xml, unwanted) {
+			t.Errorf("probe XML has %q:\n%s", unwanted, xml)
+		}
+	}
+	if ServiceArgs(xml) != nil {
+		t.Fatal("the probe reads as a service definition")
+	}
+}
+
+func TestProbeTaskName(t *testing.T) {
+	if got, want := ProbeTaskName(`PC\bob`, ""), "MosaicArchivistProbe-bob-40439733"; got != want {
+		t.Fatalf("%q, want %q", got, want)
+	}
+	if ProbeTaskName(`PC\bob`, "S-1") == TaskName(`PC\bob`, "S-1") {
+		t.Fatal("the probe shares the service task's name")
+	}
+}
+
+// probeRow is a schtasks /query /v /fo csv /nh row with result in column 6.
+func probeRow(result string) string {
+	return `"PC","\` + ProbeTaskName(`PC\alice`, "") + `","N/A","Ready","Interactive only","10/27/2026 10:00:00","` + result + `","PC\alice","C:\x.exe version"` + "\r\n"
+}
+
+// The last result is read by column position: signed or unsigned decimal
+// or hex; anything else is unknown.
+func TestParseLastResult(t *testing.T) {
+	for in, want := range map[string]TaskResult{
+		probeRow("-2147024894"):              {ResultFileNotFound, true},
+		probeRow("2147942402"):               {ResultFileNotFound, true},
+		probeRow("0x80070002"):               {ResultFileNotFound, true},
+		probeRow("0X41301"):                  {0x41301, true},
+		probeRow("0"):                        {0, true},
+		probeRow("1"):                        {1, true},
+		"\r\n" + probeRow("267011"):          {0x41303, true},
+		probeRow("267011") + probeRow("1"):   {0x41303, true},
+		probeRow("Ready"):                    {},
+		probeRow(""):                         {},
+		probeRow("4294967296"):               {},
+		probeRow("-2147483649"):              {},
+		probeRow("0x1FFFFFFFF"):              {},
+		`"PC","\task","N/A","Ready","x","y"`: {},
+		"":                                   {},
+		"ERROR: The system cannot find the file specified.": {},
+	} {
+		if got := parseLastResult(in); got != want {
+			t.Errorf("%q: %+v, want %+v", in, got, want)
+		}
+	}
+	f := &fakeRunner{answers: map[string][]Result{"schtasks /query": {{ExitCode: 1, Output: probeRow("0")}}}}
+	if got := LastTaskResult(context.Background(), schtasksOpts(t, f), "x"); got.Known {
+		t.Fatalf("a failed query read %+v", got)
+	}
+	if f.calls[0] != "schtasks /query /tn x /v /fo csv /nh" {
+		t.Fatalf("calls %v", f.calls)
+	}
+}
+
+func TestTaskResultText(t *testing.T) {
+	for code, want := range map[uint32]string{
+		0x80070002: "the program file was not found (0x80070002)",
+		0x80070003: "the program file was not found (0x80070003)",
+		0x80070005: "access was denied (0x80070005)",
+		0x8007010B: "the start folder is not valid (0x8007010B)",
+		0x800700C1: "Windows cannot run the program file (0x800700C1)",
+		0x800704DD: "the user is not logged on (0x800704DD)",
+		0x800710E0: "an administrator or policy refused the request (0x800710E0)",
+		0x8004131F: "an instance is already running (0x8004131F)",
+		0x41301:    "still running (0x00041301)",
+		0x41303:    "has not run yet (0x00041303)",
+		0x41306:    "was stopped (0x00041306)",
+		0xC000013A: "was stopped (0xC000013A)",
+		1:          "the program exited with code 1 (0x00000001)",
+		0xFFFF:     "the program exited with code 65535 (0x0000FFFF)",
+		0x10000:    "result 0x00010000",
+		0x80004005: "result 0x80004005",
+	} {
+		if got := TaskResultText(code); got != want {
+			t.Errorf("0x%08X: %q, want %q", code, got, want)
+		}
+	}
+}
+
+var testProbe = ProbeTaskName(`PC\alice`, "")
+
+// The probe registers and runs a one-shot task, polls its last result past
+// "has not run" and "running", and always deletes the task and its XML.
+func TestProbeLaunch(t *testing.T) {
+	bin := `C:\Users\alice\.archivist\bin\archivistw.exe`
+	if runtime.GOOS != "windows" {
+		bin = "/home/alice/.archivist/bin/archivistw.exe"
+	}
+	query := "schtasks /query /tn " + testProbe
+	for name, c := range map[string]struct {
+		answers []Result
+		want    TaskResult
+	}{
+		"success":        {[]Result{{Output: probeRow("267011")}, {Output: probeRow("267009")}, {Output: probeRow("0")}}, TaskResult{0, true}},
+		"file not found": {[]Result{{Output: probeRow("-2147024894")}}, TaskResult{ResultFileNotFound, true}},
+		"exit code":      {[]Result{{Output: probeRow("267009")}, {Output: probeRow("3")}}, TaskResult{3, true}},
+		"timeout":        {[]Result{{Output: probeRow("267009")}}, TaskResult{}},
+		"unreadable":     {[]Result{{Output: "garbage"}}, TaskResult{}},
+		"query refused":  {[]Result{{ExitCode: 1}}, TaskResult{}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := &fakeRunner{answers: map[string][]Result{query: c.answers}}
+			opts := schtasksOpts(t, f)
+			polls := 0
+			opts.Sleep = func(d time.Duration) {
+				if d != 250*time.Millisecond {
+					t.Errorf("polled every %v", d)
+				}
+				polls++
+			}
+			var xmlAtCreate []byte
+			inner := opts.Run
+			opts.Run = func(ctx context.Context, n string, args ...string) (Result, error) {
+				if len(args) > 2 && args[0] == "/create" {
+					xmlAtCreate, _ = os.ReadFile(args[2])
+				}
+				return inner(ctx, n, args...)
+			}
+			got, err := newSchtasks(opts).ProbeLaunch(context.Background(), bin, []string{"version"})
+			if err != nil || got != c.want {
+				t.Fatalf("%+v %v, want %+v (calls %v)", got, err, c.want, f.calls)
+			}
+			xmlPath := filepath.Join(opts.Home, ".archivist", "connect", "MosaicArchivistProbe.xml")
+			want := []string{
+				"schtasks /create /xml " + xmlPath + " /tn " + testProbe + " /f",
+				"schtasks /run /tn " + testProbe,
+			}
+			if strings.Join(f.calls[:2], "|") != strings.Join(want, "|") {
+				t.Fatalf("calls %v", f.calls)
+			}
+			if last := f.calls[len(f.calls)-1]; last != "schtasks /delete /tn "+testProbe+" /f" {
+				t.Fatalf("the probe task was not deleted last: %v", f.calls)
+			}
+			if xml, _ := decodeUTF16LE(string(xmlAtCreate)); !strings.Contains(xml, "<Command>"+bin+"</Command>") || !strings.Contains(xml, "<Arguments>version</Arguments>") {
+				t.Fatalf("probe XML:\n%s", xml)
+			}
+			if fileExists(xmlPath) {
+				t.Fatal("the probe XML was kept")
+			}
+			if info, err := os.Stat(filepath.Dir(xmlPath)); err != nil || (runtime.GOOS != "windows" && info.Mode().Perm() != 0o700) {
+				t.Fatalf("connect dir %v %v", info, err)
+			}
+			if !c.want.Known && polls != 60 {
+				t.Fatalf("an unknown result after %d polls, want 60 (15 s)", polls)
+			}
+		})
+	}
+}
+
+// A refused registration or run is an error, and the probe task is still
+// deleted; nothing runs without a user or an absolute binary.
+func TestProbeLaunchFailures(t *testing.T) {
+	bin := testBinary
+	for _, refused := range []string{"schtasks /create", "schtasks /run"} {
+		f := &fakeRunner{answers: map[string][]Result{refused: {{ExitCode: 1, Output: "ERROR: Access is denied."}}}}
+		opts := schtasksOpts(t, f)
+		if _, err := ProbeLaunch(context.Background(), opts, bin, []string{"version"}); err == nil || !strings.Contains(err.Error(), "Access is denied") {
+			t.Fatalf("%s refused: %v", refused, err)
+		}
+		if f.called("schtasks /delete /tn "+testProbe+" /f") != 1 || f.called("schtasks /query") != 0 {
+			t.Fatalf("%s refused: calls %v", refused, f.calls)
+		}
+		if fileExists(filepath.Join(opts.Home, ".archivist", "connect", "MosaicArchivistProbe.xml")) {
+			t.Fatal("the probe XML was kept")
+		}
+	}
+	f := &fakeRunner{}
+	opts := schtasksOpts(t, f)
+	if _, err := ProbeLaunch(context.Background(), opts, "relative.exe", nil); err == nil || len(f.calls) != 0 {
+		t.Fatalf("relative binary: %v %v", err, f.calls)
+	}
+	opts.User = ""
+	if _, err := ProbeLaunch(context.Background(), opts, bin, nil); err == nil || len(f.calls) != 0 {
+		t.Fatalf("no user: %v %v", err, f.calls)
+	}
+}
+
+// A registered task whose daemon is not running reports its last result;
+// a running one does not ask.
+func TestSchtasksStatusReadsLastResult(t *testing.T) {
+	f := &fakeRunner{answers: map[string][]Result{
+		"schtasks /query /tn " + testTask + " /v": {{Output: strings.Replace(probeRow("-2147024894"), testProbe, testTask, 1)}},
+	}}
+	opts := schtasksOpts(t, f)
+	opts.Alive = func(int) bool { return false }
+	m := newSchtasks(opts)
+	if err := os.MkdirAll(filepath.Dir(m.Path()), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(m.Path(), RenderTaskXML(opts.User, testBinary, opts.Home, nil), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	st, err := m.Status(context.Background())
+	if err != nil || !st.Loaded || st.Running || st.LastResult != (TaskResult{ResultFileNotFound, true}) || !st.LastResult.NotFound() {
+		t.Fatalf("%+v %v", st, err)
+	}
+	f.calls = nil
+	m.opts.Alive = func(int) bool { return true }
+	if _, err := WritePID(opts.Home, 9); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ = m.Status(context.Background()); !st.Running || st.LastResult.Known || f.called("schtasks /query /tn "+testTask+" /v") != 0 {
+		t.Fatalf("running: %+v %v", st, f.calls)
+	}
+}
+
+func TestTaskResultFailed(t *testing.T) {
+	for r, want := range map[TaskResult]bool{
+		{}:                          false,
+		{0, true}:                   false,
+		{0x41301, true}:             false,
+		{0x41303, true}:             true,
+		{1, true}:                   true,
+		{ResultFileNotFound, true}:  true,
+		{ResultFileNotFound, false}: false,
+	} {
+		if r.Failed() != want {
+			t.Errorf("%+v failed %v", r, !want)
+		}
 	}
 }

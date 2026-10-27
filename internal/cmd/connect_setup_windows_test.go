@@ -316,3 +316,62 @@ func TestWindowsConnectCheckResolvesNpmShim(t *testing.T) {
 		t.Fatal("the batch shim was executed")
 	}
 }
+
+// --preflight on Windows (Story 94.14) probes archivistw.exe next to the
+// stable archivist.exe through a one-shot task, then deletes it: result 0
+// exits 0 silently, file not found prints the packaged shell message and
+// exits 1, another failure names Task Scheduler's reason, and no result in
+// time continues with a note. A missing archivistw.exe refuses before any
+// schtasks call.
+func TestConnectPreflightWindows(t *testing.T) {
+	home := windowsSandbox(t)
+	stable, err := stableBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	companion := filepath.Join(filepath.Dir(stable), "archivistw.exe")
+	_ = os.Remove(companion)
+	result := "0"
+	calls := stubRunner(t, func(line string) service.Result {
+		if strings.HasPrefix(line, "schtasks /query /tn MosaicArchivistProbe-") {
+			return service.Result{Output: `"PC","\MosaicArchivistProbe-x","N/A","Ready","Interactive only","N/A","` + result + `","PC\x","x"` + "\r\n"}
+		}
+		return service.Result{}
+	})
+	out, code := runRoot(t, "connect", "--preflight")
+	if code != ExitGenericError || !strings.Contains(out, "archivistw.exe") || len(*calls) != 0 {
+		t.Fatalf("missing companion: exit %d calls %v\n%s", code, *calls, out)
+	}
+	if err := os.WriteFile(companion, []byte("stub"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Remove(companion) })
+	for _, c := range []struct {
+		result string
+		code   int
+		want   string
+	}{
+		{"0", 0, ""},
+		{"-2147024894", ExitGenericError, packagedShellMessage},
+		{"2147942405", ExitGenericError, "Windows could not start " + companion + " from Task Scheduler: access was denied (0x80070005)."},
+		{"267009", 0, "Note: Task Scheduler did not report"},
+	} {
+		result = c.result
+		*calls = nil
+		out, code := runRoot(t, "connect", "--preflight")
+		if code != c.code || (c.want == "" && out != "") || !strings.Contains(out, c.want) {
+			t.Fatalf("result %s: exit %d\n%s", c.result, code, out)
+		}
+		joined := strings.Join(*calls, "\n")
+		if !strings.Contains(joined, "schtasks /create /xml "+filepath.Join(home, ".archivist", "connect", "MosaicArchivistProbe.xml")) ||
+			!strings.HasPrefix((*calls)[len(*calls)-1], "schtasks /delete /tn MosaicArchivistProbe-") {
+			t.Fatalf("result %s: calls\n%s", c.result, joined)
+		}
+		if strings.Contains(joined, "MosaicArchivistConnect-") {
+			t.Fatalf("result %s: the service task was touched\n%s", c.result, joined)
+		}
+		if _, err := os.Stat(service.TaskXMLPath(home)); err == nil {
+			t.Fatalf("result %s: a service task XML was written", c.result)
+		}
+	}
+}

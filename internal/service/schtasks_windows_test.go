@@ -51,3 +51,34 @@ func TestRealSchtasksAcceptsTaskXML(t *testing.T) {
 		t.Fatalf("status of a deleted task: %+v %v", st, err)
 	}
 }
+
+// The real Task Scheduler (Story 94.14): a probe of a missing program
+// reports file not found (0x80070002), and one of `cmd.exe /c exit 0`
+// reports 0. CI only, like TestRealSchtasksAcceptsTaskXML; the probe task
+// is deleted either way.
+func TestRealSchtasksProbeLaunch(t *testing.T) {
+	if os.Getenv("ARCHIVIST_REAL_SCHTASKS") != "1" {
+		t.Skip("set ARCHIVIST_REAL_SCHTASKS=1 (CI) to run a real scheduled task")
+	}
+	u, err := user.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	opts := Options{Home: t.TempDir(), User: u.Username, SID: "archivist-ci-probe-" + strconv.Itoa(os.Getpid())}
+	name := ProbeTaskName(opts.User, opts.SID)
+	t.Cleanup(func() { _, _ = ExecRunner(ctx, "schtasks", "/delete", "/tn", name, "/f") })
+	missing := filepath.Join(t.TempDir(), "archivistw.exe")
+	res, err := ProbeLaunch(ctx, opts, missing, []string{"version"})
+	if err != nil || res != (TaskResult{Code: ResultFileNotFound, Known: true}) {
+		t.Fatalf("missing program: %+v %v", res, err)
+	}
+	cmdExe := filepath.Join(os.Getenv("SystemRoot"), "System32", "cmd.exe")
+	res, err = ProbeLaunch(ctx, opts, cmdExe, []string{"/c", "exit", "0"})
+	if err != nil || res != (TaskResult{Code: 0, Known: true}) {
+		t.Fatalf("cmd.exe /c exit 0: %+v %v", res, err)
+	}
+	if r, err := ExecRunner(ctx, "schtasks", "/query", "/tn", name); err != nil || r.OK() {
+		t.Fatalf("the probe task is still registered: %v exit %d", err, r.ExitCode)
+	}
+}

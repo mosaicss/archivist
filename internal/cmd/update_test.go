@@ -487,6 +487,10 @@ func releaseArchive(t *testing.T, ver, body string, extra map[string]string) (st
 // 127.0.0.1 and points update's release URLs and verifier at it.
 func newFakeRelease(t *testing.T, tag string, mode releaseMode) *fakeRelease {
 	t.Helper()
+	// The stand-in binary lives in the temporary folder, which Windows keeps
+	// under %LOCALAPPDATA%: an AppData it is not under keeps the update in
+	// place (Story 94.14; TestUpdateUnderAppDataPrintsInstaller sets it).
+	t.Setenv("LOCALAPPDATA", filepath.Join(t.TempDir(), "AppData", "Local"))
 	trusted, other := updateTestKeys()
 	ver := strings.TrimPrefix(tag, "v")
 	archive, archiveBody := releaseArchive(t, ver, newBinary, nil)
@@ -876,5 +880,76 @@ func TestExtractBinarySkipsNonRegularEntries(t *testing.T) {
 	}
 	if b, err := os.ReadFile(out); err != nil || string(b) != "regular-binary" {
 		t.Fatalf("extracted %q %v", b, err)
+	}
+}
+
+func TestUnderWindowsDir(t *testing.T) {
+	const local = `C:\Users\Ann\AppData\Local`
+	for _, c := range []struct {
+		p, dir string
+		want   bool
+	}{
+		{`C:\Users\Ann\AppData\Local\Programs\archivist`, local, true},
+		{`c:\users\ann\appdata\local\programs\archivist`, local, true},
+		{`C:/Users/Ann/AppData/Local/Programs/archivist`, local, true},
+		{`C:\Users\Ann\AppData\Local`, local, true},
+		{`C:\Users\Ann\AppData\Local\`, local + `\`, true},
+		{`C:\Users\Ann\AppData\Local\..\Local\Programs`, local, true},
+		{`C:\Users\Ann\AppData\Local2\archivist`, local, false},
+		{`C:\Users\Ann\AppData\LocalLow\archivist`, local, false},
+		{`C:\Users\Ann\AppData\Local\..\Roaming\archivist`, local, false},
+		{`C:\Users\Ann\.archivist\bin`, local, false},
+		{`D:\Users\Ann\AppData\Local\x`, local, false},
+		{`C:\Users\Ann\AppData\Local\x`, "", false},
+		{`C:\Users\Ann\AppData\Local\x`, " ", false},
+		{"", local, false},
+	} {
+		if got := underWindowsDir(c.p, c.dir); got != c.want {
+			t.Errorf("%q under %q: %v, want %v", c.p, c.dir, got, c.want)
+		}
+	}
+}
+
+// Story 94.14: on Windows an install under %LOCALAPPDATA% is not updated in
+// place; the update names the install one-liner (without -Pair), exits 1
+// and downloads nothing. Elsewhere the update goes ahead.
+func TestUpdateUnderAppDataPrintsInstaller(t *testing.T) {
+	setHome(t, t.TempDir())
+	prev := updateHostOS
+	t.Cleanup(func() { updateHostOS = prev })
+	updateHostOS = "windows"
+	rel := newFakeRelease(t, "v9.9.9", releaseGood)
+	// rel.run puts the binary in a fresh temp dir: LOCALAPPDATA is its
+	// parent, so the binary is under it.
+	t.Setenv("LOCALAPPDATA", os.TempDir())
+	bin, stdout, stderr, code := rel.run(t, "0.2.0")
+	if code != ExitGenericError || !strings.Contains(stderr, installPS1) || !strings.Contains(stderr, "outside AppData") ||
+		!strings.Contains(stderr, "normal PowerShell window") || strings.Contains(stderr, "-Pair") {
+		t.Fatalf("exit %d\nstdout %s\nstderr %s", code, stdout, stderr)
+	}
+	assertUnchanged(t, bin)
+	if d := rel.downloads(); len(d) != 0 {
+		t.Fatalf("downloaded %v", d)
+	}
+	// Up to date: nothing to say about AppData.
+	same := newFakeRelease(t, "v9.9.9", releaseGood)
+	if _, stdout, stderr, code := same.run(t, "9.9.9"); code != ExitNotFound || strings.Contains(stderr, "AppData") {
+		t.Fatalf("up to date: exit %d\n%s%s", code, stdout, stderr)
+	}
+	if runtime.GOOS == "windows" {
+		return // the in-place Windows swap is TestSwapBinaries
+	}
+	// Outside AppData the (POSIX here) update goes ahead.
+	t.Setenv("LOCALAPPDATA", filepath.Join(os.TempDir(), "no-such-appdata"))
+	updateHostOS = runtime.GOOS
+	rel = newFakeRelease(t, "v9.9.9", releaseGood)
+	if _, stdout, stderr, code := rel.run(t, "0.2.0"); code != 0 {
+		t.Fatalf("outside AppData: exit %d\n%s%s", code, stdout, stderr)
+	}
+	updateHostOS = "windows"
+	rel = newFakeRelease(t, "v9.9.9", releaseGood)
+	_, stdout, stderr, code = rel.run(t, "0.2.0")
+	if code == ExitGenericError || strings.Contains(stderr, "outside AppData") {
+		t.Fatalf("windows host outside AppData refused: exit %d\n%s%s", code, stdout, stderr)
 	}
 }

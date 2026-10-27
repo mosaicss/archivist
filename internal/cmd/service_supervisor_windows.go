@@ -23,9 +23,6 @@ const supervisedEnvKey = "ARCHIVIST_SERVICE_SUPERVISED"
 // scheduled task runs, so no console or Terminal window opens at login.
 const companionExe = "archivistw.exe"
 
-// installPS1 is the Windows one-liner that installs both executables.
-const installPS1 = "& ([scriptblock]::Create((irm https://github.com/mosaicss/archivist/releases/latest/download/install.ps1)))"
-
 // serviceBinary is archivistw.exe next to the stable archivist.exe.
 func serviceBinary(stable string) string {
 	return filepath.Join(filepath.Dir(stable), companionExe)
@@ -41,7 +38,7 @@ func checkServiceBinary(stderr io.Writer) error {
 	}
 	companion := serviceBinary(stable)
 	if st, err := os.Stat(companion); err != nil || !st.Mode().IsRegular() {
-		_, _ = fmt.Fprintf(stderr, "archivist connect: background connect needs %s next to %s, and it is missing. Install archivist with install.ps1 (in PowerShell):\n  %s\n", companionExe, stable, installPS1)
+		_, _ = fmt.Fprintf(stderr, "archivist connect: background connect needs %s next to %s, and it is missing. Install archivist with install.ps1 (in a normal PowerShell window):\n  %s\n", companionExe, stable, installPS1)
 		return &ExitError{Code: ExitGenericError}
 	}
 	return nil

@@ -35,6 +35,16 @@
 # connect --uninstall revokes the key (DELETE /account/cli-tokens/current),
 # deletes the task and removes the key, the task XML and ~\.archivist\connect.
 # Credential Manager items the replay created are deleted at the end.
+#
+# Story 94.14 (the stub schtasks.exe records each task's last result): a
+# probe launch failure with -Pair stops before pairing (no redeem, no
+# credentials file, the packaged shell message and "Your pairing code was
+# not used."); a task that does not start names Task Scheduler's result and
+# the rerun without -Pair, never a log line; an install without
+# ARCHIVIST_INSTALL_DIR goes to ~\.archivist\bin and moves a legacy
+# %LOCALAPPDATA%\Programs\archivist install with its task; a re-pair under
+# the installer prints no restart hint and leaves no ARCHIVIST_INSTALLER in
+# the caller's session.
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 3.0
@@ -56,6 +66,7 @@ function Pass([string]$Message) { Write-Host "ok: $Message" }
 $Base = ''
 $stubs = ''
 $callLog = Join-Path $Work 'calls.log'
+$redeemLog = Join-Path $Work 'redeem.log'
 
 # The installer under test: install.ps1 with the test key (set below).
 $Installer = ''
@@ -72,7 +83,8 @@ function Invoke-Install([string]$UserHome, [string]$Version, [string[]]$InstallA
         ARCHIVIST_INSTALL_DIR = (Join-Path $UserHome 'bin'); ARCHIVIST_INSTALL_NO_PATH = '1'
         ARCHIVIST_RELEASE_BASE_URL = $Base; ARCHIVIST_INSTALL_VERSION = $Version; ARCHIVIST_BASE_URL = $Base
         ARCHIVIST_TOKEN = $null; STUB_LOG = $callLog; STUB_STATE = (Join-Path $UserHome 'task-registered')
-        STUB_FAIL_CREATE = $null; Path = "$stubs;$env:Path"
+        STUB_FAIL_CREATE = $null; STUB_PROBE_RESULT = $null; STUB_RUN_FAIL = $null; ARCHIVIST_INSTALLER = $null
+        Path = "$stubs;$env:Path"
         ARCHIVIST_PAIR_CONFIRM = 'browser'; BROWSER = (Join-Path $Work 'server.exe')
     }
     foreach ($k in $Extra.Keys) { $vars[$k] = $Extra[$k] }
@@ -195,6 +207,19 @@ function Invoke-Bin([string]$UserHome, [string[]]$BinArgs) {
     }
 }
 
+# Get-TaskCommand is the <Command> of a UTF-16LE task XML.
+function Get-TaskCommand([string]$Path) {
+    $xml = [System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::Unicode)
+    if ($xml -notmatch '<Command>(.*?)</Command>') { Fail "no <Command> in $Path" }
+    return $Matches[1]
+}
+
+# Get-RedeemCount is how many redeems the fake server has seen.
+function Get-RedeemCount {
+    if (-not (Test-Path -LiteralPath $redeemLog)) { return 0 }
+    return @(Get-Content -LiteralPath $redeemLog | Where-Object { $_ -match '"path":"/agent-pairing/redeem"' }).Count
+}
+
 function Stop-StandIns {
     foreach ($log in $callLog, "$callLog.all") {
         if (-not (Test-Path -LiteralPath $log)) { continue }
@@ -301,7 +326,6 @@ try {
     Copy-Item -LiteralPath $Installer -Destination (Join-Path $latest 'install.ps1')
 
     $portFile = Join-Path $Work 'port'
-    $redeemLog = Join-Path $Work 'redeem.log'
     $server = Start-Process -FilePath (Join-Path $Work 'server.exe') -ArgumentList (Join-Path $Work 'rel'), $redeemLog, $portFile -PassThru -WindowStyle Hidden
     for ($i = 0; $i -lt 100 -and -not (Test-Path -LiteralPath $portFile); $i++) { Start-Sleep -Milliseconds 100 }
     if (-not (Test-Path -LiteralPath $portFile)) { Fail 'the fake release server did not start' }
@@ -473,6 +497,74 @@ try {
         if ($r.Out -match 'Downloading archivist') { Fail "release URL $url started a download" }
     }
     Pass 'non loopback http:// and malformed release URLs are refused before any download'
+
+    # --- 11. a probe launch failure stops before pairing (Story 94.14) ------------
+    $h11 = Join-Path $Work 'home11'
+    Reset-CallLog
+    $redeems = Get-RedeemCount
+    $r = Invoke-Install $h11 'v9.9.9' @('-Pair', 'ABCDE12345') @{ STUB_PROBE_RESULT = '2147942402' }
+    if ($r.Code -eq 0) { Fail "a probe launch failure exited 0:`n$($r.Out)" }
+    foreach ($want in 'This shell is sandboxed by a packaged app (for example the Claude desktop app), so Windows cannot see what it installs.',
+        'Run this command in a normal PowerShell window.', 'Your pairing code was not used.') {
+        if ($r.Out -notmatch [regex]::Escape($want)) { Fail "probe failure: no '$want':`n$($r.Out)" }
+    }
+    if ((Get-RedeemCount) -ne $redeems) { Fail 'a probe launch failure redeemed the code' }
+    if (Test-Path -LiteralPath (Join-Path $h11 '.archivist\credentials')) { Fail 'a probe launch failure wrote credentials' }
+    $calls = Get-Content -LiteralPath $callLog -Raw
+    if ($calls -notmatch 'schtasks /run /tn MosaicArchivistProbe-\S+') { Fail "the probe did not run:`n$calls" }
+    if ($calls -notmatch 'schtasks /delete /tn MosaicArchivistProbe-\S+ /f') { Fail "the probe task was not deleted:`n$calls" }
+    if ($calls -match 'MosaicArchivistConnect-') { Fail "a probe launch failure touched the service task:`n$calls" }
+    if (Test-Path -LiteralPath (Join-Path $h11 '.archivist\connect\MosaicArchivistProbe.xml')) { Fail 'the probe XML was kept' }
+    Pass 'a probe launch failure stops before pairing; the code is not used'
+
+    # --- 12. a task that does not start names Task Scheduler's result ------------
+    $h12 = Join-Path $Work 'home12'
+    Reset-CallLog
+    $r = Invoke-Install $h12 'v9.9.9' @('-Pair', 'ABCDE12345') @{ STUB_RUN_FAIL = '2147942402' }
+    if ($r.Code -eq 0) { Fail "a task that does not start exited 0:`n$($r.Out)" }
+    Assert-KeyInFile $h12 $key1 'pairing before a task that does not start'
+    foreach ($want in 'loaded, not running (Task Scheduler: the program file was not found (0x80070002)',
+        'the Service line above says why', 'run this again without -Pair (no new code is needed)',
+        "& ([scriptblock]::Create((irm $Base/latest/download/install.ps1)))") {
+        if ($r.Out -notmatch [regex]::Escape($want)) { Fail "not running: no '$want':`n$($r.Out)" }
+    }
+    if ($r.Out -match 'last log line' -or $r.Out -match 'Last log:') { Fail "not running: a log line is named:`n$($r.Out)" }
+    Pass 'a task that does not start names the Task Scheduler result and the rerun without -Pair'
+
+    # --- 13. the default location, moving a legacy AppData install ---------------
+    $h13 = Join-Path $Work 'home13'
+    $legacy = Join-Path $h13 'AppData\Local\Programs\archivist'
+    Reset-CallLog
+    # A v0.2.35 style install: the exes and the task in %LOCALAPPDATA%\Programs\archivist.
+    $r = Invoke-Install $h13 'v9.9.9' @('-Pair', 'ABCDE12345') @{ ARCHIVIST_INSTALL_DIR = $legacy }
+    if ($r.Code -ne 0) { Fail "seeding the legacy install exited $($r.Code):`n$($r.Out)" }
+    if ($r.Out -match 'Moved archivist') { Fail "an ARCHIVIST_INSTALL_DIR install moved something:`n$($r.Out)" }
+    $xml13 = Join-Path $h13 '.archivist\connect\MosaicArchivistConnect.xml'
+    if ((Get-TaskCommand $xml13) -ne (Join-Path $legacy 'archivistw.exe')) { Fail "the seeded task does not run the legacy exe: $(Get-TaskCommand $xml13)" }
+    Reset-CallLog
+    $r = Invoke-Install $h13 'v9.9.9' @() @{ ARCHIVIST_INSTALL_DIR = $null }
+    if ($r.Code -ne 0) { Fail "the move exited $($r.Code):`n$($r.Out)" }
+    $newDir = Join-Path $h13 '.archivist\bin'
+    foreach ($exe in 'archivist.exe', 'archivistw.exe') {
+        if (-not (Test-Path -LiteralPath (Join-Path $newDir $exe))) { Fail "$exe not in $newDir" }
+        if (Test-Path -LiteralPath (Join-Path $legacy $exe)) { Fail "the legacy $exe was kept" }
+    }
+    if (Test-Path -LiteralPath $legacy) { Fail 'the empty legacy folder was kept' }
+    if ((Get-TaskCommand $xml13) -ne (Join-Path $newDir 'archivistw.exe')) { Fail "the task does not run the new exe: $(Get-TaskCommand $xml13)" }
+    if ($r.Out -notmatch [regex]::Escape("Moved archivist from $legacy to $newDir.")) { Fail "no move line:`n$($r.Out)" }
+    if ($r.Out -notmatch 'Service:\s+running \(Task Scheduler:') { Fail "status after the move is not running:`n$($r.Out)" }
+    Pass 'the default location is ~\.archivist\bin and a legacy AppData install moves there with its task'
+
+    # --- 14. a re-pair under the installer: no restart hint, no variable left -----
+    Reset-CallLog
+    $line = "& ([scriptblock]::Create((irm $Base/latest/download/install.ps1))) -Pair ABCDE12346; Write-Host ('installer variable after: [' + `$env:ARCHIVIST_INSTALLER + ']')"
+    $r = Invoke-Install $h7 'v9.9.9' @() @{} $line
+    if ($r.Code -ne 0) { Fail "re-pair under the installer exited $($r.Code):`n$($r.Out)" }
+    Assert-KeyInFile $h7 $key2 're-pair under the installer'
+    if ($r.Out -match [regex]::Escape("to restart background connect with the new key")) { Fail "the redundant restart hint was printed:`n$($r.Out)" }
+    if ($r.Out -notmatch 'updated and restarted') { Fail "the task was not reinstalled:`n$($r.Out)" }
+    if ($r.Out -notmatch [regex]::Escape('installer variable after: []')) { Fail "ARCHIVIST_INSTALLER was left in the session:`n$($r.Out)" }
+    Pass 're-pair under the installer prints no restart hint and leaves no ARCHIVIST_INSTALLER'
 
     # --- 10. connect --uninstall cleans this computer up (Story 94.6) ---------------
     Reset-CallLog

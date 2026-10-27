@@ -140,6 +140,14 @@ func TestConnectSetupFlagsAreExclusive(t *testing.T) {
 		{"connect", "--trust", testBrowserCode, "--check"},
 		{"connect", "--trust", testBrowserCode, "stray"},
 		{"connect", "--trust", testBrowserCode, "--web-search"},
+		// Story 94.14: the hidden --preflight is one setup flag too.
+		{"connect", "--preflight", "--install"},
+		{"connect", "--preflight", "--pair", "ABCDE-FGHJK"},
+		{"connect", "--preflight", "--status"},
+		{"connect", "--preflight", "--check"},
+		{"connect", "--preflight", "--max-permission", "ask"},
+		{"connect", "--preflight", "--web-search"},
+		{"connect", "--preflight", "stray"},
 	} {
 		if out, code := runRoot(t, args...); code != ExitUsageError {
 			t.Errorf("%v: exit %d\n%s", args, code, out)
@@ -690,5 +698,87 @@ func TestConnectInstallRefusesWebSearch(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(home, "Library", "LaunchAgents")); err == nil {
 		t.Fatal("a launch agent was written")
+	}
+}
+
+// The --status Service line (Story 94.14): a registered task that is not
+// running names Task Scheduler's failure, asking for a normal PowerShell
+// window when the program was not found; with no result and an empty log
+// it says no log was written instead of pointing at one.
+func TestServiceStateText(t *testing.T) {
+	notFound := service.TaskResult{Code: service.ResultFileNotFound, Known: true}
+	loaded := service.Status{Installed: true, Loaded: true}
+	with := func(r service.TaskResult) service.Status { s := loaded; s.LastResult = r; return s }
+	for _, c := range []struct {
+		st       service.Status
+		logEmpty bool
+		want     string
+	}{
+		{service.Status{Installed: true, Running: true, LastResult: notFound}, true, "running"},
+		{with(notFound), true, "loaded, not running (Task Scheduler: the program file was not found (0x80070002); run the install command again in a normal PowerShell window)"},
+		{with(notFound), false, "loaded, not running (Task Scheduler: the program file was not found (0x80070002); run the install command again in a normal PowerShell window)"},
+		{with(service.TaskResult{Code: 0x80070005, Known: true}), true, "loaded, not running (Task Scheduler: access was denied (0x80070005); run 'archivist connect --install' to start it again)"},
+		{with(service.TaskResult{Code: 1, Known: true}), false, "loaded, not running (Task Scheduler: the program exited with code 1 (0x00000001); run 'archivist connect --install' to start it again)"},
+		{with(service.TaskResult{Code: 0x41301, Known: true}), false, "loaded, not running (the daemon stopped; see the log, then run 'archivist connect --install' to start it again)"},
+		{with(service.TaskResult{Code: 0, Known: true}), true, "loaded, not running (the daemon wrote no log; run 'archivist connect --install' to start it again)"},
+		{loaded, true, "loaded, not running (the daemon wrote no log; run 'archivist connect --install' to start it again)"},
+		{loaded, false, "loaded, not running (the daemon stopped; see the log, then run 'archivist connect --install' to start it again)"},
+		{service.Status{Installed: true}, true, "installed, not running (run 'archivist connect --install' to start it again)"},
+		{service.Status{Loaded: true, LastResult: notFound}, true, "not installed (run 'archivist connect --install')"},
+	} {
+		if got := serviceStateText(c.st, c.logEmpty); got != c.want {
+			t.Errorf("%+v log empty %v:\n got %q\nwant %q", c.st, c.logEmpty, got, c.want)
+		}
+	}
+}
+
+// --preflight's answers (Story 94.14): started or unknown continue (exit 0,
+// unknown with one note); not found is the packaged shell message; any
+// other failure names Task Scheduler's reason; both exit 1.
+func TestPreflightOutcome(t *testing.T) {
+	const bin = `C:\Users\a\.archivist\bin\archivistw.exe`
+	for _, c := range []struct {
+		res  service.TaskResult
+		err  error
+		code int
+		want string
+	}{
+		{service.TaskResult{Known: true}, nil, 0, ""},
+		{service.TaskResult{}, nil, 0, "Note: Task Scheduler did not report whether it can start " + bin + " within 15 s; continuing.\n"},
+		{service.TaskResult{}, errors.New("schtasks /create failed (exit 1)"), 0, "Note: could not check that Task Scheduler can start " + bin + " (schtasks /create failed (exit 1)); continuing.\n"},
+		{service.TaskResult{Code: service.ResultFileNotFound, Known: true}, nil, ExitGenericError, packagedShellMessage + "\n"},
+		{service.TaskResult{Code: service.ResultPathNotFound, Known: true}, nil, ExitGenericError, packagedShellMessage + "\n"},
+		{service.TaskResult{Code: 0x80070005, Known: true}, nil, ExitGenericError, "Windows could not start " + bin + " from Task Scheduler: access was denied (0x80070005).\n"},
+		{service.TaskResult{Code: 3, Known: true}, nil, ExitGenericError, "Windows could not start " + bin + " from Task Scheduler: the program exited with code 3 (0x00000003).\n"},
+	} {
+		var out bytes.Buffer
+		err := preflightOutcome(&out, bin, c.res, c.err)
+		code := 0
+		var exitErr *ExitError
+		if errors.As(err, &exitErr) {
+			code = exitErr.Code
+		} else if err != nil {
+			t.Fatalf("%+v: %v", c.res, err)
+		}
+		if code != c.code || out.String() != c.want {
+			t.Errorf("%+v: exit %d, output %q; want %d %q", c.res, code, out.String(), c.code, c.want)
+		}
+	}
+	if !strings.Contains(packagedShellMessage, "normal PowerShell window") || strings.Contains(strings.ToLower(packagedShellMessage), "secur") {
+		t.Fatal(packagedShellMessage)
+	}
+}
+
+// Outside Windows no manager can probe a launch: --preflight exits 0
+// silently and runs nothing (the Windows path is
+// TestConnectPreflightWindows).
+func TestConnectPreflightWithoutProber(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows probes; see TestConnectPreflightWindows")
+	}
+	sandbox(t)
+	calls := stubRunner(t, func(string) service.Result { return service.Result{ExitCode: 1} })
+	if out, code := runRoot(t, "connect", "--preflight"); code != 0 || out != "" || len(*calls) != 0 {
+		t.Fatalf("exit %d calls %v\n%s", code, *calls, out)
 	}
 }

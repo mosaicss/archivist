@@ -472,17 +472,23 @@ func TestConnectPairSaveFailureRevokesNewKey(t *testing.T) {
 }
 
 // A manual re-pair with the background service installed says how to
-// restart it with the new key.
+// restart it with the new key; under the installers (ARCHIVIST_INSTALLER=1,
+// Story 94.14), which reinstall it next, it does not.
 func TestConnectPairServiceInstalledHint(t *testing.T) {
-	for _, installed := range []bool{true, false} {
+	for _, c := range []struct {
+		installed bool
+		installer string
+		hint      bool
+	}{{true, "", true}, {false, "", false}, {true, "1", false}, {false, "1", false}, {true, "0", true}} {
 		sandbox(t)
-		pairServiceInstalled = func() bool { return installed }
+		t.Setenv("ARCHIVIST_INSTALLER", c.installer)
+		pairServiceInstalled = func() bool { return c.installed }
 		newFakeMosaic(t, redeemBody(accountEmail))
 		useTerminal(t, "\n")
 		out, code := runRoot(t, "connect", "--pair", "ABCDE-FGHJK")
 		const hint = "Run 'archivist connect --install' to restart background connect with the new key."
-		if code != 0 || strings.Contains(out, hint) != installed {
-			t.Fatalf("installed %v: exit %d\n%s", installed, code, out)
+		if code != 0 || strings.Contains(out, hint) != c.hint {
+			t.Fatalf("%+v: exit %d\n%s", c, code, out)
 		}
 	}
 }

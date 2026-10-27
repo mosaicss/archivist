@@ -5,8 +5,9 @@
 // credentials file; it never carries ARCHIVIST_TOKEN.
 //
 // Every manager command goes through an injectable Runner, and status is
-// read from exit codes only (launchctl print and schtasks /query output are
-// not an API; the latter is localised).
+// read from exit codes (launchctl print and schtasks /query output are not
+// an API; the latter is localised). The one exception is a Windows task's
+// last result, read by CSV column position (Story 94.14).
 package service
 
 import (
@@ -130,6 +131,10 @@ type Status struct {
 	// unit or plist (Story 78.32: --max-permission <mode>), read from the
 	// file; nil when it has none.
 	Args []string
+	// LastResult is the Windows task's last result, read when the task is
+	// registered but its daemon is not running (Story 94.14); unknown
+	// elsewhere.
+	LastResult TaskResult
 }
 
 // installedArgs reads the service arguments from an installed unit or plist.
@@ -169,6 +174,14 @@ type Manager interface {
 	// nothing was installed.
 	Uninstall(ctx context.Context) (removed bool, err error)
 	Status(ctx context.Context) (Status, error)
+}
+
+// LaunchProber is implemented by managers that can check, before anything
+// is set up, that they can start a program at all (Story 94.14: the Windows
+// task manager, through a one-shot probe task). The result is unknown when
+// it could not be read in time.
+type LaunchProber interface {
+	ProbeLaunch(ctx context.Context, bin string, argv []string) (TaskResult, error)
 }
 
 // ErrUnsupported is returned by New where no background service exists
