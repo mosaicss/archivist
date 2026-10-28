@@ -42,9 +42,10 @@ func runRoot(t *testing.T, args ...string) (string, int) {
 }
 
 // sandbox points HOME at a temp dir and clears credentials from the env.
-// It also gives the test no terminal and no browser (a pairing test that
-// answers the confirmation installs a fake one) and points the API at a local server
-// that answers 404, so no test reaches the real terminal or Mosaic.
+// It also gives the test no terminal (a test that answers the start
+// question installs a fake one) and no browser (a pairing test installs a
+// fake one) and points the API at a local server that answers 404, so no
+// test reaches the real terminal, browser or Mosaic.
 func sandbox(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
@@ -69,7 +70,6 @@ func sandbox(t *testing.T) string {
 	t.Cleanup(func() {
 		pairBrowserAvailable, openPairBrowser, pairServiceInstalled = prevAvail, prevBrowser, prevInstalled
 	})
-	t.Setenv("ARCHIVIST_PAIR_CONFIRM", "")
 	offline := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
@@ -185,22 +185,24 @@ func pairServer(t *testing.T, status int, body string, seen *map[string]string, 
 
 func TestConnectPairSavesKeyAndNeverPrintsIt(t *testing.T) {
 	home := sandbox(t)
-	var hits atomic.Int32
-	seen := map[string]string{}
-	pairServer(t, 200, `{"key":"`+pairedKey+`","key_id":"ak_kid","name":"archivist box 2026-10-04 1200Z ab12","tier":"pro","email":"b@example.test"}`, &seen, &hits)
+	useBrowser(t, &fakeBrowser{available: true})
+	fake := browserMosaic(t, 300, confirmedPoll())
 	t.Setenv("ARCHIVIST_TOKEN", "ak_envshadow0000000000")
-	tty := useTerminal(t, "\n")
 	out, code := runRoot(t, "connect", "--pair", "abcde", "fghjk")
-	if code != 0 || hits.Load() != 1 {
-		t.Fatalf("exit %d hits %d\n%s", code, hits.Load(), out)
+	if code != 0 {
+		t.Fatalf("exit %d\n%s", code, out)
 	}
-	if seen["code"] != "ABCDEFGHJK" || seen["device_name"] == "" || seen["confirm"] != "terminal" {
+	fake.mu.Lock()
+	bodies := append([]string(nil), fake.bodies...)
+	fake.mu.Unlock()
+	seen := map[string]string{}
+	if len(bodies) != 1 || json.Unmarshal([]byte(bodies[0]), &seen) != nil {
+		t.Fatalf("redeems %v", bodies)
+	}
+	if seen["code"] != "ABCDEFGHJK" || seen["device_name"] == "" || seen["confirm"] != "browser" {
 		t.Fatalf("request %v", seen)
 	}
-	if got := tty.written(); got != "This computer will connect to b@example.test. Continue? [Y/n] " {
-		t.Fatalf("terminal %q", got)
-	}
-	for _, want := range []string{"Paired as archivist box 2026-10-04 1200Z ab12.", "Account: b@example.test", "ak_paireds...789", "ARCHIVIST_TOKEN is set"} {
+	for _, want := range []string{"Paired as archivist box.", "Account: b@example.test", "ak_paireds...789", "ARCHIVIST_TOKEN is set"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output lacks %q:\n%s", want, out)
 		}
@@ -239,11 +241,7 @@ func TestConnectPairRefusals(t *testing.T) {
 			home := sandbox(t)
 			var hits atomic.Int32
 			pairServer(t, tc.status, tc.body, nil, &hits)
-			tty := useTerminal(t, "\n")
 			out, code := runRoot(t, "connect", "--pair", "ABCDE-FGHJK")
-			if tty.written() != "" {
-				t.Errorf("a refused pairing asked: %q", tty.written())
-			}
 			if code != tc.exit || !strings.Contains(out, tc.says) || hits.Load() != 1 {
 				t.Fatalf("exit %d hits %d\n%s", code, hits.Load(), out)
 			}
@@ -272,7 +270,6 @@ func TestConnectPairRefusals(t *testing.T) {
 		url := srv.URL
 		srv.Close()
 		t.Setenv("ARCHIVIST_BASE_URL", url)
-		useTerminal(t, "\n")
 		if out, code := runRoot(t, "connect", "--pair", "ABCDE-FGHJK"); code != ExitServerError {
 			t.Fatalf("exit %d\n%s", code, out)
 		}

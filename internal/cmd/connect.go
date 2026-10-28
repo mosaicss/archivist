@@ -119,14 +119,14 @@ signature, and the session-bound mode below does not use the list.
 One-step setup: the workspace shows a pairing code.
 
   archivist connect --pair CODE   redeem a pairing code for a new key and save it
-                                  once the account it names is confirmed:
-                                  "Continue? [Y/n]" on the terminal, or,
-                                  with no terminal, a Mosaic page opened in
-                                  this computer's browser, which connects
-                                  only when that browser is signed in to the
-                                  same account; pairing again revokes the
-                                  key it replaces. CODE.BROWSER, as Mosaic
-                                  shows it, also adds that browser
+                                  once the account it names is confirmed
+                                  with one Confirm click on a Mosaic page,
+                                  in a browser signed in to that account.
+                                  The page opens in this computer's browser
+                                  when it has one, and its link is printed
+                                  for any other device; pairing again
+                                  revokes the key it replaces. CODE.BROWSER,
+                                  as Mosaic shows it, also adds that browser
   archivist connect --trust CODE  let the browser showing this code in
                                   Mosaic use this computer
   archivist connect --install     run connect as a background user service
@@ -163,10 +163,10 @@ install.ps1), without a console window.
 Exit codes: 0 ok; 1 refused or stopped (feature off, superseded, too old,
 or a session-bound start refused, for example a model or effort this
 machine does not offer), service not running, service setup failed, or
-pairing not confirmed (cancelled, refused in the browser, not confirmed in
-time, or no terminal and no browser to confirm it), or a browser not
-added; 2 bad flag or relay URL, or a browser code that is not valid; 3 no
-usable harness (Claude Code not found, or no usable Claude Code or Codex);
+pairing not confirmed (cancelled, declined or refused on the Mosaic page,
+or not confirmed in time), or a browser not added; 2 bad flag or relay
+URL, or a browser code that is not valid; 3 no usable harness (Claude Code
+not found, or no usable Claude Code or Codex);
 4 credential or Claude login problem, or an invalid or expired pairing
 code; 5 server or network error while pairing; 7 pairing rate limited.
 --uninstall exits 1 when the key could not be revoked (its files are still

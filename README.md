@@ -303,7 +303,7 @@ archivist connect --status             # report the service, its ceiling, the sa
 ```
 
 A first install (no background service yet) asks one question on the
-terminal, the same way pairing asks:
+terminal:
 
 ```text
 Start Archivist when your computer starts? (recommended) [Y/n]
@@ -320,31 +320,23 @@ already installed, reinstalls it without asking. `--no-service` (`-NoService`
 on Windows) still means no service.
 
 Before it saves anything, `--pair` names the account the code belongs to and
-has it confirmed. On a terminal it asks:
+waits for one Confirm click on a Mosaic page:
 
 ```text
-This computer will connect to you@example.com. Continue? [Y/n]
+This computer will connect to you@example.com. Click Confirm on the Mosaic page that opens in your browser.
+Open this link in a browser signed in to that account, on this or any other device: https://...
 ```
 
-Enter, `y` or `yes` saves the key; any other answer, Ctrl-C or the end of
-input cancels: nothing is saved, the new key is revoked and the command exits
-1. The question is asked on the terminal itself (`/dev/tty`, on Windows the
-console), so it works when the command is piped into `bash`.
-
-The question is asked only when the output shows on a terminal too. Where no
-terminal is available, or nobody sees it (an agent shell that captures the
-output, for example), `--pair` opens
-a Mosaic page in this computer's browser instead and waits for it. A browser
-signed in to the account the code came from connects the computer with no
-click; a browser signed in to another account, or not signed in, does not,
-and nothing is saved. If the browser cannot be opened, `--pair` prints the
-link to open by hand. Ctrl-C while it waits cancels the pairing; after five
-minutes without an answer it stops with nothing saved. With neither a
-terminal nor a browser, `--pair` exits 1 before it sends the code, so the
-code stays usable: run the command in a terminal. No flag skips the
-confirmation. `ARCHIVIST_PAIR_CONFIRM=browser` chooses the browser page even
-on a terminal, and `BROWSER` names the program that opens it (the first
-entry of the list).
+The page opens in this computer's browser when it has one (`BROWSER` names
+the program that opens it, the first entry of the list). The link is always
+printed, so a computer without a browser (over SSH, a server) is confirmed
+from any device signed in to that account. The page shows the account and the
+computer name with Confirm and Don't connect; it never confirms on its own. A
+browser signed in to another account, or not signed in, does not connect the
+computer, and neither does Don't connect: nothing is saved and `--pair` exits
+1. Ctrl-C while it waits cancels the pairing; after five minutes without an
+answer it stops with nothing saved. No flag skips the confirmation, and
+pairing asks nothing on the terminal.
 
 `--pair` saves the key in `~/.archivist/credentials` (0600), where connect
 keeps its key; connect sessions do not open that file. An earlier key kept in

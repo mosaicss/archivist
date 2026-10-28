@@ -41,31 +41,32 @@ var serviceRunner service.Runner = service.ExecRunner
 // whether refused locally or by the server.
 const pairInvalidMessage = "This pairing code is not valid or has expired. Get a new code in Mosaic and run the command again."
 
-// openConfirmTerminal opens the terminal the pairing confirmation asks on
-// (Story 94.3); tests replace it.
+// openConfirmTerminal opens the terminal the installers' start question
+// asks on (Story 94.6; pairing asks no terminal question since Story 94.15);
+// tests replace it.
 var openConfirmTerminal = openTerminal
 
-// flushConfirmInput discards terminal input typed ahead of the pairing
+// flushConfirmInput discards terminal input typed ahead of the start
 // question, right before it is written; tests replace it.
 var flushConfirmInput = flushPendingInput
 
-// pairOutputVisible reports whether a person can see the pairing question:
+// pairOutputVisible reports whether a person can see the start question:
 // stdout or stderr is itself a terminal (on Windows, a console). An agent
 // that captures the output through pipes cannot answer a terminal it does
-// not show, so pairing then turns to the browser. Tests replace it.
+// not show, so the question then takes its default. Tests replace it.
 var pairOutputVisible = func() bool {
 	return term.IsTerminal(int(os.Stdout.Fd())) || term.IsTerminal(int(os.Stderr.Fd()))
 }
 
-// pairInterrupt is the context the pairing confirmation waits under, done on
-// Ctrl-C, SIGTERM or SIGHUP (the terminal closed): an interrupted answer is
-// a no. Tests replace it.
+// pairInterrupt is the context the pairing wait and the start question run
+// under, done on Ctrl-C, SIGTERM or SIGHUP (the terminal closed): an
+// interrupted pairing is declined. Tests replace it.
 var pairInterrupt = func(ctx context.Context) (context.Context, context.CancelFunc) {
 	return signal.NotifyContext(ctx, pairSignals...)
 }
 
-// pairSignals end a pairing confirmation: Ctrl-C, SIGTERM and SIGHUP (the
-// terminal closed). Windows delivers the first two.
+// pairSignals end a pairing wait or the start question: Ctrl-C, SIGTERM and
+// SIGHUP (the terminal closed). Windows delivers the first two.
 var pairSignals = []os.Signal{os.Interrupt, syscall.SIGTERM, syscall.SIGHUP}
 
 // pairBrowserAvailable reports whether a browser can open the confirm page
@@ -208,15 +209,12 @@ func installedCeiling(args []string) (mode connect.Mode, found, ok bool) {
 }
 
 // runPair redeems a pairing code, names the account it belongs to, and saves
-// the new key only once that account is confirmed (Story 94.3). The
-// confirmation is chosen before any request: the terminal, when it opens and
-// stdout or stderr shows it, asks "This computer will connect to <email>.
-// Continue? [Y/n]"; with no terminal a person can see, the
-// workspace confirm page in this computer's browser answers for the account
-// signed in there (ARCHIVIST_PAIR_CONFIRM=browser chooses it); with neither,
-// pairing stops before the redeem. Nothing is saved before a confirmation. A
-// declined terminal pairing revokes the new key; a confirmed one revokes the
-// ak_ key it replaced.
+// the new key only once that account is confirmed (Story 94.3). Every
+// pairing is confirmed by one Confirm click on the Mosaic confirm page
+// (Story 94.15, owner D13): the redeem leaves the pairing pending, the CLI
+// prints the account and the page link (and opens it when this computer has
+// a browser) and polls until the page answers. Nothing is saved before the
+// confirmed poll; a confirmed pairing revokes the ak_ key it replaced.
 func runPair(cmd *cobra.Command, version, raw string) error {
 	stderr := cmd.ErrOrStderr()
 	// Story 94.7: CODE.FP also names the browser that showed the code; it is
@@ -234,29 +232,9 @@ func runPair(cmd *cobra.Command, version, raw string) error {
 		_, _ = fmt.Fprintln(stderr, "archivist connect: "+pairInvalidMessage)
 		return &ExitError{Code: ExitAuthError}
 	}
-	// Chosen before the redeem, so pairing where nothing can answer spends
-	// no code and creates no key.
-	confirm := client.ConfirmTerminal
-	var tty io.ReadWriteCloser
-	if os.Getenv("ARCHIVIST_PAIR_CONFIRM") == "browser" {
-		confirm = client.ConfirmBrowser
-	} else if tty, err = openConfirmTerminal(); err != nil || !pairOutputVisible() {
-		if err == nil {
-			_ = tty.Close()
-		}
-		tty = nil
-		if !pairBrowserAvailable() {
-			_, _ = fmt.Fprintln(stderr, "archivist connect: pairing asks you to confirm the account, in a terminal or in a browser on this computer, and neither is available here. Run the command in a terminal.")
-			return &ExitError{Code: ExitGenericError}
-		}
-		confirm = client.ConfirmBrowser
-	}
-	if tty != nil {
-		defer func() { _ = tty.Close() }()
-	}
 	device, _ := os.Hostname()
 	c := client.New("", version)
-	res, pending, err := c.RedeemPairing(cmd.Context(), code, device, confirm)
+	res, pending, err := c.RedeemPairing(cmd.Context(), code, device, client.ConfirmBrowser)
 	if err != nil {
 		if errors.Is(err, client.ErrPairingCodeInvalid) {
 			_, _ = fmt.Fprintln(stderr, "archivist connect: "+pairInvalidMessage)
@@ -274,33 +252,13 @@ func runPair(cmd *cobra.Command, version, raw string) error {
 		}
 		return failFromDo(cmd, err, "")
 	}
-	if confirm == client.ConfirmBrowser {
-		if res != nil {
-			// A server that minted at once cannot wait for the browser.
-			_ = revokeKey(cmd.Context(), version, res.Key)
-			return pairNotNamed(stderr)
-		}
-		if res, err = confirmInBrowser(cmd, c, pending); err != nil {
-			return err
-		}
-	} else {
-		if res == nil {
-			_ = c.DeclinePairing(context.WithoutCancel(cmd.Context()), pending)
-			return pairNotNamed(stderr)
-		}
-		email := printableText(res.Email)
-		if email == "" {
-			// A server that names no account: nothing to confirm, so nothing is kept.
-			_ = revokeKey(cmd.Context(), version, res.Key)
-			return pairNotNamed(stderr)
-		}
-		if !confirmAccount(cmd.Context(), tty, email) {
-			if err := revokeKey(cmd.Context(), version, res.Key); err != nil {
-				_, _ = fmt.Fprintf(stderr, "Note: the unused new key could not be removed (%v). You can revoke it in Mosaic.\n", err)
-			}
-			_, _ = fmt.Fprintln(stderr, "Pairing cancelled. Nothing was saved.")
-			return &ExitError{Code: ExitGenericError}
-		}
+	if res != nil {
+		// A server that minted at once cannot wait for the confirm page.
+		_ = revokeKey(cmd.Context(), version, res.Key)
+		return pairNotNamed(stderr)
+	}
+	if res, err = confirmInBrowser(cmd, c, pending); err != nil {
+		return err
 	}
 	return savePairedKey(cmd, version, res, browser)
 }
@@ -432,11 +390,14 @@ func browsersLine() string {
 	return strconv.Itoa(len(l.Browsers))
 }
 
-// confirmInBrowser waits for the workspace confirm page (Story 94.3, owner
-// D6): it opens the page in this computer's browser, where a browser signed
-// in to the code's account confirms with no click, and polls until the key
-// comes back, the browser refuses, the pairing expires or the user presses
-// Ctrl-C (which declines it). No key exists before the confirmed poll.
+// confirmInBrowser waits for the workspace confirm page (Story 94.3; one
+// click since Story 94.15, owner D13): it prints the account and the page
+// link, opens the page when this computer has a browser, and polls until the
+// key comes back, the page refuses or is declined, the pairing expires or
+// the user presses Ctrl-C (which declines it). The link works in any browser
+// signed in to the code's account, so a computer with no browser (SSH, a
+// server) is confirmed from another device. No key exists before the
+// confirmed poll.
 func confirmInBrowser(cmd *cobra.Command, c *client.Client, p *client.PendingPairing) (*client.PairingResult, error) {
 	stdout, stderr := cmd.OutOrStdout(), cmd.ErrOrStderr()
 	decline := func() {
@@ -451,17 +412,16 @@ func confirmInBrowser(cmd *cobra.Command, c *client.Client, p *client.PendingPai
 	}
 	ctx, stop := pairInterrupt(cmd.Context())
 	defer stop()
-	_, _ = fmt.Fprintf(stdout, "This computer will connect to %s. Confirm in the browser where you use Mosaic; it opens now.\n", email)
-	linkShown := false
-	showLink := func() {
-		if !linkShown {
-			linkShown = true
-			_, _ = fmt.Fprintf(stdout, "Open this link in the browser where you use Mosaic: %s\n", p.ConfirmURL)
-		}
+	open := pairBrowserAvailable()
+	if open {
+		_, _ = fmt.Fprintf(stdout, "This computer will connect to %s. Click Confirm on the Mosaic page that opens in your browser.\n", email)
+	} else {
+		_, _ = fmt.Fprintf(stdout, "This computer will connect to %s. Click Confirm on the Mosaic page to finish.\n", email)
 	}
-	opened, err := openPairBrowser(p.ConfirmURL)
-	if err != nil {
-		showLink()
+	_, _ = fmt.Fprintf(stdout, "Open this link in a browser signed in to that account, on this or any other device: %s\n", p.ConfirmURL)
+	if open {
+		// The link is already printed, so a failed opener changes nothing.
+		_, _ = openPairBrowser(p.ConfirmURL)
 	}
 	expires := time.Duration(p.ExpiresInSeconds) * time.Second
 	if expires > pairPendingMax {
@@ -481,13 +441,6 @@ func confirmInBrowser(cmd *cobra.Command, c *client.Client, p *client.PendingPai
 			decline()
 			_, _ = fmt.Fprintln(stderr, "Pairing cancelled. Nothing was saved.")
 			return nil, &ExitError{Code: ExitGenericError}
-		case err := <-opened:
-			// The opener finished: a failure means the page may not be open.
-			opened = nil
-			if err != nil {
-				showLink()
-			}
-			continue
 		case <-timer.C:
 		}
 		pctx, cancel := context.WithTimeout(ctx, pairPollTimeout)
@@ -530,43 +483,11 @@ func pairRefusedMessage(reason string) string {
 		return "this computer was not connected. The code came from a different Mosaic account than the one signed in to your browser. Nothing was saved."
 	case "signed_out":
 		return "this computer was not connected because your browser is not signed in to Mosaic. Sign in, get a new code and run the command again. Nothing was saved."
+	case "cancelled":
+		// Don't connect on the page, or a page that could not finish.
+		return "this computer was not connected. Nothing was saved. To connect it, get a new code in Mosaic and run the command again."
 	}
 	return "this computer was not connected. Nothing was saved. Get a new code in Mosaic and try again."
-}
-
-// confirmAccount asks on the terminal whether to connect to email. Enter,
-// y or yes (any case) is a yes; any other answer, end of input, Ctrl-C,
-// SIGTERM or SIGHUP is a no.
-func confirmAccount(ctx context.Context, tty io.ReadWriter, email string) bool {
-	ctx, stop := pairInterrupt(ctx)
-	defer stop()
-	// Typed ahead input (an Enter while the redeem ran) must not answer.
-	flushConfirmInput(tty)
-	_, _ = fmt.Fprintf(tty, "This computer will connect to %s. Continue? [Y/n] ", email)
-	answer := make(chan string, 1)
-	go func() {
-		line, err := bufio.NewReader(tty).ReadString('\n')
-		if err != nil {
-			close(answer)
-			return
-		}
-		answer <- line
-	}()
-	select {
-	case <-ctx.Done():
-		_, _ = fmt.Fprintln(tty)
-		return false
-	case line, ok := <-answer:
-		if !ok {
-			_, _ = fmt.Fprintln(tty)
-			return false
-		}
-		switch strings.ToLower(strings.TrimSpace(line)) {
-		case "", "y", "yes":
-			return true
-		}
-		return false
-	}
 }
 
 // revokeKey revokes key with itself as the credential (DELETE
@@ -691,7 +612,7 @@ const startQuestion = "Start Archivist when your computer starts? (recommended) 
 // startDeclined is what a "no" to startQuestion prints.
 const startDeclined = "Archivist will not start by itself. Run 'archivist connect' when you want to use your agents from Mosaic."
 
-// askStartAtLogin asks startQuestion the way pairing asks (Story 94.3): only
+// askStartAtLogin asks startQuestion (Story 94.6): only
 // on a terminal that opens while stdout or stderr shows it, with input typed
 // ahead discarded. Enter, y or yes (or the end of input) is yes, n or no is
 // no, anything else asks again (three times, then yes). With no terminal
