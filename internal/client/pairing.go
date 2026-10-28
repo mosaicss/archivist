@@ -22,9 +22,9 @@ import (
 // is burned by the first attempt that reaches the server.
 //
 // Story 94.3: the redeem names the account, and the CLI saves the key only
-// once that account is confirmed: on the terminal, or (with no terminal) by
-// the workspace confirm page in this computer's browser, which answers for
-// the account signed in there. The browser path polls for the key.
+// once that account is confirmed on the workspace confirm page, which
+// answers for the account signed in there; the CLI polls for the key.
+// Story 94.15: every pairing takes that page, confirmed by one click.
 
 // PairingAlphabet is Crockford base32: no I, L, O or U.
 const PairingAlphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
@@ -119,17 +119,14 @@ func SanitizeDeviceName(name string) string {
 }
 
 // PairConfirm is how the CLI confirms the account a pairing code names
-// (Story 94.3), sent as the redeem's "confirm" field.
+// (Story 94.3), sent as the redeem's "confirm" field. Since Story 94.15
+// every pairing is confirmed on the confirm page.
 type PairConfirm string
 
-const (
-	// ConfirmTerminal: the CLI asks on the terminal; the redeem mints the
-	// key at once (200).
-	ConfirmTerminal PairConfirm = "terminal"
-	// ConfirmBrowser: no key yet; the redeem answers 202 with a pending
-	// pairing the workspace confirm page answers in this computer's browser.
-	ConfirmBrowser PairConfirm = "browser"
-)
+// ConfirmBrowser: no key yet; the redeem answers 202 with a pending pairing
+// that one Confirm click on the workspace confirm page answers, in any
+// browser signed in to the code's account.
+const ConfirmBrowser PairConfirm = "browser"
 
 // PendingPairing is the redeem's 202 body in browser mode. ConfirmID (the
 // confirm page URL fragment) and PollToken (sent only to the poll) are
@@ -195,8 +192,10 @@ func (c *Client) postPublic(ctx context.Context, path string, payload any) (*htt
 
 // RedeemPairing redeems a pairing code (already normalised) with POST
 // /agent-pairing/redeem, saying how the CLI confirms. It sends no
-// Authorization header and makes exactly one attempt. A 200 is the new key
-// (*PairingResult); a 202 (browser mode) is a *PendingPairing and no key. A
+// Authorization header and makes exactly one attempt. A 202 is a
+// *PendingPairing and no key; a 200 is a key minted at once
+// (*PairingResult, from a server older than Story 94.3, which the caller
+// revokes and never saves). A
 // 400 PAIRING_CODE_INVALID is ErrPairingCodeInvalid; any other non-2xx is a
 // *APIError; a transport failure is a wrapped network error.
 func (c *Client) RedeemPairing(ctx context.Context, code, device string, confirm PairConfirm) (*PairingResult, *PendingPairing, error) {

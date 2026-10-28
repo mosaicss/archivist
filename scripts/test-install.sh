@@ -8,10 +8,10 @@
 # its signature by a throwaway test key), serves them on 127.0.0.1 together
 # with fake pairing routes, and runs a copy of install.sh whose release key
 # block holds the test key, under a throwaway HOME with stub systemctl and
-# loginctl first on PATH. Its output is captured, so pairing picks the
-# browser confirmation on its own (BROWSER is a stand in that confirms the
-# pending pairing) and the replay needs no terminal. Nothing touches the real
-# ~/.archivist, ~/.config or service manager.
+# loginctl first on PATH. Pairing always takes the browser confirmation
+# (Story 94.15; BROWSER is a stand in that confirms the pending pairing, as
+# one Confirm click would) and the replay needs no terminal. Nothing touches
+# the real ~/.archivist, ~/.config or service manager.
 #
 # Asserts: install + pair + unit written (with no terminal to ask, the start
 # question takes its default, said in one line); a re-pair saves the new key and
@@ -144,9 +144,10 @@ make_release v9.9.4 badskill
 
 # --- fake server: static release files plus the pairing routes ----------------
 # Story 94.3: a browser mode redeem answers 202 pending; the BROWSER stand in
-# below confirms it (as a browser signed in to the code's account would) and
-# the poll then brings the key once. The self revoke and the key list answer
-# too, so a re-pair can revoke the key it replaced.
+# below confirms it (as a Confirm click in a browser signed in to the code's
+# account would) and the poll then brings the key once. Any other redeem gets
+# the 426 Mosaic answers after the cutoff (Story 94.15). The self revoke and
+# the key list answer too, so a re-pair can revoke the key it replaced.
 cat > "$WORK/server.py" <<'PY'
 import json, os, secrets, sys, threading
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -188,9 +189,7 @@ class Handler(SimpleHTTPRequestHandler):
                                          "poll_token": poll_token,
                                          "confirm_url": "http://127.0.0.1:%d/connect/confirm#%s" % (port, confirm_id),
                                          "expires_in_seconds": 60, "poll_interval_seconds": 1})
-            return self.answer(200, {"key": key_for(body["code"]), "key_id": "ak_id_replay",
-                                     "name": "archivist replay 2026-10-04 00:00:00Z ab12", "tier": "pro",
-                                     "email": "replay@example.test"})
+            return self.answer(426, {"error": "This version of Archivist can no longer pair.", "code": "PAIRING_UPDATE_REQUIRED"})
         if self.path == "/test/confirm":
             # The BROWSER stand in: the confirm page of a browser signed in to the code's account.
             with lock:
@@ -334,6 +333,10 @@ grep -q '"code": "ABCDE12345"' "$WORK/redeem.log" || fail "redeem did not send t
 grep -q '"confirm": "browser"' "$WORK/redeem.log" || fail "redeem did not ask for the browser confirmation"
 grep -q '/agent-pairing/pending/poll' "$WORK/redeem.log" || fail "the pending pairing was not polled"
 grep -q '^/connect/confirm$' "$WORK/stubs/browser-confirm.log" || fail "the confirm page was not opened"
+case "$OUT" in *"This computer will connect to replay@example.test. Click Confirm on the Mosaic page"*) ;; *) fail "no account line:
+$OUT" ;; esac
+case "$OUT" in *"Open this link in a browser signed in to that account, on this or any other device: http://127.0.0.1:"*"/connect/confirm#"*) ;; *) fail "the confirm link was not printed:
+$OUT" ;; esac
 if grep '"path": "/agent-pairing/' "$WORK/redeem.log" | grep -q '"auth": "'; then fail "pairing sent Authorization"; fi
 case "$OUT" in *ak_replay_abcde12345x*) fail "the key was printed" ;; esac
 case "$OUT" in *"Paired as archivist replay"*) ;; *) fail "no pairing line:

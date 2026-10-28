@@ -274,8 +274,8 @@ func TestConnectPairSavesToTheFileNotTheKeychain(t *testing.T) {
 	if loc, err := auth.SaveToken(earlierKey); err != nil || !loc.Keychain {
 		t.Fatalf("earlier key: %+v %v", loc, err)
 	}
-	fake := newFakeMosaic(t, redeemBody(accountEmail))
-	useTerminal(t, "\n")
+	useBrowser(t, &fakeBrowser{available: true})
+	fake := browserMosaic(t, 300, confirmedPoll())
 	out, code := runRoot(t, "connect", "--pair", "ABCDE-FGHJK")
 	if code != 0 || strings.Contains(out, "in the keychain") || !strings.Contains(out, "File:    "+filepath.Join(home, ".archivist", "credentials")) {
 		t.Fatalf("pair: exit %d\n%s", code, out)
@@ -512,10 +512,10 @@ func TestLogoutWithALockedKeychainExitsOne(t *testing.T) {
 func TestConnectPairUnreadableKeychainNamesTheEarlierKey(t *testing.T) {
 	home := sandbox(t)
 	auth.MockKeychainForTest(t, true)
-	fake := newFakeMosaic(t, redeemBody(accountEmail))
+	useBrowser(t, &fakeBrowser{available: true})
+	fake := browserMosaic(t, 300, confirmedPoll())
 	// A first pairing on a computer that never saved a key in the
 	// keychain: a locked one is not asked and no note is printed.
-	useTerminal(t, "\n")
 	out, code := runRoot(t, "connect", "--pair", "ABCDE-FGHJK")
 	if code != 0 || strings.Contains(out, "keychain") {
 		t.Fatalf("no marker: exit %d\n%s", code, out)
@@ -524,7 +524,6 @@ func TestConnectPairUnreadableKeychainNamesTheEarlierKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	markKeychain(t, home)
-	useTerminal(t, "\n")
 	out, code = runRoot(t, "connect", "--pair", "ABCDE-FGHJK")
 	if code != 0 || !strings.Contains(out, "the key this computer used before could not be read from the keychain, so it may still be active. Remove it in Mosaic settings") {
 		t.Fatalf("exit %d\n%s", code, out)

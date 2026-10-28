@@ -51,6 +51,9 @@ func TestSanitizeDeviceName(t *testing.T) {
 	}
 }
 
+// The redeem always asks for the browser confirmation (Story 94.15); a 200
+// with a key (a server older than Story 94.3) still decodes, so the caller
+// can revoke it.
 func TestRedeemPairingSendsNoCredentialAndNoRetry(t *testing.T) {
 	var hits atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -69,7 +72,7 @@ func TestRedeemPairingSendsNoCredentialAndNoRetry(t *testing.T) {
 			t.Errorf("body %d bytes", len(b))
 		}
 		var body map[string]string
-		if err := json.Unmarshal(b, &body); err != nil || body["code"] != "ABCDEFGHJK" || body["device_name"] != "box" || body["confirm"] != "terminal" || len(body) != 3 {
+		if err := json.Unmarshal(b, &body); err != nil || body["code"] != "ABCDEFGHJK" || body["device_name"] != "box" || body["confirm"] != "browser" || len(body) != 3 {
 			t.Errorf("body %s", b)
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -78,7 +81,7 @@ func TestRedeemPairingSendsNoCredentialAndNoRetry(t *testing.T) {
 	defer srv.Close()
 	t.Setenv("ARCHIVIST_BASE_URL", srv.URL)
 	c := client.New("ak_should_not_be_sent_00000", "v1.2.3")
-	res, pending, err := c.RedeemPairing(context.Background(), "ABCDEFGHJK", "box", client.ConfirmTerminal)
+	res, pending, err := c.RedeemPairing(context.Background(), "ABCDEFGHJK", "box", client.ConfirmBrowser)
 	if err != nil || pending != nil || res.Key != "ak_secretsecretsecret" || res.KeyID != "ak_id" || res.Tier != "pro" {
 		t.Fatalf("%+v %v", res, err)
 	}
@@ -97,6 +100,7 @@ func TestRedeemPairingErrors(t *testing.T) {
 		{403, `{"error":"This requires a Mosaic Pro account.","code":"PRO_REQUIRED","account_url":"https://x"}`, false},
 		{404, `{"error":"Not found","code":"FEATURE_DISABLED"}`, false},
 		{429, `{"error":"Too many","code":"RATE_LIMITED"}`, false},
+		{426, `{"error":"This version of Archivist can no longer pair.","code":"PAIRING_UPDATE_REQUIRED"}`, false},
 		{502, `{"error":"Failed","code":"CLERK_ERROR"}`, false},
 		{503, `not json`, false},
 	}
@@ -108,7 +112,7 @@ func TestRedeemPairingErrors(t *testing.T) {
 			_, _ = w.Write([]byte(tc.body))
 		}))
 		t.Setenv("ARCHIVIST_BASE_URL", srv.URL)
-		_, _, err := client.New("", "dev").RedeemPairing(context.Background(), "ABCDEFGHJK", "box", client.ConfirmTerminal)
+		_, _, err := client.New("", "dev").RedeemPairing(context.Background(), "ABCDEFGHJK", "box", client.ConfirmBrowser)
 		srv.Close()
 		if hits.Load() != 1 {
 			t.Errorf("%d: %d attempts, want exactly 1", tc.status, hits.Load())
@@ -130,7 +134,7 @@ func TestRedeemPairingErrors(t *testing.T) {
 	}))
 	defer srv.Close()
 	t.Setenv("ARCHIVIST_BASE_URL", srv.URL)
-	if _, _, err := client.New("", "dev").RedeemPairing(context.Background(), "ABCDEFGHJK", "box", client.ConfirmTerminal); err == nil {
+	if _, _, err := client.New("", "dev").RedeemPairing(context.Background(), "ABCDEFGHJK", "box", client.ConfirmBrowser); err == nil {
 		t.Fatal("incomplete response accepted")
 	}
 }
@@ -147,7 +151,7 @@ func TestRedeemPairingDecodesEmailAndOlderBody(t *testing.T) {
 			_, _ = w.Write([]byte(body))
 		}))
 		t.Setenv("ARCHIVIST_BASE_URL", srv.URL)
-		res, _, err := client.New("", "dev").RedeemPairing(context.Background(), "ABCDEFGHJK", "box", client.ConfirmTerminal)
+		res, _, err := client.New("", "dev").RedeemPairing(context.Background(), "ABCDEFGHJK", "box", client.ConfirmBrowser)
 		srv.Close()
 		if err != nil || res.Email != want || res.Key != "ak_secretsecretsecret" || res.KeyID != "ak_id" || res.Tier != "pro" {
 			t.Errorf("%s: %+v %v", body, res, err)
@@ -286,6 +290,7 @@ func TestPollPairing(t *testing.T) {
 		{200, `{"state":"pending"}`, "pending", "", false, false, false},
 		{200, `{"state":"expired"}`, "expired", "", false, false, false},
 		{200, `{"state":"refused","reason":"other_account"}`, "refused", "other_account", false, false, false},
+		{200, `{"state":"refused","reason":"cancelled"}`, "refused", "cancelled", false, false, false},
 		{200, `{"state":"confirmed","key":"ak_secretsecretsecret","key_id":"ak_id","name":"n","tier":"pro","email":"b@example.test"}`, "confirmed", "", true, false, false},
 		{200, `{"state":"confirmed","key":"nope","key_id":""}`, "", "", false, false, true},
 		{200, `{"state":"later"}`, "", "", false, false, true},

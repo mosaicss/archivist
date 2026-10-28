@@ -95,7 +95,9 @@ func main() {
 			w.WriteHeader(http.StatusNoContent)
 		case r.URL.Path == "/agent-pairing/redeem" && (str("code") == "ABCDE12345" || str("code") == "ABCDE12346"):
 			if str("confirm") != "browser" {
-				writeJSON(w, http.StatusOK, keyFor(str("code")))
+				// Story 94.15: every pairing takes the confirm page; a redeem
+				// that asks otherwise is what Mosaic refuses after the cutoff.
+				writeJSON(w, http.StatusUpgradeRequired, map[string]string{"error": "This version of Archivist can no longer pair.", "code": "PAIRING_UPDATE_REQUIRED"})
 				return
 			}
 			confirmID, pollToken := secret(), secret()

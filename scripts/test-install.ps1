@@ -9,10 +9,10 @@
 # and runs a copy of install.ps1 whose release key block holds the test key
 # in a child PowerShell (the one running this script) under a throwaway
 # USERPROFILE, with a stub schtasks.exe (scripts/testdata/winreplay/schtasks)
-# first on PATH. Pairing takes the browser confirmation
-# (ARCHIVIST_PAIR_CONFIRM=browser, with BROWSER the fake server binary, which
-# confirms the pending pairing), so no console prompt waits. Nothing touches
-# the real profile, the user PATH or Task Scheduler.
+# first on PATH. Pairing always takes the browser confirmation (Story
+# 94.15), with BROWSER the fake server binary, which confirms the pending
+# pairing as one Confirm click would; pairing asks nothing on the console.
+# Nothing touches the real profile, the user PATH or Task Scheduler.
 #
 # Asserts: install + pair + task created and reported running; an update
 # without -Pair recreates the task and calls no redeem; an update while the
@@ -113,7 +113,7 @@ function Invoke-Install([string]$UserHome, [string]$Version, [string[]]$InstallA
         ARCHIVIST_TOKEN = $null; STUB_LOG = $callLog; STUB_STATE = (Join-Path $UserHome 'task-registered')
         STUB_FAIL_CREATE = $null; STUB_PROBE_RESULT = $null; STUB_RUN_FAIL = $null; ARCHIVIST_INSTALLER = $null
         Path = "$stubs;$env:Path"
-        ARCHIVIST_PAIR_CONFIRM = 'browser'; BROWSER = (Join-Path $Work 'server.exe')
+        BROWSER = (Join-Path $Work 'server.exe')
     }
     foreach ($k in $Extra.Keys) { $vars[$k] = $Extra[$k] }
     $saved = @{}

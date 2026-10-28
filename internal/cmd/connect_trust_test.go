@@ -32,8 +32,8 @@ func browserList(t *testing.T, home string) *connect.BrowserList {
 // code, and once the key is saved the browser is trusted for that account.
 func TestConnectPairWithBrowserCode(t *testing.T) {
 	home := sandbox(t)
-	fake := newFakeMosaic(t, redeemBody(accountEmail))
-	useTerminal(t, "\n")
+	useBrowser(t, &fakeBrowser{available: true})
+	fake := browserMosaic(t, 300, confirmedPoll())
 	out, code := runRoot(t, "connect", "--pair", "ABCDE-FGHJK."+testBrowserCode)
 	if code != 0 || !strings.Contains(out, "This browser can now use this computer.") {
 		t.Fatalf("exit %d\n%s", code, out)
@@ -53,7 +53,7 @@ func TestConnectPairWithBrowserCode(t *testing.T) {
 	}
 	// Pairing again for the same account without a browser code keeps it;
 	// typed with spaces, the code still works.
-	useTerminal(t, "\n")
+	browserMosaic(t, 300, confirmedPoll())
 	if out, code := runRoot(t, "connect", "--pair", "abcde", "fghjk"); code != 0 || strings.Contains(out, "This browser can now") {
 		t.Fatalf("exit %d\n%s", code, out)
 	}
@@ -61,16 +61,14 @@ func TestConnectPairWithBrowserCode(t *testing.T) {
 		t.Fatalf("same account lost its browsers: %+v", l)
 	}
 	// Another account's pairing empties the list, then trusts its browser.
-	newFakeMosaic(t, redeemBody("other@example.test"))
-	useTerminal(t, "\n")
+	browserMosaicFor(t, "other@example.test", 300, confirmedPollFor("other@example.test"))
 	if out, code := runRoot(t, "connect", "--pair", "ABCDE-FGHJK."+otherBrowserCode); code != 0 {
 		t.Fatalf("exit %d\n%s", code, out)
 	}
 	if l := browserList(t, home); l.Account != "other@example.test" || len(l.Browsers) != 1 || l.Browsers[0].Fingerprint != otherBrowserCode {
 		t.Fatalf("other account: %+v", l)
 	}
-	newFakeMosaic(t, redeemBody(accountEmail))
-	useTerminal(t, "\n")
+	browserMosaic(t, 300, confirmedPoll())
 	if out, code := runRoot(t, "connect", "--pair", "ABCDE-FGHJK"); code != 0 {
 		t.Fatalf("exit %d\n%s", code, out)
 	}
@@ -86,7 +84,6 @@ func TestConnectPairMalformedBrowserCode(t *testing.T) {
 		t.Run(value, func(t *testing.T) {
 			home := sandbox(t)
 			fake := newFakeMosaic(t, redeemBody(accountEmail))
-			useTerminal(t, "\n")
 			out, code := runRoot(t, "connect", "--pair", value)
 			if code != ExitUsageError || !strings.Contains(out, "the browser code after the pairing code is not valid") {
 				t.Fatalf("exit %d\n%s", code, out)
