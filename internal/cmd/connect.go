@@ -183,7 +183,7 @@ func newConnectCmd(version string) *cobra.Command {
 	var sessionID, agent, promptFile, resumeFrom string
 	var pair, trust string
 	var install, uninstall, status, serviceMode bool
-	var pause, resume, ask bool
+	var pause, resume, ask, preflight bool
 	var maxPermission string
 	var webSearch bool
 	// mode holds --mode, --model and --effort (session-bound mode only).
@@ -202,7 +202,7 @@ func newConnectCmd(version string) *cobra.Command {
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			m := setupMode{pair: cmd.Flags().Changed("pair"), trust: cmd.Flags().Changed("trust"), install: install, uninstall: uninstall,
-				status: status, service: serviceMode, pause: pause, resume: resume}
+				status: status, service: serviceMode, pause: pause, resume: resume, preflight: preflight}
 			if ask && !install {
 				_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "Error: --ask applies only with --install")
 				return &ExitError{Code: ExitUsageError}
@@ -230,6 +230,8 @@ func newConnectCmd(version string) *cobra.Command {
 				return runServiceStatus(cmd, version)
 			case m.pause, m.resume:
 				return runPauseCmd(cmd, m.pause)
+			case m.preflight:
+				return runPreflight(cmd)
 			}
 			if model != "" && !connectModelRe.MatchString(model) {
 				_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Error: --claude-model %q is not a model name\n", model)
@@ -283,6 +285,8 @@ func newConnectCmd(version string) *cobra.Command {
 	c.Flags().BoolVar(&resume, "resume", false, "Connect again after a pause")
 	c.Flags().BoolVar(&ask, "ask", false, "With --install: ask whether to start Archivist when the computer starts (the installers pass it)")
 	_ = c.Flags().MarkHidden("ask")
+	c.Flags().BoolVar(&preflight, "preflight", false, "Check that the background service manager can start this install's binary, before pairing (the Windows installer passes it)")
+	_ = c.Flags().MarkHidden("preflight")
 	c.Flags().StringVar(&maxPermission, "max-permission", "", "Highest permission mode a session on this machine may run: "+
 		connect.ModeHelp()+" (default auto_edits; full_auto with --session)")
 	c.Flags().BoolVar(&webSearch, "web-search", false, "Turn on the harness's own provider side web search for sessions on this machine "+

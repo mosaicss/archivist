@@ -19,7 +19,9 @@
 # service that is already installed; an update without --pair reinstalls the
 # service; a stale brew channel with no installed cask installs directly; a
 # failed service install after pairing prints the resume step and exits
-# non-zero; the skill bundle is installed when ~/.claude/skills exists. Each
+# non-zero; a service that is not running after pairing points at the
+# Service line and the rerun without --pair (Story 94.14), and a re-pair
+# prints no restart hint; the skill bundle is installed when ~/.claude/skills exists. Each
 # of these exits non-zero with nothing installed and no temporary directory
 # left: an archive that does not match its checksum; checksums without a
 # valid signature; a release without the signature; one
@@ -242,13 +244,15 @@ done
 BASE="http://127.0.0.1:$(cat "$WORK/port")"
 
 # --- stub service managers -----------------------------------------------------
-# They log every call; STUB_FAIL_ENABLE=1 makes `systemctl --user enable` fail.
+# They log every call; STUB_FAIL_ENABLE=1 makes `systemctl --user enable` fail
+# and STUB_INACTIVE=1 makes `systemctl --user is-active` say not running.
 mkdir -p "$WORK/stubs"
 cat > "$WORK/stubs/systemctl" <<'SH'
 #!/bin/sh
 echo "systemctl $*" >> "$STUB_LOG"
 case "$*" in
   *" enable "*) [ "${STUB_FAIL_ENABLE:-0}" = 1 ] && { echo "Failed to enable unit: stub refusal" >&2; exit 1; } ;;
+  *" is-active "*) [ "${STUB_INACTIVE:-0}" = 1 ] && exit 3 ;;
 esac
 exit 0
 SH
@@ -285,6 +289,7 @@ run_install() {
     LANG=C.UTF-8 \
     STUB_LOG="$WORK/calls.log" \
     STUB_FAIL_ENABLE="${STUB_FAIL_ENABLE:-0}" \
+    STUB_INACTIVE="${STUB_INACTIVE:-0}" \
     ARCHIVIST_RELEASE_BASE_URL="${RELEASE_URL:-$BASE}" \
     ARCHIVIST_INSTALL_VERSION="$version" \
     ARCHIVIST_BASE_URL="$BASE" \
@@ -362,7 +367,11 @@ grep '"method": "DELETE", "path": "/account/cli-tokens/current"' "$WORK/redeem.l
   || fail "the earlier key did not revoke itself"
 if grep '"method": "DELETE"' "$WORK/redeem.log" | grep -q "$NEW_KEY"; then fail "the new key was revoked"; fi
 case "$OUT" in *"$OLD_KEY"*|*"$NEW_KEY"*) fail "a full key was printed" ;; esac
-pass "re-pair saves the new key, revokes the earlier one (masked), and --no-service restarts the installed service"
+# Story 94.14: the installer reinstalls the service next, so the re-pair's
+# own restart hint is not printed.
+case "$OUT" in *"to restart background connect with the new key"*) fail "the redundant restart hint was printed:
+$OUT" ;; esac
+pass "re-pair saves the new key, revokes the earlier one (masked), --no-service restarts the installed service, no restart hint"
 
 # --- 2b. an update without --pair reinstalls the installed service ------------
 : > "$WORK/calls.log"
@@ -417,6 +426,34 @@ set -e
 case "$OUT" in *"connect --install (no new code is needed)"*) ;; *) fail "no resume step:
 $OUT" ;; esac
 pass "failed service install after pairing prints the resume step"
+
+# --- 3b. a service that is not running after pairing (Story 94.14) ----------
+H3B="$WORK/home3b"
+set +e
+OUT="$(STUB_INACTIVE=1 run_install "$H3B" v9.9.9 --pair ABCDE12345 2>&1)"
+CODE=$?
+set -e
+[ "$CODE" = 1 ] || fail "a service that is not running exited $CODE:
+$OUT"
+[ -s "$H3B/.archivist/credentials" ] || fail "pairing was lost"
+for want in "Service:  installed, not running" "the Service line above says why" \
+  "run this again without --pair (no new code is needed)" "curl -fsSL ${BASE}/latest/download/install.sh | bash"; do
+  case "$OUT" in *"$want"*) ;; *) fail "not running: no '${want}':
+$OUT" ;; esac
+done
+case "$OUT" in *"last log line"*) fail "not running: a log line is named:
+$OUT" ;; esac
+set +e
+OUT="$(STUB_INACTIVE=1 run_install "$H3B" v9.9.9 2>&1)"
+CODE=$?
+set -e
+[ "$CODE" = 1 ] || fail "an update with a service that is not running exited $CODE:
+$OUT"
+case "$OUT" in *"Once that is fixed, run this command again."*) ;; *) fail "update not running: no rerun line:
+$OUT" ;; esac
+case "$OUT" in *"without --pair"*) fail "update not running: asked to drop a --pair it did not have:
+$OUT" ;; esac
+pass "a service that is not running after pairing points at the Service line and the rerun without --pair"
 
 # --- 4. an archive that does not match its checksum: exit 1, nothing installed
 H4="$WORK/home4"

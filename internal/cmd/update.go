@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -36,7 +37,13 @@ var (
 	releaseVerifier = release.Verify
 	// executablePath is the binary a self update replaces.
 	executablePath = os.Executable
+	// updateHostOS is runtime.GOOS; tests set it to cover the Windows
+	// AppData refusal (Story 94.14) on any platform.
+	updateHostOS = runtime.GOOS
 )
+
+// installPS1 is the Windows one-liner that installs both executables.
+const installPS1 = "& ([scriptblock]::Create((irm https://github.com/mosaicss/archivist/releases/latest/download/install.ps1)))"
 
 // maxReleaseAsset caps one downloaded release file.
 const maxReleaseAsset = 512 << 20
@@ -50,7 +57,7 @@ func NewUpdateCmd(currentVersion string) *cobra.Command {
 		Use:   "update",
 		Short: "Replace the binary in place with the latest release",
 		Annotations: map[string]string{
-			"pp:typed-exit-codes": "0,3,5",
+			"pp:typed-exit-codes": "0,1,3,5",
 			// Hidden from MCP: self-replaces the running binary; agents must
 			// never trigger an in-place update (Story 39.7).
 			"mcp:hidden": "true",
@@ -233,6 +240,19 @@ func runUpdate(ctx context.Context, cmd *cobra.Command, current string) error {
 			"archivist update: this build (v%s) is newer than the latest release (v%s); nothing was changed.\n",
 			normalCurrent, normalLatest)
 		return &ExitError{Code: ExitNotFound}
+	}
+
+	// Story 94.14: an install under %LOCALAPPDATA% is not swapped in place.
+	// Inside a packaged app's shell the rename would change the real file
+	// while the copy lands in the app's private view, stranding a working
+	// install; install.ps1 moves it to ~\.archivist\bin instead.
+	if updateHostOS == "windows" {
+		if exe, err := executablePath(); err == nil && underWindowsDir(filepath.Dir(exe), os.Getenv("LOCALAPPDATA")) {
+			_, _ = fmt.Fprintf(cmd.ErrOrStderr(),
+				"archivist update: v%s is available. Archivist now installs outside AppData, in your user folder's .archivist\\bin, and this copy is in %s, so it was not replaced. Run this in a normal PowerShell window to move and update it:\n  %s\n",
+				normalLatest, filepath.Dir(exe), installPS1)
+			return &ExitError{Code: ExitGenericError}
+		}
 	}
 
 	platform := releasePlatform(runtime.GOOS, runtime.GOARCH)
@@ -430,6 +450,24 @@ func swapBinaries(dir string, staged map[string]string) error {
 // globEscape quotes the filepath.Match metacharacters in a literal name.
 func globEscape(name string) string {
 	return strings.NewReplacer("*", "[*]", "?", "[?]", "[", "[[]").Replace(name)
+}
+
+// underWindowsDir reports whether p is dir or inside it, compared the way
+// Windows names paths: case-insensitive, either separator, cleaned, and on
+// a separator boundary (AppData\Local2 is not under AppData\Local). An
+// empty dir contains nothing.
+func underWindowsDir(p, dir string) bool {
+	norm := func(s string) string {
+		if strings.TrimSpace(s) == "" {
+			return ""
+		}
+		return strings.TrimSuffix(strings.ToLower(path.Clean(strings.ReplaceAll(s, `\`, "/"))), "/")
+	}
+	p, dir = norm(p), norm(dir)
+	if dir == "" || dir == "." || p == "" {
+		return false
+	}
+	return p == dir || strings.HasPrefix(p, dir+"/")
 }
 
 // serviceRestartHint is the one line telling a user whose background service

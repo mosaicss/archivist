@@ -206,7 +206,7 @@ jobs:
         shell: bash
         run: |
           go test -count=1 -v ./internal/winjob ./internal/connect ./internal/cmd ./internal/service \
-            -run 'Test(Windows|Terminate|Close|DaemonDeath|AssignFailure|ResumeFailure|StartResumes|HarnessLookPath|DetectReportsBatchShim|Schtasks|RenderTaskXML|ConnectInstallStatusUninstallWindows|SuperviseDaemon)' \
+            -run 'Test(Windows|Terminate|Close|DaemonDeath|AssignFailure|ResumeFailure|StartResumes|HarnessLookPath|DetectReportsBatchShim|Schtasks|RenderTaskXML|ConnectInstallStatusUninstallWindows|SuperviseDaemon|ConnectPreflightWindows|ConnectStatusNoLogWindows|ProbeLaunch|RenderProbeXML|ParseLastResult|TaskResult|ServiceStateText|PreflightOutcome)' \
             | tee winonly.txt
           grep -q -- '--- PASS' winonly.txt || { echo "FAIL: no Windows only test ran"; exit 1; }
           # The cross drive link test needs a second volume, which a runner
@@ -218,10 +218,18 @@ jobs:
             echo "FAIL: a Windows only test was skipped"; exit 1
           fi
 
-      - name: Real schtasks accepts the task XML
+      # Story 94.14: and runs a one-shot probe task (a missing program
+      # reports 0x80070002, cmd.exe /c exit 0 reports 0, a GUI subsystem
+      # build of archivistw.exe reports 0 for `version`), deleted after.
+      - name: Real schtasks accepts the task XML and probes a launch
         env:
           ARCHIVIST_REAL_SCHTASKS: "1"
-        run: go test ./internal/service -run TestRealSchtasksAcceptsTaskXML -count=1 -v
+        shell: bash
+        run: |
+          go test ./internal/service -run 'TestRealSchtasks(AcceptsTaskXML|ProbeLaunch)$' -count=1 -v | tee realschtasks.txt
+          for t in TestRealSchtasksAcceptsTaskXML TestRealSchtasksProbeLaunch; do
+            grep -q -- "--- PASS: $t" realschtasks.txt || { echo "FAIL: $t did not pass"; exit 1; }
+          done
 
       - name: install.ps1 replay (fake release, stub schtasks), Windows PowerShell 5.1
         shell: powershell

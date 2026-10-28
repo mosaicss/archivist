@@ -3,12 +3,16 @@ package service
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/csv"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 	"unicode/utf16"
 
 	"github.com/mosaicss/archivist/internal/fsutil"
@@ -23,14 +27,25 @@ import (
 // Scheduler's RestartOnFailure covers a failed launch, not a non-zero exit.
 // Task Scheduler cannot carry an environment, so the captured one is
 // written to service.env for the supervisor to apply. Status comes from
-// schtasks exit codes and the daemon's pid file only: schtasks /query
-// output is localised and never parsed.
+// schtasks exit codes and the daemon's pid file; schtasks /query output is
+// localised, so its text is never parsed. Story 94.14 reads one value from
+// it, the task's last result, by CSV column position only (/v /fo csv /nh),
+// and uses it to explain a task that is not running and, before pairing, to
+// check through a one-shot probe task that Task Scheduler can start the
+// installed archivistw.exe at all (a packaged app's shell, such as the
+// Claude desktop app's, installs into a private view Windows cannot see).
 
 // TaskPrefix starts every task name; the sanitised user name follows.
 const TaskPrefix = "MosaicArchivistConnect"
 
 // taskXMLName is the task definition kept under ~/.archivist/connect.
 const taskXMLName = TaskPrefix + ".xml"
+
+// ProbePrefix starts the one-shot launch probe's task name (Story 94.14).
+const ProbePrefix = "MosaicArchivistProbe"
+
+// probeXMLName is the probe's definition, removed after each probe.
+const probeXMLName = ProbePrefix + ".xml"
 
 // TaskName is the scheduled task name for user (DOMAIN\name or name) with
 // account security identifier sid: MosaicArchivistConnect-<name>-<hash>,
@@ -64,6 +79,12 @@ func TaskName(user, sid string) string {
 		name = "user"
 	}
 	return TaskPrefix + "-" + name + "-" + hex.EncodeToString(sum[:4])
+}
+
+// ProbeTaskName is the launch probe's task name: MosaicArchivistProbe-
+// followed by the same user part and hash as TaskName.
+func ProbeTaskName(user, sid string) string {
+	return ProbePrefix + strings.TrimPrefix(TaskName(user, sid), TaskPrefix)
 }
 
 // TaskXMLPath is the task definition file, ~/.archivist/connect/MosaicArchivistConnect.xml.
@@ -157,6 +178,45 @@ func MergeEnv(environ []string, captured []EnvVar, fold bool, extra ...string) [
 // `<bin> connect --service [args...]` in home; each argument is quoted as
 // a Windows program parses its command line.
 func RenderTaskXML(user, bin, home string, args []string) []byte {
+	return renderTask(taskSpec{
+		description: "Archivist connect: drive your own Claude Code or Codex from Mosaic. Written by archivist connect --install; remove it with archivist connect --uninstall.",
+		user:        user,
+		bin:         bin,
+		home:        home,
+		argv:        append([]string{"connect", "--service"}, args...),
+		logon:       true,
+		restart:     true,
+		limit:       "PT0S",
+	})
+}
+
+// RenderProbeXML renders the one-shot launch check (Story 94.14): the same
+// principal and settings as the service task, but no trigger, no restart
+// after a failure, a one minute run limit and its own argv.
+func RenderProbeXML(user, bin, home string, argv []string) []byte {
+	return renderTask(taskSpec{
+		description: "Archivist install check: starts archivist once to confirm Windows can run it. Removed right after.",
+		user:        user,
+		bin:         bin,
+		home:        home,
+		argv:        argv,
+		limit:       "PT1M",
+	})
+}
+
+// taskSpec is what differs between the service task and the launch probe.
+type taskSpec struct {
+	description     string
+	user, bin, home string
+	argv            []string
+	// logon adds the logon trigger naming user; restart adds
+	// RestartOnFailure (PT1M x3).
+	logon, restart bool
+	// limit is the ExecutionTimeLimit.
+	limit string
+}
+
+func renderTask(t taskSpec) []byte {
 	var b strings.Builder
 	b.WriteString(`<?xml version="1.0" encoding="UTF-16"?>` + "\r\n")
 	b.WriteString(`<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">` + "\r\n")
@@ -170,17 +230,19 @@ func RenderTaskXML(user, bin, home string, args []string) []byte {
 	// No XML comment: "--" is illegal inside one, and schtasks rejects the
 	// file as malformed (seen on the Windows CI runner). The removal hint
 	// lives in the description instead.
-	elem(2, "Description", "Archivist connect: drive your own Claude Code or Codex from Mosaic. Written by archivist connect --install; remove it with archivist connect --uninstall.")
+	elem(2, "Description", t.description)
 	line(1, "</RegistrationInfo>")
-	line(1, "<Triggers>")
-	line(2, "<LogonTrigger>")
-	elem(3, "Enabled", "true")
-	elem(3, "UserId", user)
-	line(2, "</LogonTrigger>")
-	line(1, "</Triggers>")
+	if t.logon {
+		line(1, "<Triggers>")
+		line(2, "<LogonTrigger>")
+		elem(3, "Enabled", "true")
+		elem(3, "UserId", t.user)
+		line(2, "</LogonTrigger>")
+		line(1, "</Triggers>")
+	}
 	line(1, "<Principals>")
 	line(2, `<Principal id="Author">`)
-	elem(3, "UserId", user)
+	elem(3, "UserId", t.user)
 	elem(3, "LogonType", "InteractiveToken")
 	elem(3, "RunLevel", "LeastPrivilege")
 	line(2, "</Principal>")
@@ -201,23 +263,24 @@ func RenderTaskXML(user, bin, home string, args []string) []byte {
 	elem(2, "Hidden", "false")
 	elem(2, "RunOnlyIfIdle", "false")
 	elem(2, "WakeToRun", "false")
-	elem(2, "ExecutionTimeLimit", "PT0S")
+	elem(2, "ExecutionTimeLimit", t.limit)
 	elem(2, "Priority", "7")
-	line(2, "<RestartOnFailure>")
-	elem(3, "Interval", "PT1M")
-	elem(3, "Count", "3")
-	line(2, "</RestartOnFailure>")
+	if t.restart {
+		line(2, "<RestartOnFailure>")
+		elem(3, "Interval", "PT1M")
+		elem(3, "Count", "3")
+		line(2, "</RestartOnFailure>")
+	}
 	line(1, "</Settings>")
 	line(1, `<Actions Context="Author">`)
 	line(2, "<Exec>")
-	elem(3, "Command", bin)
-	argv := append([]string{"connect", "--service"}, args...)
-	quoted := make([]string, len(argv))
-	for i, a := range argv {
+	elem(3, "Command", t.bin)
+	quoted := make([]string, len(t.argv))
+	for i, a := range t.argv {
 		quoted[i] = windowsArg(a)
 	}
 	elem(3, "Arguments", strings.Join(quoted, " "))
-	elem(3, "WorkingDirectory", home)
+	elem(3, "WorkingDirectory", t.home)
 	line(2, "</Exec>")
 	line(1, "</Actions>")
 	b.WriteString("</Task>\r\n")
@@ -535,8 +598,9 @@ func removePIDFile(home string) { _ = os.Remove(PIDPath(home)) }
 
 // Status reads schtasks /query's exit code (registered or not) and the
 // daemon's service.pid: a registered task whose daemon stopped (exit 0:
-// superseded, no harness, revoked key) is "loaded, not running". A task run
-// a moment ago gets about 5 s for its daemon's pid.
+// superseded, no harness, revoked key) is "loaded, not running", and then
+// the task's last result says why when Task Scheduler knows (Story 94.14).
+// A task run a moment ago gets about 5 s for its daemon's pid.
 func (s *schtasks) Status(ctx context.Context) (Status, error) {
 	st := Status{Manager: s.Name(), Path: s.Path(), Installed: fileExists(s.Path())}
 	if st.Installed {
@@ -556,8 +620,189 @@ func (s *schtasks) Status(ctx context.Context) (Status, error) {
 			return st, nil
 		}
 		if i >= schtasksStartWait || ctx.Err() != nil {
+			// Story 94.14: why it is not running, when Task Scheduler says.
+			st.LastResult = LastTaskResult(ctx, s.opts, s.task())
 			return st, nil
 		}
 		s.opts.sleep(launchdPoll)
 	}
+}
+
+// Task Scheduler results (Story 94.14). A task's last result is an HRESULT
+// for a launch that failed, SCHED_S_* while it runs or before its first
+// run, and otherwise the program's own exit code.
+const (
+	resultRunning   uint32 = 0x41301 // SCHED_S_TASK_RUNNING
+	resultHasNotRun uint32 = 0x41303 // SCHED_S_TASK_HAS_NOT_RUN
+	// ResultFileNotFound is HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND): Task
+	// Scheduler could not find the program, as when it was installed from
+	// a packaged app's shell into a private view of AppData.
+	ResultFileNotFound uint32 = 0x80070002
+	// ResultPathNotFound is HRESULT_FROM_WIN32(ERROR_PATH_NOT_FOUND).
+	ResultPathNotFound uint32 = 0x80070003
+)
+
+// TaskResult is a task's last result; Known is false when it could not be
+// read.
+type TaskResult struct {
+	Code  uint32
+	Known bool
+}
+
+// NotFound reports a program file (or its folder) Task Scheduler could not
+// find.
+func (r TaskResult) NotFound() bool {
+	return r.Known && (r.Code == ResultFileNotFound || r.Code == ResultPathNotFound)
+}
+
+// Failed reports a known result that is neither success nor "still
+// running".
+func (r TaskResult) Failed() bool {
+	return r.Known && r.Code != 0 && r.Code != resultRunning
+}
+
+// TaskResultText names a task result in plain words followed by its hex
+// value, for example "the program file was not found (0x80070002)".
+func TaskResultText(code uint32) string {
+	var text string
+	switch code {
+	case ResultFileNotFound, ResultPathNotFound:
+		text = "the program file was not found"
+	case 0x80070005:
+		text = "access was denied"
+	case 0x8007010B:
+		text = "the start folder is not valid"
+	case 0x800700C1:
+		text = "Windows cannot run the program file"
+	case 0x800704DD:
+		text = "the user is not logged on"
+	case 0x800710E0:
+		text = "an administrator or policy refused the request"
+	case 0x8004131F:
+		text = "an instance is already running"
+	case resultRunning:
+		text = "the task is still running"
+	case resultHasNotRun:
+		text = "the task has not run yet"
+	case 0x41306, 0xC000013A:
+		text = "the task was stopped"
+	default:
+		if code < 0x10000 {
+			text = fmt.Sprintf("the program exited with code %d", code)
+		} else {
+			// The hex value is the text; it is not repeated.
+			return fmt.Sprintf("result 0x%08X", code)
+		}
+	}
+	return fmt.Sprintf("%s (0x%08X)", text, code)
+}
+
+// lastResultColumn is "Last Result" in schtasks /query /v /fo csv: the
+// column position is fixed, its label is localised.
+const lastResultColumn = 6
+
+// LastTaskResult reads task name's last result from schtasks /query /tn
+// <name> /v /fo csv /nh: the first row, column 6, as signed or unsigned
+// decimal or 0x hex. Any failure (schtasks missing or refusing, a short
+// row, a value that is not a number) is an unknown result.
+func LastTaskResult(ctx context.Context, opts Options, name string) TaskResult {
+	r, err := opts.run(ctx, "schtasks", "/query", "/tn", name, "/v", "/fo", "csv", "/nh")
+	if err != nil || !r.OK() {
+		return TaskResult{}
+	}
+	return parseLastResult(r.Output)
+}
+
+// parseLastResult reads the first CSV row's column 6 (see LastTaskResult).
+func parseLastResult(out string) TaskResult {
+	rd := csv.NewReader(strings.NewReader(out))
+	rd.FieldsPerRecord = -1
+	rd.LazyQuotes = true
+	row, err := rd.Read()
+	if err != nil || len(row) <= lastResultColumn {
+		return TaskResult{}
+	}
+	code, ok := parseResultValue(row[lastResultColumn])
+	return TaskResult{Code: code, Known: ok}
+}
+
+// parseResultValue reads a task result as schtasks prints it: decimal,
+// signed (-2147024894) or unsigned (2147942402), or 0x hex.
+func parseResultValue(s string) (uint32, bool) {
+	s = strings.TrimSpace(s)
+	if h, ok := strings.CutPrefix(strings.ToLower(s), "0x"); ok {
+		v, err := strconv.ParseUint(h, 16, 32)
+		if err != nil {
+			return 0, false
+		}
+		return uint32(v), true
+	}
+	v, err := strconv.ParseInt(s, 10, 64)
+	if err != nil || v < math.MinInt32 || v > math.MaxUint32 {
+		return 0, false
+	}
+	return uint32(v), true
+}
+
+// Probe polling bounds: the last result is read every 250 ms for up to 15 s.
+const (
+	probePoll  = 250 * time.Millisecond
+	probePolls = 60
+)
+
+// ProbeLaunch starts bin argv once through a one-shot scheduled task with
+// the service task's principal (Story 94.14), so it fails exactly where the
+// service task would: it writes the probe XML under ~/.archivist/connect
+// (0700), registers it (/create /xml /f) and runs it, then reads its last
+// result every 250 ms for up to 15 s until it is neither "running" nor "has
+// not run". The task is always deleted and its XML removed. The result is
+// unknown when it was not read in time; err is set when the probe could
+// not be registered or run.
+func ProbeLaunch(ctx context.Context, opts Options, bin string, argv []string) (TaskResult, error) {
+	if bin == "" || !filepath.IsAbs(bin) {
+		return TaskResult{}, fmt.Errorf("service: binary path %q is not absolute", bin)
+	}
+	if opts.User == "" {
+		return TaskResult{}, errors.New("service: the current user name is unknown")
+	}
+	s := newSchtasks(opts)
+	name := ProbeTaskName(opts.User, opts.SID)
+	path := filepath.Join(opts.Home, ".archivist", "connect", probeXMLName)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return TaskResult{}, err
+	}
+	defer func() {
+		_, _ = s.schtasks(context.WithoutCancel(ctx), "/delete", "/tn", name, "/f")
+		_ = os.Remove(path)
+	}()
+	if err := writeFileAtomic(path, RenderProbeXML(opts.User, bin, opts.Home, argv), 0o600); err != nil {
+		return TaskResult{}, err
+	}
+	r, err := s.schtasks(ctx, "/create", "/xml", path, "/tn", name, "/f")
+	if err == nil && !r.OK() {
+		err = commandError("schtasks /create", r)
+	}
+	if err != nil {
+		return TaskResult{}, err
+	}
+	if r, err = s.schtasks(ctx, "/run", "/tn", name); err == nil && !r.OK() {
+		err = commandError("schtasks /run", r)
+	}
+	if err != nil {
+		return TaskResult{}, err
+	}
+	deadline := time.Now().Add(probePolls * probePoll)
+	for i := 0; i < probePolls && ctx.Err() == nil && time.Now().Before(deadline); i++ {
+		res := LastTaskResult(ctx, opts, name)
+		if res.Known && res.Code != resultRunning && res.Code != resultHasNotRun {
+			return res, nil
+		}
+		opts.sleep(probePoll)
+	}
+	return TaskResult{}, nil
+}
+
+// ProbeLaunch implements LaunchProber with this manager's options.
+func (s *schtasks) ProbeLaunch(ctx context.Context, bin string, argv []string) (TaskResult, error) {
+	return ProbeLaunch(ctx, s.opts, bin, argv)
 }

@@ -370,8 +370,21 @@ main() {
     say "Note: ${on_path} comes first on PATH; this install is ${BIN}."
   fi
 
+  # Story 94.14: the archivist calls know they run under the installer
+  # (ARCHIVIST_INSTALLER=1, an environment variable that older binaries
+  # ignore), so a re-pair does not print a restart hint the next step makes
+  # moot.
+  #
+  # Unlike install.ps1 there is no launch check (connect --preflight) before
+  # pairing. On Windows a packaged app's shell silently redirects new AppData
+  # files where Task Scheduler cannot see them. Here, macOS App Sandbox and
+  # Claude Code's Seatbelt and bubblewrap sandboxes deny a write outright
+  # (Operation not permitted) instead of redirecting it; the binary is
+  # copied before pairing, so a denied write fails before the code is spent;
+  # a refused launchctl or systemctl fails at connect --install, after which
+  # the resume line says no new code is needed.
   if [ -n "$PAIR" ]; then
-    "$BIN" connect --pair "$PAIR" || exit $?
+    ARCHIVIST_INSTALLER=1 "$BIN" connect --pair "$PAIR" || exit $?
     # An installed service is restarted on the new binary and key even with
     # --no-service.
     if [ "$WANT_SERVICE" = 1 ] || service_installed; then
@@ -379,9 +392,9 @@ main() {
       # an installed service is reinstalled without the question.
       local status=0
       if service_installed; then
-        "$BIN" connect --install || status=$?
+        ARCHIVIST_INSTALLER=1 "$BIN" connect --install || status=$?
       else
-        "$BIN" connect --install --ask || status=$?
+        ARCHIVIST_INSTALLER=1 "$BIN" connect --install --ask || status=$?
       fi
       if [ "$status" != 0 ]; then
         printf '\n%s\n%s\n' \
@@ -392,14 +405,20 @@ main() {
     fi
   elif service_installed; then
     # An update restarts an installed service on the new binary.
-    "$BIN" connect --install || exit $?
+    ARCHIVIST_INSTALLER=1 "$BIN" connect --install || exit $?
   fi
 
   if [ "$WANT_SERVICE" = 1 ] && service_installed; then
     say ""
-    if ! "$BIN" connect --status; then
+    if ! ARCHIVIST_INSTALLER=1 "$BIN" connect --status; then
       say ""
-      say "The background service is installed but not running. The last log line above says why."
+      say "The background service is installed but not running; the Service line above says why."
+      if [ -n "$PAIR" ]; then
+        say "This computer is paired. Once that is fixed, run this again without --pair (no new code is needed):"
+        say "  curl -fsSL ${RELEASE_BASE}/latest/download/install.sh | bash"
+      else
+        say "Once that is fixed, run this command again."
+      fi
       exit 1
     fi
   fi

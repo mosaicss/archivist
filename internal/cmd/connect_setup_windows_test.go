@@ -49,6 +49,12 @@ func startSleeper(t *testing.T) *exec.Cmd {
 // taskCommand is the <Command> of a UTF-16LE task XML.
 func taskCommand(t *testing.T, raw []byte) string {
 	t.Helper()
+	return taskElement(t, raw, "Command")
+}
+
+// taskElement is the text of the first <name> element of a UTF-16LE task XML.
+func taskElement(t *testing.T, raw []byte, name string) string {
+	t.Helper()
 	if len(raw) < 2 || raw[0] != 0xFF || raw[1] != 0xFE {
 		t.Fatalf("task XML is not UTF-16LE with a BOM")
 	}
@@ -57,12 +63,12 @@ func taskCommand(t *testing.T, raw []byte) string {
 		units = append(units, uint16(raw[i])|uint16(raw[i+1])<<8)
 	}
 	xml := string(utf16.Decode(units))
-	_, rest, ok := strings.Cut(xml, "<Command>")
-	cmd, _, ok2 := strings.Cut(rest, "</Command>")
+	_, rest, ok := strings.Cut(xml, "<"+name+">")
+	value, _, ok2 := strings.Cut(rest, "</"+name+">")
 	if !ok || !ok2 {
-		t.Fatalf("no <Command> in:\n%s", xml)
+		t.Fatalf("no <%s> in:\n%s", name, xml)
 	}
-	return cmd
+	return value
 }
 
 // windowsSandbox points both HOME and USERPROFILE (what os.UserHomeDir
@@ -314,5 +320,103 @@ func TestWindowsConnectCheckResolvesNpmShim(t *testing.T) {
 	}
 	if _, err := os.Stat(ran); err == nil {
 		t.Fatal("the batch shim was executed")
+	}
+}
+
+// --preflight on Windows (Story 94.14) probes archivistw.exe next to the
+// stable archivist.exe through a one-shot task, then deletes it: result 0
+// exits 0 silently, file not found prints the packaged shell message and
+// exits 1, another failure names Task Scheduler's reason, and no result in
+// time continues with a note. A missing archivistw.exe refuses before any
+// schtasks call.
+func TestConnectPreflightWindows(t *testing.T) {
+	home := windowsSandbox(t)
+	stable, err := stableBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	companion := filepath.Join(filepath.Dir(stable), "archivistw.exe")
+	_ = os.Remove(companion)
+	result := "0"
+	probeXML := filepath.Join(home, ".archivist", "connect", "MosaicArchivistProbe.xml")
+	var xmlAtCreate []byte
+	calls := stubRunner(t, func(line string) service.Result {
+		if strings.HasPrefix(line, "schtasks /create /xml "+probeXML) {
+			xmlAtCreate, _ = os.ReadFile(probeXML)
+		}
+		if strings.HasPrefix(line, "schtasks /query /tn MosaicArchivistProbe-") {
+			return service.Result{Output: `"PC","\MosaicArchivistProbe-x","N/A","Ready","Interactive only","N/A","` + result + `","PC\x","x"` + "\r\n"}
+		}
+		return service.Result{}
+	})
+	out, code := runRoot(t, "connect", "--preflight")
+	if code != ExitGenericError || !strings.Contains(out, "archivistw.exe") || len(*calls) != 0 {
+		t.Fatalf("missing companion: exit %d calls %v\n%s", code, *calls, out)
+	}
+	if err := os.WriteFile(companion, []byte("stub"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Remove(companion) })
+	for _, c := range []struct {
+		result string
+		code   int
+		want   string
+	}{
+		{"0", 0, ""},
+		{"-2147024894", ExitGenericError, packagedShellMessage},
+		{"2147942405", ExitGenericError, "Windows could not start " + companion + " from Task Scheduler: access was denied (0x80070005)."},
+		{"267009", 0, "Note: Task Scheduler did not report"},
+	} {
+		result = c.result
+		*calls = nil
+		xmlAtCreate = nil
+		out, code := runRoot(t, "connect", "--preflight")
+		if code != c.code || (c.want == "" && out != "") || !strings.Contains(out, c.want) {
+			t.Fatalf("result %s: exit %d\n%s", c.result, code, out)
+		}
+		joined := strings.Join(*calls, "\n")
+		if !strings.Contains(joined, "schtasks /create /xml "+filepath.Join(home, ".archivist", "connect", "MosaicArchivistProbe.xml")) ||
+			!strings.HasPrefix((*calls)[len(*calls)-1], "schtasks /delete /tn MosaicArchivistProbe-") {
+			t.Fatalf("result %s: calls\n%s", c.result, joined)
+		}
+		if strings.Contains(joined, "MosaicArchivistConnect-") {
+			t.Fatalf("result %s: the service task was touched\n%s", c.result, joined)
+		}
+		if _, err := os.Stat(service.TaskXMLPath(home)); err == nil {
+			t.Fatalf("result %s: a service task XML was written", c.result)
+		}
+		// The probe starts archivistw.exe with `version` only.
+		if xmlAtCreate == nil || taskCommand(t, xmlAtCreate) != companion || taskElement(t, xmlAtCreate, "Arguments") != "version" {
+			t.Fatalf("result %s: the probe XML at /create does not run %s version", c.result, companion)
+		}
+	}
+}
+
+// --status through runServiceStatus (Story 94.14): a registered task whose
+// daemon is not running, whose last result is no failure (0) and which
+// wrote no connect.log says the daemon wrote no log, not "see the log".
+func TestConnectStatusNoLogWindows(t *testing.T) {
+	home := windowsSandbox(t)
+	saveKey(t, home, pairedKey)
+	stubRunner(t, func(line string) service.Result {
+		if strings.HasPrefix(line, "schtasks /query /tn MosaicArchivistConnect-") && strings.Contains(line, " /v ") {
+			return service.Result{Output: `"PC","\MosaicArchivistConnect-x","N/A","Ready","Interactive only","N/A","0","PC\x","x"` + "\r\n"}
+		}
+		return service.Result{}
+	})
+	xmlPath := service.TaskXMLPath(home)
+	if err := os.MkdirAll(filepath.Dir(xmlPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(xmlPath, service.RenderTaskXML(`PC\x`, `C:\x\archivistw.exe`, home, nil), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(service.LogPath(home)); !os.IsNotExist(err) {
+		t.Fatalf("connect.log exists: %v", err)
+	}
+	out, code := runRoot(t, "connect", "--status")
+	want := "Service:  loaded, not running (the daemon wrote no log; run 'archivist connect --install' to start it again) (Task Scheduler: " + xmlPath + ")"
+	if code != ExitGenericError || !strings.Contains(out, want) || strings.Contains(out, "see the log") || strings.Contains(out, "Last log:") {
+		t.Fatalf("exit %d\n%s", code, out)
 	}
 }

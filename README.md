@@ -17,7 +17,7 @@ curl -fsSL https://github.com/mosaicss/archivist/releases/latest/download/instal
 ```
 
 The script installs or updates archivist (`~/.local/bin`, or
-`%LOCALAPPDATA%\Programs\archivist` on Windows) after checking the download
+`~\.archivist\bin` on Windows) after checking the download
 (see [Verifying a release](#verifying-a-release)), and adds the Claude Code
 skill when `~/.claude/skills` exists. `install.sh` needs `curl`, `tar` and
 `openssl`, which macOS and most Linux systems include. On Linux it also
@@ -456,24 +456,51 @@ macOS: the job is loaded and the daemon in `service.pid` is alive; Windows:
 the task is registered and the daemon in `service.pid` is alive) and a key
 is saved, else 1, and prints the ceiling and the last log line. A loaded launchd job whose
 daemon has stopped shows "loaded, not running"; a job loaded a moment ago gets
-about 5 seconds to write its pid first. `--pair`, `--trust`, `--install`,
+about 5 seconds to write its pid first. When the daemon never wrote a log,
+the line says so instead of pointing at the log. On Windows a registered task
+that is not running also names Task Scheduler's last result, for example
+"loaded, not running (Task Scheduler: the program file was not found
+(0x80070002); run the install command again in a normal PowerShell window)".
+When the installers' final status check fails they point at that Service
+line, and after pairing they print the command to run again without
+`--pair` or `-Pair`: the computer stays paired, so no new code is needed. `--pair`, `--trust`, `--install`,
 `--uninstall`, `--status`, `--pause` and `--resume` are used one at a time.
 
 #### Windows
 
-In PowerShell (designed to need no admin rights; nothing asks for elevation):
+In a normal PowerShell window (designed to need no admin rights; nothing asks
+for elevation). A shell that a packaged app such as the Claude desktop app
+starts (Claude Code's own PowerShell tool there) keeps the new files it
+writes under AppData in that app's private view, where Task Scheduler cannot
+find them; paste the command into a normal PowerShell window instead:
 
 ```powershell
 & ([scriptblock]::Create((irm https://github.com/mosaicss/archivist/releases/latest/download/install.ps1))) -Pair ABCDE-FGHJK
 ```
 
 `install.ps1` installs or updates `archivist.exe` and `archivistw.exe` in
-`%LOCALAPPDATA%\Programs\archivist` (a running exe is renamed aside, never
-overwritten), adds that folder to your user PATH, then pairs, installs and
-reports background connect like `install.sh` (the first install asks the
-same start question). Options: `-Pair CODE`,
-`-NoService`; `ARCHIVIST_INSTALL_DIR`, `ARCHIVIST_INSTALL_VERSION` and
-`ARCHIVIST_RELEASE_BASE_URL` work as for `install.sh`.
+`~\.archivist\bin` (a running exe is renamed aside, never overwritten), adds
+that folder to your user PATH, then pairs, installs and reports background
+connect like `install.sh` (the first install asks the same start question).
+An install from an earlier release in `%LOCALAPPDATA%\Programs\archivist` is
+moved: the PATH entry is replaced, the task is reinstalled from the new
+folder, and the old executables (renamed aside while one runs) and the empty
+folder are removed once that worked ("Moved archivist from ... to ...").
+Before a pairing code is used, and whenever the task will be installed or
+reinstalled, the script has Task Scheduler start the installed
+`archivistw.exe` once through a short lived probe task
+(`MosaicArchivistProbe-<user>-<hash>`, deleted right after). If Windows cannot
+find it, the script stops with "This shell is sandboxed by a packaged app (for
+example the Claude desktop app), so Windows cannot see what it installs. Run
+this command in a normal PowerShell window." and your pairing code stays
+unused; another launch failure names Task Scheduler's reason. Options:
+`-Pair CODE`, `-NoService`; `ARCHIVIST_INSTALL_DIR` (used as is, nothing is
+moved), `ARCHIVIST_INSTALL_VERSION` and `ARCHIVIST_RELEASE_BASE_URL` work as
+for `install.sh`.
+
+`archivist update` does not replace a copy that still lives under
+`%LOCALAPPDATA%`: it prints the install command above (without `-Pair`),
+which moves archivist to `~\.archivist\bin` and updates it, and exits 1.
 
 On Windows `--install` registers a scheduled task
 `MosaicArchivistConnect-<user>-<hash>` (the hash, 8 hex digits derived from
@@ -485,7 +512,9 @@ built without a console window, which supervises the daemon: an unexpected
 exit restarts it after 10 seconds, a clean stop leaves it stopped. The task
 definition is kept in `~\.archivist\connect\MosaicArchivistConnect.xml` and
 the captured environment in `~\.archivist\connect\service.env`; `--status`
-reads the task's registration and the daemon's `service.pid`. Ending the task
+reads the task's registration and the daemon's `service.pid`, and the task's
+last result from `schtasks /query /v /fo csv` by column position (the labels
+are localised and never read). Ending the task
 or signing out ends every session's process tree (each Claude Code or Codex
 session runs in its own Windows job object). Claude Code and Codex must be
 the native executables: an npm install is used through its native

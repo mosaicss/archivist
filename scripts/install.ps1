@@ -3,19 +3,31 @@
 #   & ([scriptblock]::Create((irm https://github.com/mosaicss/archivist/releases/latest/download/install.ps1))) -Pair CODE
 #
 # Installs or updates archivist.exe and archivistw.exe (the console-less
-# companion background connect runs) in %LOCALAPPDATA%\Programs\archivist,
-# adds that folder to the user PATH, and with -Pair redeems the pairing code
-# from the Mosaic workspace (archivist connect --pair), installs background
-# connect (archivist connect --install: a per-user scheduled task that
-# starts at every login, designed to need no admin rights; it requests no
-# elevation) and reports it (archivist connect
-# --status). A first install asks "Start Archivist when your computer
-# starts? (recommended)" (yes is the default; with no console to answer it
-# the answer is yes, said in one line); no keeps the foreground mode.
+# companion background connect runs) in ~\.archivist\bin, adds that folder
+# to the user PATH, and with -Pair redeems the pairing code from the Mosaic
+# workspace (archivist connect --pair), installs background connect
+# (archivist connect --install: a per-user scheduled task that starts at
+# every login, designed to need no admin rights; it requests no elevation)
+# and reports it (archivist connect --status). A first install asks "Start
+# Archivist when your computer starts? (recommended)" (yes is the default;
+# with no console to answer it the answer is yes, said in one line); no
+# keeps the foreground mode.
 # Every download is checked before anything is installed: the
 # release's archivist_v<ver>_SHA256SUMS must carry a valid signature
 # (archivist_v<ver>_SHA256SUMS.sig, checked with .NET RSA against the
 # release key below), and each archive must match its line in it.
+#
+# Why ~\.archivist\bin and not AppData (Story 94.14): a shell started by a
+# packaged (MSIX) app, such as Claude Code inside the Claude desktop app,
+# writes new files under %LOCALAPPDATA% into the app's private view, which
+# Task Scheduler cannot see. The user profile outside AppData is not
+# redirected. An earlier install in %LOCALAPPDATA%\Programs\archivist is
+# moved here (PATH entry, task and files), unless ARCHIVIST_INSTALL_DIR is
+# set. Before a pairing code is spent, whenever the task will be
+# (re)installed, archivist connect --preflight starts the installed
+# archivistw.exe once through a one-shot task; when Windows cannot start
+# it, the install stops there and the code stays unused. The archivist
+# calls run with ARCHIVIST_INSTALLER=1, removed again afterwards.
 #
 # Options:
 #   -Pair CODE    pair this computer with the code shown in Mosaic
@@ -23,8 +35,9 @@
 #                 installed is still restarted on the new binary and key)
 #
 # Environment:
-#   ARCHIVIST_INSTALL_DIR       install directory (default
-#                               %LOCALAPPDATA%\Programs\archivist)
+#   ARCHIVIST_INSTALL_DIR       install directory (default ~\.archivist\bin;
+#                               when set, it is used as is and nothing is
+#                               moved)
 #   ARCHIVIST_INSTALL_VERSION   install this tag (v0.2.35 or later, e.g.
 #                               v0.2.35) instead of the version this script
 #                               was released with; earlier tags have no
@@ -173,6 +186,45 @@ function Test-ServiceInstalled {
     Test-Path -LiteralPath (Join-Path $HOME '.archivist\connect\MosaicArchivistConnect.xml')
 }
 
+# Swap-PathEntry returns the ;-separated $PathValue with the $Old entry
+# replaced by $New in place ($New kept once; added at the end when neither
+# was there).
+function Swap-PathEntry([string]$PathValue, [string]$Old, [string]$New) {
+    $out = New-Object System.Collections.Generic.List[string]
+    foreach ($e in @($PathValue -split ';')) {
+        if ($e -eq '') { continue }
+        if ($e.TrimEnd('\') -eq $Old.TrimEnd('\')) { $e = $New }
+        if ($e -eq $New -and $out.Contains($New)) { continue }
+        $out.Add($e)
+    }
+    if (-not $out.Contains($New)) { $out.Add($New) }
+    return ($out -join ';')
+}
+
+# Remove-LegacyInstall removes archivist from the pre-94.14 location once the
+# new one works: each exe is removed, or renamed to a unique .old-<id> while
+# it still runs (removed by a later install), stale renamed copies go, and
+# the folder goes when nothing else is left in it.
+function Remove-LegacyInstall([string]$Dir) {
+    foreach ($pattern in 'archivist.exe.old-*', 'archivistw.exe.old-*', 'archivist.exe.old', 'archivist.exe.new') {
+        Get-ChildItem -LiteralPath $Dir -Filter $pattern -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -like $pattern } |
+            ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
+    }
+    foreach ($name in 'archivist.exe', 'archivistw.exe') {
+        $p = Join-Path $Dir $name
+        if (-not (Test-Path -LiteralPath $p)) { continue }
+        try {
+            Remove-Item -LiteralPath $p -Force -ErrorAction Stop
+        } catch {
+            Move-Item -LiteralPath $p -Destination ("$p.old-" + [guid]::NewGuid().ToString('N')) -Force -ErrorAction SilentlyContinue
+        }
+    }
+    if (@(Get-ChildItem -LiteralPath $Dir -Force -ErrorAction SilentlyContinue).Count -eq 0) {
+        Remove-Item -LiteralPath $Dir -Force -ErrorAction SilentlyContinue
+    }
+}
+
 $version = Resolve-ArchivistVersion
 $ver = $version.Substring(1)
 # Only windows_amd64 is released; Windows on ARM runs it under emulation.
@@ -223,8 +275,20 @@ try {
         throw 'archivist install: the downloaded binary does not run on this computer. Nothing was installed.'
     }
 
-    $installDir = Join-Path $env:LOCALAPPDATA 'Programs\archivist'
-    if ($env:ARCHIVIST_INSTALL_DIR) { $installDir = $env:ARCHIVIST_INSTALL_DIR }
+    # Story 94.14: outside AppData, which a packaged app's shell redirects.
+    $installDir = Join-Path $HOME '.archivist\bin'
+    $legacyDir = $null
+    if ($env:ARCHIVIST_INSTALL_DIR) {
+        $installDir = $env:ARCHIVIST_INSTALL_DIR
+    } elseif ($env:LOCALAPPDATA) {
+        $candidate = Join-Path $env:LOCALAPPDATA 'Programs\archivist'
+        # The exes, or copies an earlier move renamed aside while they ran.
+        $leftovers = @(Get-ChildItem -LiteralPath $candidate -File -ErrorAction SilentlyContinue |
+            Where-Object { @('archivist.exe', 'archivistw.exe', 'archivist.exe.old', 'archivist.exe.new') -contains $_.Name -or $_.Name -like 'archivist.exe.old-*' -or $_.Name -like 'archivistw.exe.old-*' })
+        if ($leftovers.Count -gt 0) {
+            $legacyDir = $candidate
+        }
+    }
     New-Item -ItemType Directory -Force -Path $installDir | Out-Null
     # Earlier installs' renamed executables (archivist.exe.old-<id>,
     # archivistw.exe.old-<id>, the legacy archivist.exe.old) and the legacy
@@ -253,11 +317,16 @@ try {
         $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
         $entries = @()
         if ($userPath) { $entries = @($userPath -split ';' | Where-Object { $_ -ne '' }) }
-        if ($entries -notcontains $installDir) {
+        if ($legacyDir) {
+            # The legacy entry is replaced by the new one.
+            $newPath = Swap-PathEntry $userPath $legacyDir $installDir
+            if ($newPath -ne $userPath) { [Environment]::SetEnvironmentVariable('Path', $newPath, 'User') }
+        } elseif ($entries -notcontains $installDir) {
             [Environment]::SetEnvironmentVariable('Path', (($entries + $installDir) -join ';'), 'User')
             Write-Host "Added $installDir to your user PATH (new terminals pick it up)."
         }
     }
+    if ($legacyDir) { $env:Path = Swap-PathEntry $env:Path $legacyDir $installDir }
     if (($env:Path -split ';') -notcontains $installDir) { $env:Path = "$installDir;$env:Path" }
 
     $channelDir = Join-Path $HOME '.archivist'
@@ -268,39 +337,87 @@ finally {
     Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-if ($Pair) {
-    & $exe connect --pair $Pair
-    if ($LASTEXITCODE -ne 0) { throw "archivist install: pairing failed (exit $LASTEXITCODE)" }
-    # An installed task is restarted on the new binary and key even with -NoService.
-    if ((-not $NoService) -or (Test-ServiceInstalled)) {
-        # Story 94.6: a first install asks whether to start at login (--ask);
-        # an installed task is reinstalled without the question.
-        if (Test-ServiceInstalled) {
-            & $exe connect --install
-        } else {
-            & $exe connect --install --ask
+# Story 94.14: the archivist calls below know they run under the installer
+# (an environment variable, which binaries older than it ignore); the
+# caller's session gets its earlier value back.
+$prevInstaller = $env:ARCHIVIST_INSTALLER
+$env:ARCHIVIST_INSTALLER = '1'
+try {
+    # Before a pairing code is spent, whenever the task will be (re)installed:
+    # can Task Scheduler start the archivistw.exe just installed? A packaged
+    # app's shell installs into a view Windows cannot see. Exit 2 is a binary
+    # older than --preflight: no check, and its "unknown flag" line is not
+    # shown. The output is captured with stderr (under 'Continue', since
+    # Windows PowerShell 5.1 turns redirected native stderr into errors) and
+    # shown for every other exit.
+    $willInstallTask = if ($Pair) { (-not $NoService) -or (Test-ServiceInstalled) } else { Test-ServiceInstalled }
+    if ($willInstallTask) {
+        $eap = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try {
+            $preflightOut = @(& $exe connect --preflight 2>&1 | ForEach-Object { "$_" })
+            $preflight = $LASTEXITCODE
+        } finally { $ErrorActionPreference = $eap }
+        if ($preflight -ne 2) { foreach ($l in $preflightOut) { Write-Host $l } }
+        if ($preflight -ne 0 -and $preflight -ne 2) {
+            if ($Pair) {
+                Write-Host 'Your pairing code was not used.'
+                throw "archivist install: stopped before pairing (exit $preflight)"
+            }
+            throw "archivist install: stopped before restarting background connect (exit $preflight)"
         }
+    }
+
+    if ($Pair) {
+        & $exe connect --pair $Pair
+        if ($LASTEXITCODE -ne 0) { throw "archivist install: pairing failed (exit $LASTEXITCODE)" }
+        # An installed task is restarted on the new binary and key even with -NoService.
+        if ((-not $NoService) -or (Test-ServiceInstalled)) {
+            # Story 94.6: a first install asks whether to start at login (--ask);
+            # an installed task is reinstalled without the question.
+            if (Test-ServiceInstalled) {
+                & $exe connect --install
+            } else {
+                & $exe connect --install --ask
+            }
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host ''
+                Write-Host 'This computer is paired, but background connect could not be installed.'
+                Write-Host "Fix the error above, then run: & '$exe' connect --install (no new code is needed)"
+                throw "archivist install: background connect was not installed (exit $LASTEXITCODE)"
+            }
+        }
+    } elseif (Test-ServiceInstalled) {
+        # An update restarts an installed task on the new binary.
+        & $exe connect --install
+        if ($LASTEXITCODE -ne 0) { throw "archivist install: restarting background connect failed (exit $LASTEXITCODE)" }
+    }
+
+    if ((-not $NoService) -and (Test-ServiceInstalled)) {
+        Write-Host ''
+        & $exe connect --status
         if ($LASTEXITCODE -ne 0) {
             Write-Host ''
-            Write-Host 'This computer is paired, but background connect could not be installed.'
-            Write-Host "Fix the error above, then run: & '$exe' connect --install (no new code is needed)"
-            throw "archivist install: background connect was not installed (exit $LASTEXITCODE)"
+            Write-Host 'Background connect is installed but not running; the Service line above says why.'
+            if ($Pair) {
+                Write-Host 'This computer is paired. Once that is fixed, run this again without -Pair (no new code is needed):'
+                Write-Host "  & ([scriptblock]::Create((irm $ReleaseBase/latest/download/install.ps1)))"
+            } else {
+                Write-Host 'Once that is fixed, run this command again.'
+            }
+            throw 'archivist install: background connect is not running'
         }
     }
-} elseif (Test-ServiceInstalled) {
-    # An update restarts an installed task on the new binary.
-    & $exe connect --install
-    if ($LASTEXITCODE -ne 0) { throw "archivist install: restarting background connect failed (exit $LASTEXITCODE)" }
+} finally {
+    if ($null -eq $prevInstaller) { Remove-Item Env:ARCHIVIST_INSTALLER -ErrorAction SilentlyContinue }
+    else { $env:ARCHIVIST_INSTALLER = $prevInstaller }
 }
 
-if ((-not $NoService) -and (Test-ServiceInstalled)) {
-    Write-Host ''
-    & $exe connect --status
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host ''
-        Write-Host 'Background connect is installed but not running. The last log line above says why.'
-        throw 'archivist install: background connect is not running'
-    }
+# Story 94.14: the pre-94.14 install goes only now, once the new one is in
+# place and any task runs from it; an earlier failure (thrown above) keeps it.
+if ($legacyDir) {
+    Remove-LegacyInstall $legacyDir
+    Write-Host "Moved archivist from $legacyDir to $installDir. Terminals and apps that were already open find it there after you restart them."
 }
 
 if ((-not $Pair) -and (-not (Test-ServiceInstalled))) {
