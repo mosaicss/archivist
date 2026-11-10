@@ -3,7 +3,7 @@
   "derivedFrom": {
     "schemaVersion": "mosaic-event/2",
     "bundlePath": "reference/schemas/mosaic-event/2",
-    "manifestSha256": "62333a1cf6afd948171840cc1344ee1718cf9b1c02488f1cbd4792347b43a1a5"
+    "manifestSha256": "b5a466a3f2871d7938cdf08daa221590be4b7eaa3d7d81a534975dcd0960ee6e"
   },
   "rewrite": [
     "Every v2 schema file is copied with its $id under /mosaic-event/3/ and both schemaVersion consts (envelope and start messageMetadata) set to mosaic-event/3.",
