@@ -197,7 +197,7 @@ func TestV2DriftAndCrossVersionBundles(t *testing.T) {
 		t.Fatal(err)
 	}
 	digest, err := VerifyBundleVersion(cloneBundle(t, v2), Version2)
-	if err != nil || digest != "62333a1cf6afd948171840cc1344ee1718cf9b1c02488f1cbd4792347b43a1a5" {
+	if err != nil || digest != "b5a466a3f2871d7938cdf08daa221590be4b7eaa3d7d81a534975dcd0960ee6e" {
 		t.Fatalf("v2 digest %s, %v", digest, err)
 	}
 	// Each bundle loads only as its own version.
@@ -240,7 +240,7 @@ func TestV3DriftAndCrossVersionBundles(t *testing.T) {
 		t.Fatal(err)
 	}
 	digest, err := VerifyBundleVersion(cloneBundle(t, v3), Version3)
-	if err != nil || digest != "dae6f6383fe4a8f1395feb0c8437bcf23fdfab2a8026408e849294c16fc6ff27" {
+	if err != nil || digest != "c3b48db0e6bed13e3d06a82b093f99ba1fea23ea2bb2d93717ebd5e7f2a05873" {
 		t.Fatalf("v3 digest %s, %v", digest, err)
 	}
 	// Each bundle loads only as its own version.
